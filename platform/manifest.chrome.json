@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Tempo Calendar",
+  "short_name": "Tempo",
+  "version": "1.0.0",
+  "description": "Google Calendar with drag-to-create events and an auto-scheduler that splits ranked tasks and reading plans into free time.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Open Tempo Calendar",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "background": {
+    "service_worker": "js/background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "identity",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://www.googleapis.com/*",
+    "https://openidconnect.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7OkQ6ixkT1qmMnjQBmh/ME3wXvF+zk/Lm9kEmzmbgtrCc/j9UeSJp2vllSWdIWMEsFwqOUPqH743zrtS00EKwY3jl0PEF9qcFUFGfcJQrJjeTFQjqIIGRut9N/ky+7xYJRjHINi8cM/8GfXU/O+Izxec20/EiGKhA9C46IeBl4IAK4CQqrqUKY6mm1UnN3weZ4X6U1xm5zW1eVJquKVD2d/MHV0aDI6ouVJaky6sl0KeMChuhRUf2ZLHnNtIJx57qiBmjKcJActy1FJnfhCOeOc8AaUzvhbvsNUzS8OSAozPB8izCo0iooW2tc9eFjKP+MlP7Gl237o7D1djAhJToQIDAQAB"
+}

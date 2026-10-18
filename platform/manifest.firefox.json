@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "Tempo Calendar",
+  "short_name": "Tempo",
+  "version": "1.0.0",
+  "description": "Google Calendar with drag-to-create events and an auto-scheduler that splits ranked tasks and reading plans into free time.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_title": "Open Tempo Calendar",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "background": {
+    "scripts": [
+      "js/background.js"
+    ],
+    "type": "module"
+  },
+  "permissions": [
+    "storage",
+    "identity",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://www.googleapis.com/*",
+    "https://openidconnect.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tempo-calendar@nemo",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "personallyIdentifyingInfo",
+          "personalCommunications"
+        ]
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
+    }
+  }
+}

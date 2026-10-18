@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#4f6bed">
+  <title>Tempo Calendar</title>
+  <link rel="icon" href="icons/icon32.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div class="shell">
+    <div class="scrim" id="scrim" hidden></div>
+    <aside class="side" id="side">
+      <div class="brand"><img src="icons/icon48.png" alt="" width="26" height="26"><span>Tempo</span></div>
+      <div class="create">
+        <button class="btn primary" id="btn-new-event">+ Event</button>
+        <button class="btn" id="btn-new-task" title="A task Tempo splits into sessions">+ Task</button>
+        <button class="btn" id="btn-new-reading" title="Plan reading a book">📖</button>
+      </div>
+      <div id="mini" class="mini"></div>
+      <section class="side-sec">
+        <div class="sec-head"><span>Tasks</span><button class="icon-btn sm" id="btn-resched" title="Re-plan task sessions now">⟲</button></div>
+        <div id="task-list" class="task-list"></div>
+      </section>
+      <section class="side-sec">
+        <div class="sec-head"><span>Calendars</span></div>
+        <div id="cal-list" class="cal-list"></div>
+      </section>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn m-only" id="btn-menu" aria-label="Menu"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+        <button class="btn" id="btn-today">Today</button>
+        <div class="navs"><button class="icon-btn" id="btn-prev" aria-label="Previous">‹</button><button class="icon-btn" id="btn-next" aria-label="Next">›</button></div>
+        <h1 id="range-title"></h1>
+        <button class="icon-btn" id="btn-refresh" title="Refresh from Google Calendar (R)" aria-label="Refresh from Google Calendar"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>
+        <button id="sync-status" class="status" title="Sync status"></button>
+        <span class="grow"></span>
+        <div class="seg" id="view-seg">
+          <button data-view="day">Day</button><button data-view="week">Week</button><button data-view="month">Month</button><button data-view="analysis" title="Free vs occupied time (Y)">Analysis</button>
+        </div>
+        <div class="menu-wrap">
+          <button class="btn" id="btn-export">Export ▾</button>
+          <div class="menu" id="export-menu" hidden>
+            <div class="menu-label">This week</div>
+            <button data-kind="week" data-fmt="pdf">PDF</button><button data-kind="week" data-fmt="png">PNG image</button><button data-kind="week" data-fmt="jpeg">JPEG image</button><button data-kind="week" data-fmt="tiff">TIFF image</button>
+            <div class="menu-label">This month</div>
+            <button data-kind="month" data-fmt="pdf">PDF</button><button data-kind="month" data-fmt="png">PNG image</button><button data-kind="month" data-fmt="jpeg">JPEG image</button><button data-kind="month" data-fmt="tiff">TIFF image</button>
+            <div class="menu-sep"></div>
+            <button id="export-multi"><b>Several weeks or months…</b><span class="muted small">Multi-page PDF or TIFF</span></button>
+          </div>
+        </div>
+        <button class="icon-btn" id="btn-settings" title="Settings" aria-label="Settings">⚙</button>
+        <button class="icon-btn m-only" id="btn-more" aria-label="More">⋯</button>
+      </header>
+      <div id="banner" class="banner" hidden></div>
+      <div id="view" class="view"></div>
+      <nav class="bottombar m-only" id="bottombar" aria-label="Views">
+        <button data-view="day"><b><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 14h6"/></svg></b><span>Day</span></button>
+        <button data-view="3day"><b><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M9 5v15M15 5v15"/></svg></b><span>3 days</span></button>
+        <button data-view="week"><b><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="15" rx="2"/><path d="M6.5 5v15M10 5v15M13.5 5v15M17 5v15"/></svg></b><span>Week</span></button>
+        <button data-view="month"><b><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9.5h18M3 15h18M9 4v17M15 4v17"/></svg></b><span>Month</span></button>
+        <button data-view="analysis"><b><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9h9"/><circle cx="12" cy="12" r="9"/></svg></b><span>Analysis</span></button>
+      </nav>
+      <button class="fab m-only" id="fab" aria-label="Add">+</button>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

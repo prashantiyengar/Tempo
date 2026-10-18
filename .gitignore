@@ -1,0 +1,7 @@
+# build output (GitHub Actions rebuilds it)
+dist/
+# private signing key for the Chrome extension ID — never commit
+*.pem
+node_modules/
+.DS_Store
+__pycache__/
