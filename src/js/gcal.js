@@ -70,6 +70,10 @@ async function chromeToken(interactive) {
   return token;
 }
 
+// Show Google's permission screen only the first time (or after permissions went missing); afterwards just let the
+// user pick the account, which skips the "unverified app" screen.
+const promptFor = (a, interactive) => (!interactive ? 'none' : a.consented ? 'select_account' : 'select_account consent');
+
 export const SCOPE_MSG = 'Google did not grant calendar access. Reconnect and tick the box “See, edit, share and permanently delete all the calendars…” on Google’s permission screen.';
 
 async function webToken(clientId, a, interactive) {
@@ -77,7 +81,7 @@ async function webToken(clientId, a, interactive) {
     client_id: clientId, response_type: 'token', redirect_uri: redirectUri(),
     scope: SCOPES.join(' '), include_granted_scopes: 'true',
   });
-  params.set('prompt', interactive ? 'select_account consent' : 'none');
+  params.set('prompt', promptFor(a, interactive));
   if (a.email) params.set('login_hint', a.email);
   const details = { url: 'https://accounts.google.com/o/oauth2/v2/auth?' + params, interactive };
   if (!isFirefox && !interactive) { details.abortOnLoadForNonInteractive = false; details.timeoutMsForNonInteractive = 10000; }
@@ -97,9 +101,9 @@ async function webToken(clientId, a, interactive) {
   const token = frag.get('access_token');
   if (!token) throw new AuthError('No access token returned.');
   const scope = frag.get('scope') || '';
-  if (scope && !scope.split(' ').includes(CAL_SCOPE)) { await setAuth({ token, expires: 0 }); throw new PermissionError(SCOPE_MSG); }
+  if (scope && !scope.split(' ').includes(CAL_SCOPE)) { await setAuth({ token, expires: 0, consented: false }); throw new PermissionError(SCOPE_MSG); }
   const expires = Date.now() + (+frag.get('expires_in') || 3600) * 1000;
-  await setAuth({ token, expires, connected: true, needsReconnect: false, lastAuthError: null });
+  await setAuth({ token, expires, connected: true, needsReconnect: false, lastAuthError: null, consented: true });
   return token;
 }
 
@@ -111,7 +115,7 @@ export function redirectToGoogle(clientId, a, kind = 'interactive', returnState 
   const params = new URLSearchParams({
     client_id: clientId, response_type: 'token', redirect_uri: redirectUri(),
     scope: SCOPES.join(' '), include_granted_scopes: 'true', state: nonce,
-    prompt: kind === 'silent' ? 'none' : 'select_account consent',
+    prompt: promptFor(a, kind !== 'silent'),
   });
   if (a.email) params.set('login_hint', a.email);
   location.assign('https://accounts.google.com/o/oauth2/v2/auth?' + params);
@@ -133,13 +137,14 @@ export async function completeRedirect() {
   if (err) {
     await setAuth({ needsReconnect: true, lastAuthError: err });
     const hint = { redirect_uri_mismatch: ' The app address is not registered on your OAuth client — add it under “Authorized redirect URIs”.', access_denied: ' Access was denied (are you added as a Test user on the consent screen?).', invalid_client: ' The client ID is wrong.', interaction_required: '', login_required: '' }[err] ?? '';
+    if (err === 'consent_required') await setAuth({ consented: false });
     return { ok: false, kind, ret, code: err, error: 'Google: ' + err + '.' + hint };
   }
   const token = frag.get('access_token');
   const scope = frag.get('scope') || '';
   if (!token) return { ok: false, kind, ret, error: 'No access token returned.' };
-  if (scope && !scope.split(' ').includes(CAL_SCOPE)) { await setAuth({ token: null, expires: 0, needsReconnect: true }); return { ok: false, kind, ret, error: SCOPE_MSG, code: 'scope' }; }
-  await setAuth({ token, expires: Date.now() + (+frag.get('expires_in') || 3600) * 1000, connected: true, needsReconnect: false, lastAuthError: null });
+  if (scope && !scope.split(' ').includes(CAL_SCOPE)) { await setAuth({ token: null, expires: 0, needsReconnect: true, consented: false }); return { ok: false, kind, ret, error: SCOPE_MSG, code: 'scope' }; }
+  await setAuth({ token, expires: Date.now() + (+frag.get('expires_in') || 3600) * 1000, connected: true, needsReconnect: false, lastAuthError: null, consented: true });
   if (kind === 'interactive') {
     try { const info = await req('GET', 'https://openidconnect.googleapis.com/v1/userinfo'); await setAuth({ email: info.email }); } catch { /* cosmetic */ }
   }
@@ -210,6 +215,7 @@ async function req(method, path, { query, body, retry = true } = {}) {
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = json?.error?.message || `Google API error ${res.status}`;
+    if (res.status === 403 && /insufficient|scope|permission/i.test(msg) && !/writer|owner|access to/i.test(msg)) await setAuth({ consented: false });
     if (res.status === 403 && /insufficient|scope|permission/i.test(msg)) throw new PermissionError(/writer|owner|access to/i.test(msg) ? `You don't have write access to that calendar (${msg}).` : SCOPE_MSG);
     if (res.status === 401) { await setAuth({ needsReconnect: true }); throw new AuthError('Google sign-in expired — click Reconnect.'); }
     throw new Error(msg);
@@ -246,6 +252,15 @@ export async function listEvents(calId, timeMin, timeMax) {
   return out;
 }
 
+// Changes in this calendar after `sinceMs` (Google's clock). Returns { n, max } — max is the newest change time seen,
+// to be used as the next cursor so a device with a wrong clock never loops.
+export async function changedSince(calId, sinceMs) {
+  const r = await req('GET', `/calendars/${enc(calId)}/events`, {
+    query: { updatedMin: new Date(sinceMs).toISOString(), showDeleted: 'true', maxResults: 20, singleEvents: 'true', fields: 'items(id,updated,status)' },
+  });
+  const ts = (r.items || []).map((e) => Date.parse(e.updated)).filter((t) => t > sinceMs);
+  return { n: ts.length, max: ts.length ? Math.max(...ts) : sinceMs };
+}
 export const getEvent = (calId, id) => req('GET', `/calendars/${enc(calId)}/events/${enc(id)}`);
 export const insertEvent = (calId, body, { conference = false } = {}) =>
   req('POST', `/calendars/${enc(calId)}/events`, { body, query: { conferenceDataVersion: conference ? 1 : null, sendUpdates: body.attendees?.length ? 'all' : null } });
@@ -254,6 +269,8 @@ export const patchEvent = (calId, id, body, { conference = false, notify = false
 export const deleteEvent = (calId, id) => req('DELETE', `/calendars/${enc(calId)}/events/${enc(id)}`).catch((e) => {
   if (/not found|deleted/i.test(e.message)) return null; throw e;
 });
+// Calendar-level notification settings (e.g. Google's daily agenda email).
+export const patchCalendarListEntry = (calId, body) => req('PATCH', `/users/me/calendarList/${enc(calId)}`, { body });
 export const createCalendar = (summary, timeZone) => req('POST', '/calendars', { body: { summary, timeZone } });
 export const getSettingTz = () => req('GET', '/users/me/settings/timezone').then((r) => r?.value);
 export const getColors = () => req('GET', '/colors');

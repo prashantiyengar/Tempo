@@ -5,6 +5,7 @@ import * as G from './gcal.js';
 import { parseRRule, buildRRule, describe, WD } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
 import { $, $$, esc, modal, TASK_COLORS, setHTML } from './ui.js';
+import * as C from './categories.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -302,6 +303,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
     </header>
     <div class="dlg-body">
       <input name="title" class="title-input" placeholder="${t.kind === 'reading' ? 'Book title' : 'Task name'}" value="${esc(t.title)}" autofocus required>
+      <div class="field"><span>Category</span><div class="cat-host"></div></div>
       ${prog ? `<div class="progress-line"><div class="bar"><i style="width:${prog.pct}%;background:${t.color}"></i></div><span class="muted small">${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)} done</span></div>` : ''}
 
       <div class="grid3 only-generic">
@@ -330,12 +332,13 @@ export function taskDialog(ctx, task = null, preset = {}) {
         <legend>Sessions</legend>
         <div class="grid3">
           <label class="field"><span>Session length (min)</span><input type="number" name="chunk" min="5" step="5" placeholder="${s.chunkMinutes} (default)" value="${t.chunkMinutes ?? ''}"></label>
-          <label class="field"><span>Shortest session (min)</span><input type="number" name="minChunk" min="5" step="5" placeholder="${s.minChunkMinutes || '= session length'}" value="${t.minChunkMinutes ?? ''}"></label>
+          <label class="field"><span>Shortest session (min)</span><input type="number" name="minChunk" min="5" step="5" placeholder="${s.minChunkMinutes ? s.minChunkMinutes + ' (default)' : '= session length'}" value="${t.minChunkMinutes ?? ''}"></label>
           <label class="field"><span>Max per day (min)</span><input type="number" name="maxDay" min="5" step="5" placeholder="no limit" value="${t.maxPerDayMinutes ?? ''}"></label>
           <label class="field"><span>Break between (min)</span><input type="number" name="break" min="0" step="5" placeholder="${s.breakMinutes} (default)" value="${t.breakMinutes ?? ''}"></label>
           ${ctx.taskCalendars().length > 1 ? `<label class="field"><span>Google calendar</span><select name="calendarId">${ctx.taskCalendars().map((c) => `<option value="${esc(c.id)}" ${c.id === (t.calendarId || ctx.defaultTaskCal()) ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select></label>` : ''}
           <label class="field"><span>Reminder (min before)</span><input type="number" name="reminder" min="-1" placeholder="${s.taskReminderMinutes} (default)" value="${t.reminderMinutes ?? ''}"></label>
-          <div class="field"><span>Color</span><div class="swatches">${TASK_COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${t.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
+          <label class="field google-only-t"><span>Email reminder (min before)</span><input type="number" name="emailReminder" min="-1" placeholder="${s.taskEmailReminderMinutes != null ? s.taskEmailReminderMinutes + ' (default)' : 'off (default)'}" value="${t.emailReminderMinutes ?? ''}"></label>
+          <div class="field color-field"><span>Color</span><div class="swatches">${TASK_COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${t.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
         </div>
       </fieldset>
 
@@ -367,6 +370,15 @@ export function taskDialog(ctx, task = null, preset = {}) {
     const f = $('form', dlg);
     f.unit.value = r.unit;
     f.labels.value = r.labels || 'actual';
+    let cat = C.catById(s, t.categoryId);
+    const showColor = () => { $('.color-field', dlg).style.display = cat ? 'none' : ''; };
+    C.categoryPicker($('.cat-host', dlg), {
+      settings: s, selected: cat?.id,
+      onChange: (c) => { cat = c; showColor(); update(); },
+      onCreate: async (name, color) => { const c = C.newCategory(s, name, color); await ctx.saveSettings(); return c; },
+    });
+    showColor();
+    if (!ctx.taskCalendars().length) $$('.google-only-t', dlg).forEach((e) => (e.style.display = 'none'));
 
     const read = () => {
       const kind = f.kind.value;
@@ -382,7 +394,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
         earliestStart: T.fromDTInput(f.earliest.value, tz),
         rank: Math.max(1, Math.round(+f.rank.value || 3)),
         chunkMinutes: num(f.chunk.value), minChunkMinutes: num(f.minChunk.value), maxPerDayMinutes: num(f.maxDay.value),
-        breakMinutes: num(f.break.value), reminderMinutes: num(f.reminder.value),
+        breakMinutes: num(f.break.value), reminderMinutes: num(f.reminder.value), emailReminderMinutes: num(f.emailReminder.value),
         color: f.color.value || t.color,
         bounds: custom ? { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: $$('input[name=bdays]:checked', dlg).map((c) => +c.value) } : null,
         ignoreBounds: f.ignoreBounds.checked,
@@ -390,6 +402,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
         calendarId: f.calendarId ? f.calendarId.value : t.calendarId,
       };
     };
+    const readWithCat = () => C.applyCategory(read(), cat);
 
     const update = () => {
       const kind = f.kind.value;
@@ -431,7 +444,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
     $('.del', dlg)?.addEventListener('click', () => close({ delete: true }));
     f.addEventListener('submit', (e) => {
       e.preventDefault();
-      const nt = read();
+      const nt = readWithCat();
       if (!nt.deadline) return;
       close({ task: nt });
     });
@@ -471,10 +484,13 @@ export function settingsDialog(ctx) {
   const cals = (st.gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole));
   const allCals = [{ id: LOCAL_CAL, summary: 'Local (this browser)' }, ...(st.gmeta.calendars || [])];
   const busySet = new Set(s.busyCalendars || allCals.map((c) => c.id));
+  const agendaCal = (st.gmeta.calendars || []).find((c) => c.id === (s.taskCalendarId || '')) || (st.gmeta.calendars || []).find((c) => c.primary);
+  const agendaOn = !!agendaCal?.notificationSettings?.notifications?.some((n) => n.type === 'agenda' && n.method === 'email');
+  let cats = (s.categories || []).map((c) => ({ ...c }));
   const html = `
   <form class="settings-form">
     <header class="dlg-head"><h2>Settings</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
-    <nav class="tabs">${['General', 'Scheduling', 'Google Calendar', 'Notifications', 'Data'].map((n, i) => `<button type="button" data-tab="${i}" class="${i ? '' : 'on'}">${n}</button>`).join('')}</nav>
+    <nav class="tabs">${[['General', 0], ['Scheduling', 1], ['Categories', 5], ['Google Calendar', 2], ['Notifications', 3], ['Data', 4]].map(([n, i]) => `<button type="button" data-tab="${i}" class="${i ? '' : 'on'}">${n}</button>`).join('')}</nav>
     <div class="dlg-body">
       <section data-pane="0">
         <label class="field"><span>Display time zone</span><input name="tz" list="tzlist2" value="${esc(s.tz)}" spellcheck="false"></label>${tzDatalist('tzlist2')}
@@ -498,7 +514,7 @@ export function settingsDialog(ctx) {
         </fieldset>
         <div class="grid3">
           <label class="field"><span>Default session length (min)</span><input type="number" name="chunkMinutes" min="5" step="5" value="${s.chunkMinutes}"></label>
-          <label class="field"><span>Shortest session (min)</span><input type="number" name="minChunkMinutes" min="5" step="5" value="${s.minChunkMinutes ?? ''}" placeholder="= session length"></label>
+          <label class="field"><span>Shortest session (min) — used only to meet a deadline</span><input type="number" name="minChunkMinutes" min="5" step="5" value="${s.minChunkMinutes ?? ''}" placeholder="= session length"></label>
           <label class="field"><span>Break between sessions (min)</span><input type="number" name="breakMinutes" min="0" step="5" value="${s.breakMinutes}"></label>
         </div>
         <label class="chk"><input type="checkbox" name="assumePastDone" ${s.assumePastDone ? 'checked' : ''}> Assume past sessions were done (mark them undone to reschedule)</label>
@@ -539,6 +555,19 @@ export function settingsDialog(ctx) {
         <label class="chk"><input type="checkbox" name="notifyGoogle" ${s.notifyGoogle ? 'checked' : ''}> Desktop notifications for Google events too (Google also notifies on its own)</label>
         <label class="field"><span>Default reminder for new events (minutes)</span><input type="number" name="defaultReminder" min="0" value="${s.defaultReminder}"></label>
         <button type="button" class="btn small ghost test-notif">Send a test notification</button>
+        <fieldset class="box">
+          <legend>Email notifications (sent by Google)</legend>
+          ${auth.connected ? `
+          <label class="field"><span>Email reminder before each task session (minutes, empty = off)</span><input type="number" name="taskEmailReminderMinutes" min="0" placeholder="off" value="${s.taskEmailReminderMinutes ?? ''}"></label>
+          <label class="chk"><input type="checkbox" name="agendaEmail" ${agendaOn ? 'checked' : ''}> Daily agenda email every morning (${esc(agendaCal?.summary || 'primary calendar')})</label>
+          <p class="muted small">Google emails ${esc(auth.email || 'your Google address')}. Events you create in Tempo can also get email reminders: add one under Notifications in the event dialog. A task can override the session reminder in its own settings.</p>`
+          : '<p class="muted small">Connect Google Calendar to get email reminders for task sessions and a daily agenda email.</p>'}
+        </fieldset>
+      </section>
+      <section data-pane="5" hidden>
+        <p class="muted small">Give tasks a category to color-code them and to group time in Analysis. You can also add categories directly in the task dialog.</p>
+        <div class="cats-list"></div>
+        <button type="button" class="btn small add-cat">+ Add category</button>
       </section>
       <section data-pane="4" hidden>
         <p class="muted small">Tasks, settings and local events live in this browser's extension storage. Back them up or move them to another browser:</p>
@@ -566,6 +595,21 @@ export function settingsDialog(ctx) {
     $('.create-cal', dlg)?.addEventListener('click', () => close({ action: 'createCal', settings: collect() }));
     $('.cleanup', dlg)?.addEventListener('click', () => close({ action: 'cleanup', settings: collect() }));
     $('.test-notif', dlg).onclick = () => ctx.testNotification();
+    const drawCats = () => {
+      setHTML($('.cats-list', dlg), cats.map((c, i) => `<div class="cat-row" data-i="${i}">
+        <span class="sw-dot big" style="background:${esc(c.color)}"></span>
+        <input class="cat-nm" value="${esc(c.name)}" maxlength="30" aria-label="Category name">
+        <div class="swatches">${C.CAT_COLORS.map((col) => `<label class="sw"><input type="radio" name="cc${i}" value="${col}" ${col === c.color ? 'checked' : ''}><i style="background:${col}"></i></label>`).join('')}</div>
+        <button type="button" class="icon-btn cat-del" title="Delete category" aria-label="Delete category">✕</button></div>`).join('') || '<p class="muted small">No categories yet.</p>');
+      $$('.cat-row', dlg).forEach((row) => {
+        const i = +row.dataset.i;
+        $('.cat-nm', row).oninput = (e) => { cats[i].name = e.target.value; };
+        $$('input[type=radio]', row).forEach((r) => (r.onchange = () => { cats[i].color = r.value; $('.sw-dot', row).style.background = r.value; }));
+        $('.cat-del', row).onclick = () => { cats.splice(i, 1); drawCats(); };
+      });
+    };
+    drawCats();
+    $('.add-cat', dlg).onclick = () => { cats.push({ id: 'cat-' + Math.random().toString(36).slice(2, 8), name: 'New category', color: C.CAT_COLORS[cats.length % C.CAT_COLORS.length] }); drawCats(); $$('.cat-nm', dlg).at(-1).select(); };
     $('.export-json', dlg).onclick = () => ctx.exportJson();
     $('.import-json', dlg).onchange = (e) => { const file = e.target.files[0]; if (file) close({ action: 'import', file }); };
 
@@ -587,6 +631,9 @@ export function settingsDialog(ctx) {
         syncTasksToGoogle: f.syncTasksToGoogle.checked, taskCalendarId: f.taskCalendarId.value || null,
         notifyTasks: f.notifyTasks.checked, notifyLocal: f.notifyLocal.checked, notifyGoogle: f.notifyGoogle.checked,
         taskReminderMinutes: +f.taskReminderMinutes.value, defaultReminder: Math.max(0, +f.defaultReminder.value || 0),
+        taskEmailReminderMinutes: f.taskEmailReminderMinutes ? (f.taskEmailReminderMinutes.value === '' ? null : Math.max(0, +f.taskEmailReminderMinutes.value)) : s.taskEmailReminderMinutes,
+        categories: cats.map((c) => ({ ...c, name: c.name.trim() || 'Untitled' })),
+        _agendaEmail: f.agendaEmail ? { want: f.agendaEmail.checked, was: agendaOn, calId: agendaCal?.id } : null,
       };
     }
     f.addEventListener('submit', async (e) => { e.preventDefault(); await saveClientId(); close({ action: 'save', settings: collect() }); });
@@ -738,6 +785,58 @@ export function exportDialog(ctx, { cursor, weekStart }) {
     f.addEventListener('submit', (e) => {
       e.preventDefault();
       close({ unit: f.unit.value, count: Math.max(1, Math.min(52, +f.count.value || 1)), start: f.start.value || cursor, fmt: f.fmt.value, scale: +f.scale.value });
+    });
+  }, { cls: 'narrow' });
+}
+
+// ======================================================================================
+// Deleting a session that was already done: reschedule (default) or not, and optionally record what you did instead
+// ======================================================================================
+export function deleteDoneDialog(ctx, task, sess) {
+  const st = ctx.state, s = st.settings, tz = s.tz;
+  const when = `${T.format(sess.start, tz, { weekday: 'short', day: 'numeric', month: 'short' })}, ${T.fmtTime(sess.start, tz, s.h12)}–${T.fmtTime(sess.end, tz, s.h12)}`;
+  const others = S.sortTasks(st.tasks.filter((t) => !t.archived && t.id !== task.id));
+  const cals = ctx.writableCalendars();
+  return modal(`
+    <form class="deldone">
+      <header class="dlg-head"><h2>Delete done session</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+      <div class="dlg-body">
+        <p class="muted small" style="margin:0">“${esc(sess.label)}” · ${esc(when)}</p>
+        <label class="chk big-chk"><input type="checkbox" name="resched" checked>
+          <span><b>Reschedule this session's work</b><br><span class="muted small">It wasn't really done — find a future free slot for it. Untick if the work is no longer needed.</span></span></label>
+        <fieldset class="box">
+          <legend>What did you do in that time instead? (optional)</legend>
+          <label class="chk"><input type="radio" name="rep" value="none" checked> Nothing to record</label>
+          <label class="chk"><input type="radio" name="rep" value="event"> Something else — add it to the calendar</label>
+          <div class="row rep-event">
+            <input name="evTitle" placeholder="e.g. Team meeting, Errands" style="flex:1;min-width:160px">
+            <select name="evCal">${cals.map((c) => `<option value="${esc(c.id)}">${esc(c.summary)}</option>`).join('')}</select>
+          </div>
+          ${others.length ? `<label class="chk"><input type="radio" name="rep" value="task"> Worked on another task — count this time toward it</label>
+          <div class="row rep-task"><select name="repTask" style="flex:1">${others.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}</option>`).join('')}</select></div>` : ''}
+        </fieldset>
+      </div>
+      <footer class="actions">
+        <button type="button" class="btn danger ghost all">Delete entire series…</button>
+        <span class="grow"></span>
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Delete session</button>
+      </footer>
+    </form>`, (dlg, close) => {
+    const f = $('form', dlg);
+    const sync = () => {
+      const v = f.rep.value;
+      $('.rep-event', dlg).style.display = v === 'event' ? '' : 'none';
+      const rt = $('.rep-task', dlg); if (rt) rt.style.display = v === 'task' ? '' : 'none';
+      if (v === 'event') f.evTitle.focus();
+    };
+    f.addEventListener('change', sync); sync();
+    $('.all', dlg).onclick = () => close({ action: 'all' });
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const kind = f.rep.value;
+      if (kind === 'event' && !f.evTitle.value.trim()) { f.evTitle.focus(); return; }
+      close({ action: 'one', reschedule: f.resched.checked, replace: { kind, title: f.evTitle.value.trim(), calId: f.evCal.value, taskId: f.repTask?.value } });
     });
   }, { cls: 'narrow' });
 }

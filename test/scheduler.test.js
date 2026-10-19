@@ -43,7 +43,7 @@ const tight = { id: 't', title: 'Thesis', kind: 'generic', rank: 1, totalMinutes
 ({ tasks, problems } = S.rescheduleAll([tight], [], settings, now));
 assert.equal(problems.length, 1);
 console.log('infeasible:', problems[0].shortfall, 'min short; suggested', f(problems[0].suggestedDeadline), 'fitsIgnoringBounds', problems[0].fitsIgnoringBounds);
-assert.equal(problems[0].shortfall, 120); assert.equal(problems[0].fitsIgnoringBounds, true);
+assert.equal(problems[0].shortfall, 155); // 7 one-hour sessions + 25 min (5-min breaks) inside 9–17 assert.equal(problems[0].fitsIgnoringBounds, true);
 const tight2 = { ...tight, ignoreBounds: true };
 ({ problems } = S.rescheduleAll([tight2], [], settings, now));
 assert.equal(problems.length, 0, 'ignoring bounds 7-23 should fit 10h');
@@ -112,3 +112,45 @@ import * as A from '../src/js/analysis.js';
   assert.equal(out.totals.available, 2 * 8 * 60); // 07-09 + 17-23 each day
   console.log('analysis tests passed');
 }
+
+// 10. New defaults: 5-min breaks between ALL task sessions; full-length sessions preferred, 15-min ones only when needed
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz };
+  assert.equal(s2.breakMinutes, 5); assert.equal(s2.minChunkMinutes, 15);
+  const bk = { id: 'b', title: 'Book', kind: 'reading', rank: 3, reading: { pages: 200, startPage: 47, speed: 20, unit: 'pph' }, deadline: T.atTime('2026-10-30', '17:00', tz), created: 1 };
+  const rp = { id: 'u', title: 'Report', kind: 'generic', rank: 2, totalMinutes: 120, deadline: T.atTime('2026-10-20', '17:00', tz), created: 2 };
+  let { tasks } = S.rescheduleAll([bk, rp], [], s2, now);
+  const ss = tasks.flatMap((t) => S.sessions(t)).sort((a, b) => a.start - b.start);
+  for (let i = 1; i < ss.length; i++) if (T.dayKey(ss[i].start, tz) === T.dayKey(ss[i - 1].start, tz)) assert.ok(ss[i].start - ss[i - 1].end >= 5 * T.MIN, 'break between sessions');
+  assert.ok(S.sessions(tasks[0]).every((c) => c.minutes === 60), 'book uses full hours when there is time');
+  // tight: 3h due today 12:00 -> must use shorter sessions to fit (9:00-10:00, 10:05-11:05, 11:10-12:00 = 50)
+  const tight = { id: 'x', title: 'Tight', kind: 'generic', rank: 1, totalMinutes: 170, deadline: T.atTime('2026-10-19', '12:00', tz), created: 3 };
+  ({ tasks } = S.rescheduleAll([tight], [], s2, now));
+  const st = S.sessions(tasks[0]);
+  assert.deepEqual(st.map((c) => c.minutes), [60, 60, 50]);
+  console.log('defaults: breaks ok; tight task sessions', st.map((c) => c.minutes));
+}
+
+// 11. Waive a done session (delete without redoing): pages of later sessions unchanged, not counted as a session
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz };
+  const bk = { id: 'b', title: 'Book', kind: 'reading', rank: 3, reading: { pages: 200, startPage: 47, speed: 20, unit: 'pph' }, deadline: T.atTime('2026-10-30', '17:00', tz), created: 1 };
+  let { tasks } = S.rescheduleAll([bk], [], s2, now);
+  const later = T.atTime('2026-10-19', '11:30', tz);
+  ({ tasks } = S.rescheduleAll(tasks, [], s2, later));   // first 2 sessions now done
+  let t = tasks[0];
+  const first = t.frozen[0];
+  const before = S.sessions(t).map((c) => c.label);
+  t = S.waiveSession(t, first.id);
+  ({ tasks } = S.rescheduleAll([t], [], s2, later));
+  const after = S.sessions(tasks[0]);
+  assert.equal(after.length, 9);
+  assert.equal(after[0].label, 'Book page 67-86, task 1/9');
+  assert.equal(S.progress(tasks[0], later).done, 180); // 3 sessions started by 11:30, one of them waived — all count as covered
+  // undone instead -> work returns and gets rescheduled (10 sessions again)
+  console.log('waive ok:', before[1], '->', after[0].label);
+  // addDoneBlock credits another task
+  const g = S.addDoneBlock({ id: 'g', title: 'G', kind: 'generic', totalMinutes: 120, deadline: T.atTime('2026-10-23', '17:00', tz), frozen: [], planned: [] }, T.atTime('2026-10-19', '09:00', tz), T.atTime('2026-10-19', '10:00', tz));
+  assert.equal(S.progress(g, later).done, 60);
+}
+console.log('new tests passed');

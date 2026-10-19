@@ -8,6 +8,7 @@ import * as D from './dialogs.js';
 import * as X from './export.js';
 import * as A from './analysis.js';
 import { describe } from './rrule.js';
+import * as C from './categories.js';
 import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
 import { $, $$, esc, el, toast, choose, popover, closePopover, download, modal, setHTML } from './ui.js';
 
@@ -33,8 +34,13 @@ const ctx = {
     const g = E.connected(st()) ? (st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)) : [];
     return [...g, { id: E.LOCAL_CAL, summary: 'Local (this browser)', color: LOCAL_COLOR }];
   },
-  async saveAuth(patch = {}) { const cur = (await storeGet('auth')).auth || {}; st().auth = { ...cur, ...patch }; await storeSet({ auth: st().auth }); },
+  async saveAuth(patch = {}) {
+    const cur = (await storeGet('auth')).auth || {};
+    if ((patch.clientId && patch.clientId !== cur.clientId) || (patch.mode && patch.mode !== cur.mode)) patch = { ...patch, consented: false };
+    st().auth = { ...cur, ...patch }; await storeSet({ auth: st().auth });
+  },
   connect: (mode) => connectGoogle(mode),
+  async saveSettings() { await E.persist(st(), ['settings']); },
   taskCalendars() { return E.connected(st()) ? (st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)) : []; },
   defaultTaskCal() { return E.defaultTaskCal(st()); },
   async testNotification() { notify('Tempo Calendar', 'Notifications are working.'); },
@@ -359,7 +365,7 @@ function renderSidebar() {
       <span class="rank" title="Rank ${t.rank}">${t.rank}</span>
       <span class="tr-main">
         <span class="tr-title">${t.kind === 'reading' ? '📖 ' : ''}${esc(t.title)}${warn ? ' <span class="warn-ic" title="Not enough time before the deadline">⚠</span>' : ''}</span>
-        <span class="tr-meta">${complete ? 'Done ✓' : `${doneN}/${ss.length} · due ${esc(T.format(t.deadline, tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}`}${next && !complete ? ` · next ${esc(T.format(next.start, tz(), { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: set().h12 }))}` : ''}</span>
+        <span class="tr-meta">${t.categoryId ? `<span class="tr-cat">${esc(C.catById(set(), t.categoryId)?.name || t.categoryName || '')}</span> · ` : ''}${complete ? 'Done ✓' : `${doneN}/${ss.length} · due ${esc(T.format(t.deadline, tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}`}${next && !complete ? ` · next ${esc(T.format(next.start, tz(), { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: set().h12 }))}` : ''}</span>
         <span class="bar"><i style="width:${p.pct}%"></i></span>
       </span></button>`;
   }).join('') : `<p class="muted small empty">No tasks yet. Add one and Tempo splits it into sessions around your calendar.</p>`);
@@ -788,6 +794,7 @@ function openChunk(it, rect) {
       <div class="pop-tools"><button class="icon-btn x" title="Close">✕</button></div>
       <div class="pop-title"><i style="--c:${task.color}"></i><h3>${esc(sess.label)}</h3></div>
       <div class="pop-row">${badge} ${esc(fmtWhen(it))}</div>
+      <div class="pop-row small"><button class="cat-chip on pop-cat" ${task.categoryId ? `style="--c:${esc(task.color)}"` : ''}>${task.categoryId ? `<i></i>${esc(C.catById(s, task.categoryId)?.name || task.categoryName || 'Category')}` : '+ Category'} ▾</button></div>
       <div class="pop-row small">Part of <b>${esc(task.title)}</b> · rank ${task.rank} · due ${esc(T.format(task.deadline, z, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 }))}</div>
       <div class="pop-row"><div class="bar"><i style="width:${p.pct}%;background:${task.color}"></i></div><div class="muted small">${T.fmtDur(p.done)} of ${T.fmtDur(p.total)} done</div></div>
       <div class="pop-row small">${!E.connected(st()) ? '<span class="muted">Only in this browser (Google not connected)</span>' : sess.gid ? '<span class="g-ok">✓ On Google Calendar</span>' : '<span class="g-bad">Not on Google Calendar yet</span> <button class="link sync-now">Sync now</button>'}</div>
@@ -806,8 +813,10 @@ function openChunk(it, rect) {
     $('.unpin', pop)?.addEventListener('click', () => act((t) => S.unpinSession(t, sess.id), 'Unpinned'));
     $('.edit', pop).onclick = () => { close(); editTask(task); };
     $('.sync-now', pop)?.addEventListener('click', () => { close(); openSyncPanel(); });
+    $('.pop-cat', pop).onclick = () => { close(); pickCategory(task); };
     $('.del', pop).onclick = async () => {
       close();
+      if (isDone) return deleteDoneSession(task, sess);
       const v = await choose('Delete session', `“${sess.label}”`, [
         { value: 'one', label: 'Delete this session', desc: 'Its work moves to the next free time; later sessions in the series shift down.' },
         { value: 'all', label: 'Delete the entire series', desc: `Removes “${task.title}” and all ${sess.count} sessions.`, danger: true },
@@ -816,6 +825,57 @@ function openChunk(it, rect) {
       if (v === 'all') deleteTask(task.id);
     };
   });
+}
+
+// Quick classify: pick (or create) a category for a task.
+async function pickCategory(task) {
+  let picked;
+  const r = await modal(`<div class="choice"><h2>Category for “${esc(task.title)}”</h2><div class="cat-host" style="margin:10px 0 4px"></div>
+    <div class="actions"><button type="button" class="btn ghost" data-close>Close</button></div></div>`, (dlg, close) => {
+    C.categoryPicker($('.cat-host', dlg), {
+      settings: set(), selected: task.categoryId,
+      onChange: (c) => { picked = c; close('ok'); },
+      onCreate: async (name, color) => { const c = C.newCategory(set(), name, color); await E.persist(st(), ['settings']); return c; },
+    });
+  }, { cls: 'narrow' });
+  if (r !== 'ok') return;
+  const cur = st().tasks.find((t) => t.id === task.id);
+  if (!cur) return;
+  replaceTask(C.applyCategory(cur, picked));
+  await saveTasks();
+  toast(picked ? `“${task.title}” is now ${picked.name}` : 'Category removed');
+  cycle();
+}
+
+// Deleting a session that was already done.
+async function deleteDoneSession(task, sess) {
+  const r = await D.deleteDoneDialog(ctx, task, sess);
+  if (!r) return;
+  if (r.action === 'all') {
+    const v = await choose('Delete task', `“${task.title}”`, [{ value: true, label: 'Delete the entire series', desc: 'Removes the task and all its sessions (also from Google Calendar).', danger: true }]);
+    if (v) deleteTask(task.id);
+    return;
+  }
+  const cur = st().tasks.find((t) => t.id === task.id);
+  if (!cur) return;
+  const pinned = cur.frozen?.find((c) => c.id === sess.id)?.status === 'pinned';
+  replaceTask(r.reschedule ? (pinned ? S.unpinSession(cur, sess.id) : S.markUndone(cur, sess.id)) : S.waiveSession(cur, sess.id));
+  let msg = r.reschedule ? 'Session deleted — its work was rescheduled' : 'Session deleted (not rescheduled)';
+  try {
+    if (r.replace.kind === 'task') {
+      const other = st().tasks.find((t) => t.id === r.replace.taskId);
+      if (other) { replaceTask(S.addDoneBlock(other, sess.start, sess.end)); msg += ` · time counted toward “${other.title}”`; }
+    } else if (r.replace.kind === 'event') {
+      const z = tz();
+      await EV.createEvent(st(), r.replace.calId, { summary: r.replace.title, start: { dateTime: new Date(sess.start).toISOString(), timeZone: z }, end: { dateTime: new Date(sess.end).toISOString(), timeZone: z }, reminders: { useDefault: false, overrides: [] } });
+      await E.persist(st(), ['localEvents']);
+      E.invalidate();
+      msg += ` · “${r.replace.title}” added`;
+    }
+  } catch (err) { handleError(err); }
+  await saveTasks();
+  toast(msg, { ms: 5000 });
+  cycle();
 }
 
 // ======================================================================================
@@ -908,7 +968,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     try {
       const r = await E.pullTasks(st());
       app.lastPull = { at: Date.now(), ...r };
-      if (r.adoptedCalendar) await E.persist(st(), ['settings']);
+      if (r.adoptedCalendar || C.adoptCategoriesFromTasks(set(), st().tasks)) await E.persist(st(), ['settings']);
       if (r.imported.length || r.updated.length || r.removed.length) {
         await E.persist(st(), ['tasks', 'orphanGids']);
         const parts = [];
@@ -937,7 +997,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
       else if (res.kind === 'local') setStatus('Local only', 'warn');
       else if (res.kind === 'off') setStatus('Not syncing tasks', 'warn');
       else setStatus('Sync problem', 'bad');
-      if (res.changed) E.invalidate();
+      if (res.changed) { E.invalidate(); await render(); }
     } catch (err) { handleError(err); }
     await E.persist(st(), ['tasks', 'orphanGids', 'syncInfo']);
     renderBanner();
@@ -1089,6 +1149,16 @@ async function openSettings() {
   if (!r) return;
   if (r.settings) {
     if (r.settings.tz !== before.tz) r.settings._tzChosen = true;
+    const agenda = r.settings._agendaEmail; delete r.settings._agendaEmail;
+    if (agenda && agenda.want !== agenda.was && agenda.calId) {
+      try {
+        const cal = (st().gmeta.calendars || []).find((c) => c.id === agenda.calId);
+        const others = (cal?.notificationSettings?.notifications || []).filter((n) => n.type !== 'agenda');
+        await G.patchCalendarListEntry(agenda.calId, { notificationSettings: { notifications: agenda.want ? [...others, { type: 'agenda', method: 'email' }] : others } });
+        await E.refreshCalendars(st()); await E.persist(st(), ['gmeta']);
+        toast(agenda.want ? 'Google will email you a daily agenda each morning' : 'Daily agenda email turned off');
+      } catch (err) { handleError(err); }
+    }
     if ((r.settings.taskCalendarId || null) !== (before.taskCalendarId || null)) {
       const cal = E.normCal(st(), r.settings.taskCalendarId);
       st().tasks = st().tasks.map((t) => ({ ...t, calendarId: cal, rev: Date.now() }));
@@ -1096,6 +1166,9 @@ async function openSettings() {
     }
     st().settings = r.settings;
     await E.persist(st(), ['settings']);
+    const ref = C.refreshTaskCategories(st().settings, st().tasks);
+    if (ref.changed.length) { st().tasks = ref.tasks; await saveTasks(); }
+    if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     app.miniCursor = T.dayKey(Date.now(), tz());
   }
   try {
@@ -1134,7 +1207,7 @@ async function openSettings() {
 // ======================================================================================
 // Analysis view
 // ======================================================================================
-app.anOpts = { period: 'next7', scope: 'bounds', by: 'color' };
+app.anOpts = { period: 'next7', scope: 'bounds', by: 'category' };
 
 async function renderAnalysisView(seq) {
   const s = set(), z = tz(), o = app.anOpts;
@@ -1355,6 +1428,19 @@ async function init() {
   if (isWeb) startWebReminders();
   if (isWeb && 'serviceWorker' in navigator && document.querySelector('link[rel=manifest]')) navigator.serviceWorker.register('sw.js').catch(() => {});
   setInterval(() => cycle({ pull: true }), 5 * 60 * 1000);
+  // Auto-refresh: while the app is open, check Google every 45 s for changes made elsewhere (phone, Google Calendar,
+  // another browser) and reload when something changed.
+  setInterval(async () => {
+    if (document.hidden || cycling || !E.connected(st()) || document.querySelector('dialog[open], .popover') || app.touchLock) return;
+    try {
+      app.gCursors ||= {};
+      if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); }
+    } catch { /* offline or signed out: the banner handles it */ }
+  }, 45000);
+  // Another tab of the web app changed your tasks: show them here too.
+  window.addEventListener('storage', (e) => {
+    if (e.key === 'tempo:tasks' && e.newValue && !cycling) { try { st().tasks = JSON.parse(e.newValue); render(); } catch { /* ignore */ } }
+  });
   const beat = () => storeSet({ appHeartbeat: Date.now() });
   beat(); setInterval(beat, 30000);
   setInterval(() => {
@@ -1363,10 +1449,10 @@ async function init() {
   }, 60000);
   let lastVisible = Date.now();
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && Date.now() - lastVisible > 60000) { E.invalidate(); cycle({ pull: true }); }
+    if (!document.hidden && Date.now() - lastVisible > 15000) { E.invalidate(); cycle({ pull: true }); }
     if (document.hidden) lastVisible = Date.now();
   });
-  window.__tempo = { app, cycle, render, S, T, E }; // handy for debugging from the console
+  window.__tempo = { app, cycle, render, S, T, E, checkGoogle: async () => { app.gCursors ||= {}; if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); return true; } return false; } }; // handy for debugging from the console
 }
 
 // Web app: show reminders while the app is open (the Google Calendar app on your phone also notifies,

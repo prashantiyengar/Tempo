@@ -12,7 +12,16 @@ export const LOCAL_CAL = 'local';
 export async function loadState() {
   const raw = await get([...KEYS, 'auth']);
   if (!raw.installId) { raw.installId = S.newId('i'); await set({ installId: raw.installId }); }
+  // One-time upgrade of saved settings to the newer defaults (5-min breaks, 15-min shortest session, categories).
+  if (raw.settings && (raw.settings.settingsVersion || 1) < 2) {
+    const o = raw.settings;
+    if (!o.breakMinutes) o.breakMinutes = S.DEFAULT_SETTINGS.breakMinutes;
+    if (o.minChunkMinutes == null || o.minChunkMinutes === '') o.minChunkMinutes = S.DEFAULT_SETTINGS.minChunkMinutes;
+    o.settingsVersion = 2;
+    await set({ settings: o });
+  }
   const settings = { ...S.DEFAULT_SETTINGS, ...(raw.settings || {}) };
+  if (!Array.isArray(settings.categories)) settings.categories = S.DEFAULT_SETTINGS.categories;
   settings.bounds = { ...S.DEFAULT_SETTINGS.bounds, ...(settings.bounds || {}) };
   settings.overflowBounds = { ...S.DEFAULT_SETTINGS.overflowBounds, ...(settings.overflowBounds || {}) };
   if (!T.isValidTz(settings.tz)) settings.tz = T.systemTz();
@@ -96,6 +105,19 @@ const cache = new Map(); // key -> {at, items}
 const TTL = 90 * 1000;
 export function invalidate() { cache.clear(); }
 
+// Any change on Google (visible calendars + task calendars) since the per-calendar cursors? Updates the cursors.
+export async function googleChanged(state, cursors) {
+  if (!connected(state)) return false;
+  const cals = new Set([...visibleCalendars(state).map((c) => c.id), defaultTaskCal(state), ...state.tasks.map((t) => taskCal(state, t))]);
+  let changed = false;
+  for (const c of cals) {
+    if (cursors[c] == null) { cursors[c] = Date.now() - 60000; continue; }
+    const r = await G.changedSince(c, cursors[c]);
+    if (r.n) { changed = true; cursors[c] = r.max; }
+  }
+  return changed;
+}
+
 export function visibleCalendars(state) {
   const hidden = new Set(state.settings.hiddenCalendars || []);
   return (state.gmeta.calendars || []).filter((c) => !hidden.has(c.id));
@@ -165,6 +187,7 @@ export function chunkBody(task, sess, state) {
   const tz = state.settings.tz;
   const done = sess.kind === 'done';
   const rem = task.reminderMinutes != null && task.reminderMinutes !== '' ? +task.reminderMinutes : state.settings.taskReminderMinutes;
+  const emailRem = task.emailReminderMinutes != null && task.emailReminderMinutes !== '' ? +task.emailReminderMinutes : state.settings.taskEmailReminderMinutes;
   return {
     summary: (done ? '✓ ' : '') + sess.label,
     description: [task.notes, 'Scheduled by Tempo Calendar — edit this task in the extension; changes here will be overwritten.'].filter(Boolean).join('\n\n'),
@@ -173,20 +196,25 @@ export function chunkBody(task, sess, state) {
     colorId: G.nearestColorId(task.color || '#4f6bed'),
     transparency: 'opaque',
     status: 'confirmed',
-    reminders: { useDefault: false, overrides: done || rem == null || rem < 0 ? [] : [{ method: 'popup', minutes: rem }] },
+    reminders: { useDefault: false, overrides: done ? [] : [
+      ...(rem == null || rem < 0 ? [] : [{ method: 'popup', minutes: rem }]),
+      ...(emailRem == null || emailRem < 0 ? [] : [{ method: 'email', minutes: emailRem }]),
+    ] },
     extendedProperties: { private: { tempoTask: '1', taskId: task.id, chunkId: sess.id, tSeq: String(sess.index), tStatus: sess.kind, tRev: String(task.rev || task.created || 0), ...encodeDef(task) } },
   };
 }
 
 // ---------- Task definitions stored on Google (so any browser / a fresh install can rebuild the task list) ----------
 const DEF_FIELDS = ['id', 'title', 'kind', 'rank', 'totalMinutes', 'reading', 'deadline', 'earliestStart', 'chunkMinutes', 'minChunkMinutes',
-  'maxPerDayMinutes', 'breakMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'notes', 'created', 'rev', 'calendarId'];
+  'maxPerDayMinutes', 'breakMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notes', 'created', 'rev', 'calendarId',
+  'categoryId', 'categoryName', 'categoryColor'];
 const PART = 900; // Google allows 1024 chars per extended-property value
 
 export function encodeDef(task) {
   const def = {};
   for (const k of DEF_FIELDS) if (task[k] != null && task[k] !== '') def[k] = task[k];
   def.skipped = (task.skipped || []).filter((x) => x.end > Date.now() - 7 * T.DAY).slice(-40);
+  def.waived = (task.frozen || []).filter((c) => c.status === 'waived').slice(-60).map((c) => ({ id: c.id, start: c.start, end: c.end }));
   let json = JSON.stringify(def);
   if (json.length > PART * 24) { def.notes = (def.notes || '').slice(0, 2000); json = JSON.stringify(def); }
   const out = {};
@@ -247,7 +275,9 @@ export function taskFromEvents(taskId, events, calId, settings, now = Date.now()
     else if (c.start < now && settings.assumePastDone) frozen.push({ ...c, status: 'done', auto: true });
     else planned.push(c);
   }
-  return { ...def, id: taskId, calendarId: def.calendarId || events[0]?._cal || calId, frozen, planned, skipped: def.skipped || [], orphanGids: [], imported: Date.now() };
+  for (const w of def.waived || []) if (!seen.has(w.id)) frozen.push({ ...w, status: 'waived' });
+  const { waived, ...rest } = def;
+  return { ...rest, id: taskId, calendarId: def.calendarId || events[0]?._cal || calId, frozen, planned, skipped: def.skipped || [], orphanGids: [], imported: Date.now() };
 }
 
 // Pull task state from Google: import tasks this browser doesn't have, apply newer edits made elsewhere, and drop
@@ -450,6 +480,7 @@ export async function refreshCalendars(state) {
     calendars: cals.map((c) => ({
       id: c.id, summary: c.summaryOverride || c.summary, color: c.backgroundColor, primary: !!c.primary,
       accessRole: c.accessRole, timeZone: c.timeZone, defaultReminders: c.defaultReminders || [],
+      notificationSettings: c.notificationSettings || null,
     })).sort((a, b) => (b.primary - a.primary) || a.summary.localeCompare(b.summary)),
   };
   return state.gmeta.calendars;

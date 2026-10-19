@@ -22,13 +22,21 @@ export const DEFAULT_SETTINGS = {
   bounds: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] },
   overflowBounds: { start: '07:00', end: '23:00', days: [0, 1, 2, 3, 4, 5, 6] },
   chunkMinutes: 60,
-  minChunkMinutes: null,   // null = same as session length (only the final remainder may be shorter)
-  breakMinutes: 0,
+  minChunkMinutes: 15,     // shorter sessions are only used when full-length ones can't meet the deadline
+  breakMinutes: 5,
   snapMinutes: 15,
   weekView: 'calendar',  // 'calendar' (Mon–Sun) or 'rolling' (today + 6 days)
   allDayBlocks: false,
   assumePastDone: true,
   taskReminderMinutes: 5,
+  taskEmailReminderMinutes: null, // null = no email reminder for task sessions; a number = minutes before
+  categories: [
+    { id: 'work', name: 'Work', color: '#039be5' },
+    { id: 'personal', name: 'Personal', color: '#33b679' },
+    { id: 'leisure', name: 'Leisure', color: '#f6bf26' },
+    { id: 'study', name: 'Study', color: '#8e24aa' },
+  ],
+  settingsVersion: 2,
   notifyTasks: true,
   notifyLocal: true,
   notifyGoogle: false,
@@ -67,6 +75,8 @@ export function params(task, s) {
 }
 
 const dur = (c) => Math.round((c.end - c.start) / T.MIN);
+// 'waived' = a done session the user removed without redoing the work: it counts as covered but takes no time.
+const takesTime = (c) => c.status !== 'waived';
 export const doneMinutes = (task) => (task.frozen || []).reduce((a, c) => a + dur(c), 0);
 
 export function merge(list) {
@@ -156,9 +166,12 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366 }) {
   const from = Math.max(ceilTo(now, 5 * T.MIN), task.earliestStart || 0);
   const deadline = task.deadline || from + 30 * T.DAY;
   const busy = merge([...occupied, ...(task.skipped || [])]);
-  const dayUsed = perDay(task.frozen || [], tz);
+  const dayUsed = perDay((task.frozen || []).filter(takesTime), tz);
+  const free = subtract(windows(from, deadline, p.bounds, tz), busy);
 
-  const inWindow = allocate(subtract(windows(from, deadline, p.bounds, tz), busy), remaining, p, tz, dayUsed);
+  // Prefer full-length sessions; fall back to shorter ones (down to the minimum) only if that's what it takes.
+  let inWindow = allocate(free, remaining, { ...p, minChunk: p.chunk }, tz, dayUsed);
+  if (inWindow.need > 0 && p.minChunk < p.chunk) inWindow = allocate(free, remaining, p, tz, dayUsed);
   res.planned = inWindow.chunks;
   if (inWindow.need > 0) {
     res.shortfall = inWindow.need;
@@ -170,7 +183,7 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366 }) {
     // Keep placing past the deadline (flagged overdue) so the plan is complete, and derive a suggested deadline.
     const later = allocate(
       subtract(windows(Math.max(from, deadline), deadline + horizonDays * T.DAY, p.bounds, tz), busy),
-      inWindow.need, p, tz, perDay([...(task.frozen || []), ...inWindow.chunks], tz),
+      inWindow.need, { ...p, minChunk: p.chunk }, tz, perDay([...(task.frozen || []).filter(takesTime), ...inWindow.chunks], tz),
     );
     res.overdue = later.chunks.length;
     res.planned = [...inWindow.chunks, ...later.chunks.map((c) => ({ ...c, overdue: true }))];
@@ -205,7 +218,10 @@ export function freezePast(task, now, settings) {
 export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
   let list = tasks.map((t) => (t.archived ? t : freezePast(t, now, settings)));
   const fixed = [];
-  for (const t of list) if (!t.archived) for (const c of t.frozen || []) if (c.end > now) fixed.push(c);
+  // Task sessions keep the break before and after them for every other task too.
+  const gap = (+settings.breakMinutes || 0) * T.MIN;
+  const pad = (c) => ({ start: c.start - gap, end: c.end + gap });
+  for (const t of list) if (!t.archived) for (const c of t.frozen || []) if (c.end > now && takesTime(c)) fixed.push(pad(c));
   let occupied = merge([...busy, ...fixed]);
   const problems = [];
   const byId = new Map(list.map((t) => [t.id, t]));
@@ -219,7 +235,7 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
     const orphanGids = [...(t.orphanGids || []), ...prev.slice(planned.length).map((c) => c.gid).filter(Boolean)];
     const nt = { ...t, planned, orphanGids, lastPlan: { shortfall: r.shortfall, suggestedDeadline: r.suggestedDeadline, fitsIgnoringBounds: r.fitsIgnoringBounds, remaining: r.remaining, at: now } };
     byId.set(t.id, nt);
-    occupied = merge([...occupied, ...planned]);
+    occupied = merge([...occupied, ...planned.map(pad)]);
     if (r.shortfall > 0) problems.push({ taskId: t.id, ...nt.lastPlan });
   }
   list = list.map((t) => byId.get(t.id));
@@ -232,25 +248,29 @@ export function sessions(task) {
     ...(task.frozen || []).map((c) => ({ ...c, kind: c.status })),
     ...(task.planned || []).map((c) => ({ ...c, kind: 'planned' })),
   ].sort((a, b) => a.start - b.start);
-  const N = all.length;
+  const N = all.filter(takesTime).length;
   const total = totalMinutes(task);
-  let cum = 0;
-  return all.map((c, i) => {
+  let cum = 0, idx = 0;
+  const out = [];
+  for (const c of all) {
     const mins = dur(c);
+    if (!takesTime(c)) { cum += mins; continue; }
+    idx++;
     let label;
     if (task.kind === 'reading') {
       const r = task.reading;
       const base = r.labels === 'relative' ? 1 : (+r.startPage || 1);
       const a = base + Math.round((cum / total) * r.pages);
       const b = base - 1 + Math.min(r.pages, Math.round(((cum + mins) / total) * r.pages));
-      label = `${task.title} page ${a}-${Math.max(a, b)}, task ${i + 1}/${N}`;
+      label = `${task.title} page ${a}-${Math.max(a, b)}, task ${idx}/${N}`;
       c.pages = [a, Math.max(a, b)];
     } else {
-      label = `${task.title}, task ${i + 1}/${N}`;
+      label = `${task.title}, task ${idx}/${N}`;
     }
     cum += mins;
-    return { ...c, index: i + 1, count: N, minutes: mins, label, taskId: task.id };
-  });
+    out.push({ ...c, index: idx, count: N, minutes: mins, label, taskId: task.id });
+  }
+  return out;
 }
 
 // --- User actions on sessions -------------------------------------------------------------
@@ -309,8 +329,24 @@ export function unpinSession(task, chunkId) {
   };
 }
 
+// Remove a done session without redoing its work (it still counts as covered).
+export function waiveSession(task, chunkId) {
+  const c = (task.frozen || []).find((x) => x.id === chunkId);
+  if (!c) return task;
+  return {
+    ...task,
+    frozen: task.frozen.map((x) => (x.id === chunkId ? { ...x, status: 'waived', gid: null, syncHash: null } : x)),
+    orphanGids: c.gid ? [...(task.orphanGids || []), c.gid] : task.orphanGids,
+  };
+}
+
+// Record time actually spent on a task (e.g. replacing another session's block).
+export function addDoneBlock(task, start, end) {
+  return { ...task, frozen: [...(task.frozen || []), { id: newId('c'), start, end, status: 'done', auto: false }] };
+}
+
 export function progress(task, now = Date.now()) {
   const total = totalMinutes(task);
-  const done = (task.frozen || []).filter((c) => c.status === 'done' || (c.status === 'pinned' && c.end <= now)).reduce((a, c) => a + dur(c), 0);
+  const done = (task.frozen || []).filter((c) => c.status === 'done' || c.status === 'waived' || (c.status === 'pinned' && c.end <= now)).reduce((a, c) => a + dur(c), 0);
   return { total, done: Math.min(total, done), pct: Math.min(100, Math.round((done / total) * 100)) };
 }

@@ -76,6 +76,11 @@ export function compute(items, windows, tz) {
 
 export function groupOf(it, by, ctx) {
   const s = ctx.settings;
+  if (by === 'category') {
+    if (it.kind !== 'chunk') return { key: 'events', label: 'Calendar events', color: '#9aa0aa' };
+    const c = (s.categories || []).find((x) => x.id === it.task.categoryId);
+    return c ? { key: 'cat:' + c.id, label: c.name, color: c.color } : { key: 'cat:none', label: 'Uncategorized tasks', color: '#c0c4cc' };
+  }
   if (by === 'type') return it.kind === 'chunk' ? { key: 'tasks', label: 'Task sessions', color: '#8a5cf6' } : { key: 'events', label: 'Calendar events', color: '#5b7c99' };
   if (by === 'source') {
     if (it.kind === 'chunk') return { key: 't:' + it.task.id, label: it.task.title, color: it.color, sub: 'task' };
@@ -197,7 +202,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
     return `<tr><td><span class="sw-dot" style="background:${m.color}"></span>${m.editable ? `<button class="link lbl-edit" data-hex="${esc(k)}" title="Rename this color category">${esc(m.label)} ✎</button>` : esc(m.label)}${contains && opts.by === 'color' ? `<div class="muted small">${esc(contains)}</div>` : ''}</td>
       <td class="num">${fmtH(T0[k] || 0)}</td><td class="num">${pct(T0[k] || 0, totals.available)}%</td><td class="num">${pct(T0[k] || 0, occupied)}%</td></tr>`;
   }).join('');
-  const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color category' : opts.by === 'type' ? 'Type' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
+  const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' ? 'Category' : opts.by === 'type' ? 'Type' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
     <tbody>${rows}<tr class="free-row"><td><span class="sw-dot free-sw"></span>Free</td><td class="num">${fmtH(totals.free)}</td><td class="num">${pct(totals.free, totals.available)}%</td><td class="num">—</td></tr></tbody>
     <tfoot><tr><td>Total in scope</td><td class="num">${fmtH(totals.available)}</td><td class="num">100%</td><td></td></tr></tfoot></table>`;
 
@@ -208,7 +213,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
           ${[['next7', 'Next 7 days'], ['next30', 'Next 30 days'], ['week', 'This week'], ['nextweek', 'Next week'], ['month', 'This month'], ['nextmonth', 'Next month'], ['custom', 'Custom…']].map(([v, l]) => `<option value="${v}" ${opts.period === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         ${opts.period === 'custom' ? `<label class="field"><span>From</span><input type="date" data-o="from" value="${opts.from || ''}"></label><label class="field"><span>To</span><input type="date" data-o="to" value="${opts.to || ''}"></label>` : ''}
         <label class="field"><span>Hours</span><select data-o="scope">${Object.entries(SCOPES).map(([v, l]) => `<option value="${v}" ${opts.scope === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-        <label class="field"><span>Group by</span><select data-o="by">${[['color', 'Color / category'], ['source', 'Task or calendar'], ['type', 'Events vs tasks']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Group by</span><select data-o="by">${[['category', 'Category'], ['color', 'Color'], ['source', 'Task or calendar'], ['type', 'Events vs tasks']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <span class="grow"></span>
         <button class="btn small ghost" data-o="csv">Download CSV</button>
       </div>
