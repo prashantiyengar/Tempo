@@ -608,3 +608,5 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .hold { position: absolute; left: 2px; right: 2px; z-index: 1; pointer-events: none; border-radius: 4px; border: 1px dashed color-mix(in srgb, var(--ok) 60%, transparent);
   background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--ok) 10%, transparent) 0 5px, transparent 5px 10px); }
 .hold span { font-size: 10.5px; color: var(--ok); padding: 2px 5px; display: block; }
+.chip-btn.dur-add.minus { color: var(--ink2); border-style: dashed; }
+.since-last { font-weight: 600; }

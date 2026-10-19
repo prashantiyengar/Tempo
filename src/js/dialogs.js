@@ -78,7 +78,9 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       </div>
       <div class="row timed dur-row">
         <span class="muted small">Length <b class="dur-now"></b></span>
+        ${[[-60, '−1 hour'], [-30, '−30 min'], [-10, '−10 min'], [-5, '−5 min']].map(([m, l]) => `<button type="button" class="chip-btn dur-add minus" data-add="${m}">${l}</button>`).join('')}
         ${[[5, '+5 min'], [15, '+15 min'], [30, '+30 min'], [60, '+1 hour']].map(([m, l]) => `<button type="button" class="chip-btn dur-add" data-add="${m}">${l}</button>`).join('')}
+        ${ctx.lastEventEnd ? '<button type="button" class="chip-btn since-last" title="Start when your last event ended (up to 12 hours ago, also yesterday) and end now">⤒ Since last event</button>' : ''}
       </div>
       <div class="row timed">
         <label class="field grow"><span>Time zone</span>
@@ -235,9 +237,21 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     const endMs = () => T.atTime(f.eDate.value, f.eTime.value || '00:00', zoneOf());
     const startMs = () => T.atTime(f.sDate.value, f.sTime.value || '00:00', zoneOf());
     const showDur = () => { const m = Math.round((endMs() - startMs()) / T.MIN); const d = $('.dur-now', dlg); if (d) d.textContent = m > 0 ? T.fmtDur(m) : '—'; };
+    const setEnd = (ms) => { const dt = T.toDTInput(ms, zoneOf()); f.eDate.value = dt.slice(0, 10); f.eTime.value = dt.slice(11, 16); };
+    $('.since-last', dlg)?.addEventListener('click', async () => {
+      const r = await ctx.lastEventEnd();
+      const dt = T.toDTInput(r.start, zoneOf());
+      f.sDate.value = dt.slice(0, 10); f.sTime.value = dt.slice(11, 16);
+      setEnd(r.end);
+      f.sTime.dispatchEvent(new Event('change', { bubbles: true }));
+      showDur();
+      setHTML($('.since-note', dlg) || $('.dur-row', dlg).appendChild(Object.assign(document.createElement('span'), { className: 'muted small since-note' })), esc(r.note));
+    });
     $$('.dur-add', dlg).forEach((b) => (b.onclick = () => {
-      const base = Math.max(endMs(), startMs());
-      const dt = T.toDTInput(base + +b.dataset.add * T.MIN, zoneOf());
+      const add = +b.dataset.add;
+      // + adds to the end; − shortens, but never below 5 minutes
+      const base = add > 0 ? Math.max(endMs(), startMs()) : endMs();
+      const dt = T.toDTInput(Math.max(startMs() + 5 * T.MIN, base + add * T.MIN), zoneOf());
       f.eDate.value = dt.slice(0, 10); f.eTime.value = dt.slice(11, 16);
       f.eTime.dispatchEvent(new Event('change', { bubbles: true }));
       showDur();

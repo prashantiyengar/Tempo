@@ -29,6 +29,7 @@ const set = () => app.state.settings;
 const ctx = {
   get state() { return app.state; },
   externalChanged() { AC.invalidateExternal(); render(); cycle(); },
+  lastEventEnd: () => lastEventEnd(),
   get lastBusy() { return app.lastBusy; },
   // New events go to the calendar chosen for task sessions (Settings → Google Calendar), else the primary one.
   defaultCalendar() {
@@ -727,7 +728,7 @@ function quickCreate(rect, sel, onClose) {
     <form class="qc">
       <input name="title" placeholder="Add title" autofocus autocomplete="off">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
-      ${sel.allDay ? '' : `<div class="qc-dur">${[[5, '+5m'], [15, '+15m'], [30, '+30m'], [60, '+1h']].map(([m, l]) => `<button type="button" class="chip-btn dur-add" data-add="${m}">${l}</button>`).join('')}</div>`}
+      ${sel.allDay ? '' : `<div class="qc-dur">${[[-60, '−1h'], [-30, '−30m'], [-10, '−10m'], [-5, '−5m'], [5, '+5m'], [15, '+15m'], [30, '+30m'], [60, '+1h']].map(([m, l]) => `<button type="button" class="chip-btn dur-add ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`).join('')}<button type="button" class="chip-btn since-last" title="From the end of your last event (up to 12 h ago) until now">⤒ Since last</button></div>`}
       <select name="cal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
       <div class="qc-cat"></div>
       <div class="qc-actions">
@@ -743,12 +744,13 @@ function quickCreate(rect, sel, onClose) {
     const f = $('form', p);
     setTimeout(() => f.title.focus(), 0);
     // length shortcuts: each click extends the event
-    $$('.dur-add', p).forEach((b) => (b.onclick = () => {
-      sel.end += +b.dataset.add * T.MIN;
+    const redraw = () => {
       $('.qc-when', p).textContent = `${T.format(sel.start, z, { weekday: 'long', day: 'numeric', month: 'long' })} · ${T.fmtTime(sel.start, z, s.h12)} – ${T.fmtTime(sel.end, z, s.h12)} (${T.fmtDur(Math.round((sel.end - sel.start) / T.MIN))})`;
       const g = $('.ghost-sel'); if (g) g.style.height = (((sel.end - sel.start) / T.HOUR) * s.hourHeight) + 'px';
       f.title.focus();
-    }));
+    };
+    $$('.dur-add', p).forEach((b) => (b.onclick = () => { sel.end = Math.max(sel.start + 5 * T.MIN, sel.end + +b.dataset.add * T.MIN); redraw(); }));
+    $('.since-last', p)?.addEventListener('click', async () => { const r = await lastEventEnd(); sel.start = r.start; sel.end = r.end; $('.ghost-sel')?.remove(); redraw(); toast(r.note, { noUndo: true }); });
     let qcCat = null;
     C.categoryPicker($('.qc-cat', p), {
       settings: set(), selected: null,
@@ -1461,14 +1463,22 @@ async function fillGap(start, end) {
   await saveTasks('move tasks up');
   toast(`Moved up: ${moved.join(', ')}`, { ms: 7000 });
 }
+// The end of your last event (today or yesterday, at most 12 hours ago) — e.g. at 6:00 you can record that you
+// slept since 22:00 the evening before.
+const LOOKBACK = 12 * T.HOUR;
+async function lastEventEnd() {
+  const now = nowMin(), z = tz(), today = T.dayKey(now, z);
+  const items = (await collectItems([T.addDays(today, -1), today])).filter((x) => !x.allDay && x.end <= now && x.end > now - LOOKBACK && A.isOccupying(x, set()));
+  if (!items.length) return { start: now - LOOKBACK, end: now, found: false, note: 'No event in the last 12 hours — starting 12 hours ago; adjust the start as needed.' };
+  const last = items.reduce((a, b) => (b.end > a.end ? b : a));
+  const start = Math.min(last.end, now - 5 * T.MIN);
+  const when = T.dayKey(start, z) === today ? T.fmtTime(start, z, set().h12) : `yesterday ${T.fmtTime(start, z, set().h12)}`;
+  return { start, end: now, found: true, note: `Since “${last.title}” ended (${when})` };
+}
 async function fillSinceLast() {
-  const now = nowMin(), z = tz();
-  const items = (await itemsToday()).filter((x) => !x.allDay && x.end <= now && A.isOccupying(x, set()));
-  let start = items.length ? Math.max(...items.map((x) => x.end)) : T.atTime(T.dayKey(now, z), set().bounds.start, z);
-  if (start >= now) start = now - 30 * T.MIN;
-  const ongoing = (await itemsToday()).some((x) => !x.allDay && x.start < now && x.end > now && A.isOccupying(x, set()));
-  if (ongoing && !items.length) { toast('Something is going on right now — nothing to fill.'); return; }
-  newEvent({ start, end: now, title: '', note: items.length ? 'Since your last event today' : 'Since the start of your day' });
+  const r = await lastEventEnd();
+  newEvent({ start: r.start, end: r.end, title: '' });
+  setTimeout(() => toast(r.note, { noUndo: true }), 300);
 }
 
 // ======================================================================================
