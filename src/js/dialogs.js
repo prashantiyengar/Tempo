@@ -76,6 +76,10 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         <input type="time" name="eTime" value="${eTime}" step="300" class="timed">
         <input type="date" name="eDate" value="${eKey}" required data-quick="off">
       </div>
+      <div class="row timed dur-row">
+        <span class="muted small">Length <b class="dur-now"></b></span>
+        ${[[5, '+5 min'], [15, '+15 min'], [30, '+30 min'], [60, '+1 hour']].map(([m, l]) => `<button type="button" class="chip-btn dur-add" data-add="${m}">${l}</button>`).join('')}
+      </div>
       <div class="row timed">
         <label class="field grow"><span>Time zone</span>
           <input name="tz" list="tzlist" value="${esc(evTz)}" spellcheck="false">
@@ -226,6 +230,19 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       return [buildRRule(o)];
     };
 
+    // Length shortcuts: each click adds to the end time (click again to add more)
+    const zoneOf = () => (T.isValidTz(f.tz.value.trim()) ? f.tz.value.trim() : s.tz);
+    const endMs = () => T.atTime(f.eDate.value, f.eTime.value || '00:00', zoneOf());
+    const startMs = () => T.atTime(f.sDate.value, f.sTime.value || '00:00', zoneOf());
+    const showDur = () => { const m = Math.round((endMs() - startMs()) / T.MIN); const d = $('.dur-now', dlg); if (d) d.textContent = m > 0 ? T.fmtDur(m) : '—'; };
+    $$('.dur-add', dlg).forEach((b) => (b.onclick = () => {
+      const base = Math.max(endMs(), startMs());
+      const dt = T.toDTInput(base + +b.dataset.add * T.MIN, zoneOf());
+      f.eDate.value = dt.slice(0, 10); f.eTime.value = dt.slice(11, 16);
+      f.eTime.dispatchEvent(new Event('change', { bubbles: true }));
+      showDur();
+    }));
+    f.addEventListener('input', showDur); f.addEventListener('change', showDur); showDur();
     let recTouched = false;
     const REC_FIELDS = new Set(['freq', 'interval', 'byday', 'monthMode', 'ends', 'until', 'count']);
     f.addEventListener('input', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });

@@ -188,9 +188,11 @@ export async function busyIntervals(state, from, to) {
   const local = (busyCals && !busyCals.includes(LOCAL_CAL)) ? [] : expandLocal(state.localEvents, from, to, tz);
   let ext = [];
   try { ext = (await externalEvents(state, from, to)).filter((e) => e._busy); } catch (e) { console.warn('Tempo: other calendars', e); }
+  // time you chose to keep free (e.g. after finishing something early)
+  const holds = (state.settings.holds || []).filter((h) => h.end > from && h.start < to).map((h) => ({ start: h.start, end: h.end }));
   const travel = +state.settings.travelMinutes || 0;
   const list = [...gEvents, ...local, ...ext].filter((e) => isBusy(e, state, tz)).flatMap((e) => { const iv = interval(e, tz); return [iv, ...travelBlocks(e, iv, travel)]; });
-  return { busy: S.merge(list.map(({ start, end }) => ({ start, end }))), gEvents, local };
+  return { busy: S.merge([...list.map(({ start, end }) => ({ start, end })), ...holds]), gEvents, local };
 }
 
 export function horizon(state, now) {
@@ -509,7 +511,7 @@ const SHARED_PART = 450;
 export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bounds', 'overflowBounds', 'chunkMinutes', 'minChunkMinutes', 'breakMinutes',
   'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
-  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId'];
+  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds'];
 const normCat = ({ id, name, color, icon, prefer }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}) });
 function sharedOf(s) {
   const o = {};

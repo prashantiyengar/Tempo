@@ -614,6 +614,14 @@ export function markPartial(task, chunkId, { credit, start, end, squeeze = false
     frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), nc],
   };
 }
+// Finished a session early: it's done (all its work), ending at `end`; the rest of the slot becomes free.
+export function finishEarly(task, chunkId, end) {
+  const ss = sessions(task).find((x) => x.id === chunkId);
+  if (!ss) return task;
+  const t = markDone(task, chunkId, { actualMin: Math.max(1, (end - ss.start) / T.MIN) });
+  return { ...t, frozen: t.frozen.map((c) => (c.id === chunkId ? { ...c, end: Math.max(c.start + T.MIN, end), slotMin: +c.slotMin || dur(c), credit: task.kind === 'reading' ? c.credit : ss.work, syncHash: null } : c)) };
+}
+
 // Change a reading task's speed without shifting what's already been read: done sessions keep their pages.
 export function withReadingSpeed(task, reading) {
   if (task.kind !== 'reading') return { ...task, reading };

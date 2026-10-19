@@ -203,10 +203,10 @@ function drawSummary(ctx, s, x, y, w) {
   ctx.fillStyle = C.muted; ctx.font = `12px ${FONT}`;
   ctx.fillText(`${fmtH(s.available)} ${s.scope}`, px + ctx.measureText('Where the time goes').width + 70, py + 3);
   // key figures
-  const used = s.available - s.free;
+  const used = s.available - s.free - (s.gaps || 0);
   const tiles = [
     ['Occupied', fmtH(used), s.available ? `${Math.round((used / s.available) * 100)}% of ${fmtH(s.available)}` : ''],
-    ['Free', fmtH(s.free), s.available ? `${Math.round((s.free / s.available) * 100)}%` : ''],
+    ['Free', fmtH(s.free), s.available ? `${Math.round((s.free / s.available) * 100)}%${s.gaps ? ` · ○ ${fmtH(s.gaps)} gaps` : ''}` : ''],
     ['Busiest day', s.busiest ? s.busiest.label : '—', s.busiest ? `${fmtH(s.busiest.m)} of ${fmtH(s.busiest.of)}` : ''],
     ['Task sessions', s.sessions.total ? `${s.sessions.done}/${s.sessions.total}` : '—', s.sessions.total ? 'done' : 'none planned'],
   ];
@@ -224,16 +224,18 @@ function drawSummary(ctx, s, x, y, w) {
   ctx.save(); rr(ctx, bx, by, bw, bh, 6); ctx.clip();
   ctx.fillStyle = '#eceef2'; ctx.fillRect(bx, by, bw, bh);
   for (const g of s.groups) { const gw = (g.m / total) * bw; ctx.fillStyle = g.color; ctx.fillRect(cx, by, gw, bh); cx += gw; }
+  if (s.gaps) { const gw = (s.gaps / total) * bw; ctx.fillStyle = '#d9dce3'; ctx.fillRect(cx, by, gw, bh); cx += gw; }
   ctx.restore();
   // legend
   let lx = bx, ly = by + bh + 12;
   ctx.font = `12px ${FONT}`;
-  const entries = [...s.groups.map((g) => ({ ...g })), { label: 'Free', color: '#eceef2', m: s.free }];
+  const entries = [...s.groups.map((g) => ({ ...g })), ...(s.gaps ? [{ label: 'Short gaps (≤ 10 min, not free)', gap: true, m: s.gaps }] : []), { label: 'Free', color: '#eceef2', m: s.free }];
   for (const g of entries) {
     const txt = `${g.label}  ${fmtH(g.m)} · ${Math.round((g.m / total) * 100)}%`;
     const tw2 = ctx.measureText(txt).width + 30;
     if (lx + tw2 > bx + bw) { lx = bx; ly += 20; if (ly > y + h - 18) break; }
-    ctx.fillStyle = g.color; rr(ctx, lx, ly + 1, 12, 12, 3); ctx.fill();
+    if (g.gap) { ctx.strokeStyle = C.ink; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(lx + 6, ly + 7, 5, 0, Math.PI * 2); ctx.stroke(); ctx.lineWidth = 1; }
+    else { ctx.fillStyle = g.color; rr(ctx, lx, ly + 1, 12, 12, 3); ctx.fill(); }
     if (g.label === 'Free') { ctx.strokeStyle = '#c9ccd3'; rr(ctx, lx + 0.5, ly + 1.5, 11, 11, 3); ctx.stroke(); }
     ctx.fillStyle = C.ink; ctx.fillText(txt, lx + 18, ly);
     lx += tw2;

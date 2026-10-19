@@ -51,24 +51,35 @@ function splitByDay(wins, tz) {
 }
 
 // items: [{start, end, group, prio}]  → minutes per group, per day, free minutes. Overlaps are counted once.
+// Short gaps (up to GAP_MAX minutes) between two occupied blocks — the breaks between back-to-back sessions —
+// aren't real free time: they're counted separately as "gaps".
+export const GAP_MAX = 10;
 export function compute(items, windows, tz) {
   const days = {};
-  const totals = { available: 0, free: 0, groups: {}, titles: {} }; // titles[group][title] = { m, ids:Set }
+  const totals = { available: 0, free: 0, gaps: 0, groups: {}, titles: {} }; // titles[group][title] = { m, ids:Set }
   const segs = splitByDay(windows, tz);
   const sorted = [...items].sort((a, b) => a.start - b.start);
   for (const w of segs) {
-    const d = days[w.day] ||= { available: 0, free: 0, groups: {} };
+    const d = days[w.day] ||= { available: 0, free: 0, gaps: 0, groups: {} };
     const len = (w.end - w.start) / T.MIN;
     d.available += len; totals.available += len;
     const hits = sorted.filter((it) => it.end > w.start && it.start < w.end);
     const cuts = new Set([w.start, w.end]);
     for (const it of hits) { cuts.add(Math.max(it.start, w.start)); cuts.add(Math.min(it.end, w.end)); }
     const pts = [...cuts].sort((a, b) => a - b);
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
+    const pieces = [];
+    for (let i = 0; i < pts.length - 1; i++) pieces.push({ a: pts[i], b: pts[i + 1], cover: hits.filter((it) => it.start <= pts[i] && it.end >= pts[i + 1]) });
+    // merge neighbouring free pieces, so a gap is the whole stretch of free time between two blocks
+    const merged = [];
+    for (const p of pieces) { const last = merged[merged.length - 1]; if (last && !last.cover.length && !p.cover.length) last.b = p.b; else merged.push({ ...p }); }
+    for (let i = 0; i < merged.length; i++) {
+      const { a, b, cover } = merged[i];
       const m = (b - a) / T.MIN;
-      const cover = hits.filter((it) => it.start <= a && it.end >= b);
-      if (!cover.length) { d.free += m; totals.free += m; continue; }
+      if (!cover.length) {
+        const between = i > 0 && i < merged.length - 1 && merged[i - 1].cover.length && merged[i + 1].cover.length;
+        if (between && m <= GAP_MAX) { d.gaps += m; totals.gaps += m; } else { d.free += m; totals.free += m; }
+        continue;
+      }
       cover.sort((x, y) => x.prio - y.prio || x.start - y.start);
       const g = cover[0].group;
       d.groups[g] = (d.groups[g] || 0) + m;
@@ -132,13 +143,15 @@ export function periodRange(period, s, now, custom) {
 
 const h = (m) => (m / 60);
 const fmtH = (m) => { const v = m / 60; return v >= 10 ? `${Math.round(v)}h` : `${(Math.round(v * 10) / 10).toString()}h`; };
+const fmtG = (m) => (m < 60 ? `${Math.round(m)} min` : fmtH(m));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 
 // ---------------- rendering ----------------
 export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
   const tz = settings.tz;
   const { totals, days } = data;
-  const occupied = totals.available - totals.free;
+  const occupied = totals.available - totals.free - totals.gaps;
+  const gapsNote = totals.gaps ? `<p class="muted small an-gaps"><span class="gap-sw"></span> ${fmtG(totals.gaps)} of short gaps (≤ ${GAP_MAX} min) between back-to-back items — not counted as free.</p>` : '';
   const order = Object.entries(totals.groups).sort((a, b) => b[1] - a[1]).map(([k]) => k);
   // Fold the long tail into "Other" so the chart stays readable (fixed order, no generated hues).
   const MAXG = 8;
@@ -156,20 +169,20 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
     <div class="an-tiles">
       <div class="tile"><span class="t-l">Hours in scope</span><span class="t-v">${fmtH(totals.available)}</span><span class="t-s">${esc((SCOPES[opts.scope] || (settings.periods || []).find((p) => 'period:' + p.id === opts.scope)?.name || '').toLowerCase())}</span></div>
       <div class="tile"><span class="t-l">Occupied</span><span class="t-v">${fmtH(occupied)}</span><span class="t-s">${pct(occupied, totals.available)}% of scope</span></div>
-      <div class="tile"><span class="t-l">Free</span><span class="t-v">${fmtH(totals.free)}</span><span class="t-s">${pct(totals.free, totals.available)}% of scope</span></div>
-      <div class="tile"><span class="t-l">Busiest day</span><span class="t-v">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? esc(T.format(T.dayStart(b[0], tz), tz, { weekday: 'short', day: 'numeric', month: 'short' })) : '—'; })()}</span><span class="t-s">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free, days[k].available]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? `${fmtH(b[1])} of ${fmtH(b[2])} occupied` : 'nothing scheduled'; })()}</span></div>
+      <div class="tile"><span class="t-l">Free</span><span class="t-v">${fmtH(totals.free)}</span><span class="t-s">${pct(totals.free, totals.available)}% of scope${totals.gaps ? ` · <span class="gap-sw" title="Short gaps between items"></span> ${fmtG(totals.gaps)} gaps not counted` : ''}</span></div>
+      <div class="tile"><span class="t-l">Busiest day</span><span class="t-v">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free - (days[k].gaps || 0)]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? esc(T.format(T.dayStart(b[0], tz), tz, { weekday: 'short', day: 'numeric', month: 'short' })) : '—'; })()}</span><span class="t-s">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free - (days[k].gaps || 0), days[k].available]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? `${fmtH(b[1])} of ${fmtH(b[2])} occupied` : 'nothing scheduled'; })()}</span></div>
     </div>`;
 
   // ---- 100% bar
   let x = 0;
   const W = 1000;
-  const barSegs = [...shown.map((k) => ({ k, m: T0[k] || 0, c: meta(k).color, l: meta(k).label })), { k: '__free', m: totals.free, c: null, l: 'Free' }].filter((s) => s.m > 0);
+  const barSegs = [...shown.map((k) => ({ k, m: T0[k] || 0, c: meta(k).color, l: meta(k).label })), { k: '__gaps', m: totals.gaps, c: 'var(--gap-c)', l: `Short gaps (≤ ${GAP_MAX} min)`, gap: true }, { k: '__free', m: totals.free, c: null, l: 'Free' }].filter((s) => s.m > 0);
   const gap = 2;
   const bar = totals.available ? `<svg class="an-bar" viewBox="0 0 ${W} 36" preserveAspectRatio="none" role="img" aria-label="Share of time by category">
       <defs><pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="7" class="free-bg"/><line x1="0" y1="0" x2="0" y2="7" class="free-line" stroke-width="2"/></pattern></defs>
       ${barSegs.map((s, i) => { const w = (s.m / totals.available) * W; const r = `<rect x="${x + (i ? gap / 2 : 0)}" y="0" width="${Math.max(0, w - (i ? gap / 2 : 0) - (i < barSegs.length - 1 ? gap / 2 : 0))}" height="36" rx="4" ${s.c ? `fill="${s.c}"` : 'fill="url(#hatch)"'} data-tip="${esc(s.l)}: ${fmtH(s.m)} · ${pct(s.m, totals.available)}%"/>`; x += w; return r; }).join('')}
     </svg>` : '<p class="muted">No hours in this scope for the selected period.</p>';
-  const legend = `<div class="an-legend">${barSegs.map((s) => `<span><i ${s.c ? `style="background:${s.c}"` : 'class="free-sw"'}></i>${esc(s.l)} <b>${pct(s.m, totals.available)}%</b></span>`).join('')}</div>`;
+  const legend = `<div class="an-legend">${barSegs.map((s) => `<span><i ${s.gap ? 'class="gap-sw"' : s.c ? `style="background:${s.c}"` : 'class="free-sw"'}></i>${esc(s.l)} <b>${pct(s.m, totals.available)}%</b></span>`).join('')}</div>`;
 
   // ---- per-day stacked columns
   const maxAvail = Math.max(1, ...dayKeys.map((k) => days[k].available));
@@ -184,7 +197,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
     const gs = sumG(d.groups);
     const cx = PADL + i * slot + (slot - bw) / 2;
     let acc = 0;
-    const parts = [...shown.map((g) => ({ m: gs[g] || 0, c: meta(g).color, l: meta(g).label })), { m: d.free, c: null, l: 'Free' }].filter((p) => p.m > 0);
+    const parts = [...shown.map((g) => ({ m: gs[g] || 0, c: meta(g).color, l: meta(g).label })), { m: d.gaps || 0, c: 'var(--gap-c)', l: 'Short gaps' }, { m: d.free, c: null, l: 'Free' }].filter((p) => p.m > 0);
     const dl = T.format(T.dayStart(k, tz), tz, { weekday: 'short', day: 'numeric', month: 'short' });
     parts.forEach((p, j) => {
       const y1 = ys(acc), y0 = ys(acc + p.m);
@@ -222,7 +235,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
       <td class="num">${fmtH(T0[k] || 0)}</td><td class="num">${pct(T0[k] || 0, totals.available)}%</td><td class="num">${pct(T0[k] || 0, occupied)}%</td></tr>`;
   }).join('');
   const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' ? 'Category' : opts.by === 'type' ? 'Type' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
-    <tbody>${rows}<tr class="free-row"><td><span class="sw-dot free-sw"></span>Free</td><td class="num">${fmtH(totals.free)}</td><td class="num">${pct(totals.free, totals.available)}%</td><td class="num">—</td></tr></tbody>
+    <tbody>${rows}${totals.gaps ? `<tr class="gap-row"><td><span class="gap-sw"></span> Short gaps between items <span class="muted small">(≤ ${GAP_MAX} min, not free)</span></td><td class="num">${fmtH(totals.gaps)}</td><td class="num">${pct(totals.gaps, totals.available)}%</td><td class="num">—</td></tr>` : ''}<tr class="free-row"><td><span class="sw-dot free-sw"></span>Free</td><td class="num">${fmtH(totals.free)}</td><td class="num">${pct(totals.free, totals.available)}%</td><td class="num">—</td></tr></tbody>
     <tfoot><tr><td>Total in scope</td><td class="num">${fmtH(totals.available)}</td><td class="num">100%</td><td></td></tr></tfoot></table>`;
 
   return `
@@ -239,7 +252,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
       <p class="muted small an-sub">${esc(rangeInfo.label)}: ${esc(T.format(rangeInfo.from, tz, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: settings.h12 }))} – ${esc(T.format(rangeInfo.to - 1, tz, { weekday: 'short', day: 'numeric', month: 'short' }))} · ${esc(scopeNote(opts.scope, settings))}${taskMin ? '' : ''}</p>
     </div>
     ${tiles}
-    <section class="an-card"><h3>Where the time goes</h3>${bar}${legend}</section>
+    <section class="an-card"><h3>Where the time goes</h3>${bar}${legend}${gapsNote}</section>
     <section class="an-card"><h3>Per day</h3>${n ? chart : '<p class="muted">No days in range.</p>'}${n ? legend : ''}</section>
     <section class="an-card"><h3>Breakdown</h3>${table}<p class="muted small">Overlapping items are counted once. Events marked “free”, declined invitations${settings.allDayBlocks ? '' : ' and all-day events'} don't count as occupied. Hidden calendars are left out.</p></section>`;
 }
@@ -255,13 +268,13 @@ function scopeNote(scope, s) {
 
 export function toCsv(data, groups, tz) {
   const keys = Object.keys(data.totals.groups);
-  const head = ['Date', 'Hours in scope', 'Free', ...keys.map((k) => groups[k].label)];
+  const head = ['Date', 'Hours in scope', 'Free', 'Short gaps', ...keys.map((k) => groups[k].label)];
   const lines = [head];
   for (const d of Object.keys(data.days).sort()) {
     const v = data.days[d];
-    lines.push([d, h(v.available).toFixed(2), h(v.free).toFixed(2), ...keys.map((k) => h(v.groups[k] || 0).toFixed(2))]);
+    lines.push([d, h(v.available).toFixed(2), h(v.free).toFixed(2), h(v.gaps || 0).toFixed(2), ...keys.map((k) => h(v.groups[k] || 0).toFixed(2))]);
   }
   const t = data.totals;
-  lines.push(['Total', h(t.available).toFixed(2), h(t.free).toFixed(2), ...keys.map((k) => h(t.groups[k] || 0).toFixed(2))]);
+  lines.push(['Total', h(t.available).toFixed(2), h(t.free).toFixed(2), h(t.gaps || 0).toFixed(2), ...keys.map((k) => h(t.groups[k] || 0).toFixed(2))]);
   return lines.map((r) => r.map((c) => (/[",\n]/.test(c) ? `"${String(c).replace(/"/g, '""')}"` : c)).join(',')).join('\n');
 }

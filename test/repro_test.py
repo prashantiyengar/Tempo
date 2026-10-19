@@ -40,8 +40,8 @@ async def main():
         print('B fresh:', await counts(B))
         print('B tasks:', await B.eval_on_selector_all('.task-row .tr-title', 'e=>e.map(x=>x.textContent.trim())'))
         await B.screenshot(path=f'{OUT}/r-B.png')
-        print('B hint:', await B.eval_on_selector('.next-hint', 'e=>e.innerText.split(String.fromCharCode(10)).join(" ")') if await B.query_selector('.next-hint') else None)
-        await B.click('.next-hint button'); await B.wait_for_timeout(500)
+        print('B hint (removed, should be None):', await B.query_selector('.next-hint'))
+        await B.click('#btn-next'); await B.wait_for_timeout(1000)
         print('B after "Show it":', await B.text_content('#range-title'), await B.eval_on_selector_all('.ev.chunk', 'e=>e.length'), 'sessions')
         await B.screenshot(path=f'{OUT}/r-B-week.png')
         # --- Edit the series on B (other browser): change deadline + rank, mark a session done, delete a session

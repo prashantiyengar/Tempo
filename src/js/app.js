@@ -300,6 +300,11 @@ function renderTimeGrid(days, items) {
         if (seg) col.appendChild(el(`<div class="travel" style="top:${(seg.s / 60) * hh}px;height:${Math.max(4, ((seg.e - seg.s) / 60) * hh)}px" title="Travel buffer (${trav} min)"><span>🚗</span></div>`));
       }
     }
+    // time kept free after finishing something early
+    for (const hd of s.holds || []) {
+      const seg = segMinutes(hd, k);
+      if (seg) col.appendChild(el(`<div class="hold" style="top:${(seg.s / 60) * hh}px;height:${Math.max(6, ((seg.e - seg.s) / 60) * hh)}px" title="Kept free"><span>Kept free</span></div>`));
+    }
     // deadline flags
     for (const t of deadlines) {
       try {
@@ -313,21 +318,7 @@ function renderTimeGrid(days, items) {
   }
 
   if (drawErrors.length) { console.error('Tempo: items not drawn', drawErrors); toast(`${drawErrors.length} item(s) couldn't be drawn: ${drawErrors[0][0]} — ${drawErrors[0][1].message}`, { ms: 8000 }); }
-  // Nothing from your tasks in this range? Point to where the sessions are.
-  const hasChunks = timed.some((i) => i.kind === 'chunk');
-  if (!hasChunks && !set().hiddenCalendars?.includes('tasks')) {
-    const from = T.dayStart(days[0], z), to = T.dayStart(T.addDays(days[days.length - 1], 1), z);
-    const all = st().tasks.filter((t) => !t.archived).flatMap((t) => S.sessions(t).map((c) => ({ ...c, task: t })));
-    const next = all.filter((c) => c.start >= to && c.kind !== 'done').sort((a, b) => a.start - b.start)[0];
-    const prev = !next && all.filter((c) => c.end <= from).sort((a, b) => b.start - a.start)[0];
-    const target = next || prev;
-    if (target) {
-      const when = T.format(target.start, z, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 });
-      const hint = el(`<div class="next-hint"><span>No task sessions ${days.length === 1 ? 'on this day' : 'in these days'}. ${next ? 'Next' : 'Last'}: <b>${esc(when)}</b> — ${esc(target.label)}</span><button class="btn small primary">${next ? 'Show it →' : '← Show it'}</button></div>`);
-      $('button', hint).onclick = () => { app.cursor = T.dayKey(target.start, z); app.miniCursor = app.cursor; render(); };
-      root.appendChild(hint);
-    }
-  }
+
   $$('.dn', root).forEach((b) => b.addEventListener('click', () => { app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
   colsEl.addEventListener('pointerdown', onGridPointerDown);
   $('.ad-area', root).addEventListener('pointerdown', onAllDayPointerDown);
@@ -736,6 +727,7 @@ function quickCreate(rect, sel, onClose) {
     <form class="qc">
       <input name="title" placeholder="Add title" autofocus autocomplete="off">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
+      ${sel.allDay ? '' : `<div class="qc-dur">${[[5, '+5m'], [15, '+15m'], [30, '+30m'], [60, '+1h']].map(([m, l]) => `<button type="button" class="chip-btn dur-add" data-add="${m}">${l}</button>`).join('')}</div>`}
       <select name="cal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
       <div class="qc-cat"></div>
       <div class="qc-actions">
@@ -750,6 +742,13 @@ function quickCreate(rect, sel, onClose) {
     </form>`, (p, close) => {
     const f = $('form', p);
     setTimeout(() => f.title.focus(), 0);
+    // length shortcuts: each click extends the event
+    $$('.dur-add', p).forEach((b) => (b.onclick = () => {
+      sel.end += +b.dataset.add * T.MIN;
+      $('.qc-when', p).textContent = `${T.format(sel.start, z, { weekday: 'long', day: 'numeric', month: 'long' })} · ${T.fmtTime(sel.start, z, s.h12)} – ${T.fmtTime(sel.end, z, s.h12)} (${T.fmtDur(Math.round((sel.end - sel.start) / T.MIN))})`;
+      const g = $('.ghost-sel'); if (g) g.style.height = (((sel.end - sel.start) / T.HOUR) * s.hourHeight) + 'px';
+      f.title.focus();
+    }));
     let qcCat = null;
     C.categoryPicker($('.qc-cat', p), {
       settings: set(), selected: null,
@@ -763,7 +762,7 @@ function quickCreate(rect, sel, onClose) {
       await saveNewEvent(f.cal.value, body);
     });
     $('.more', p).onclick = () => { const v = { title: f.title.value, calId: f.cal.value, categoryId: qcCat?.id }; close(); onClose?.(); newEvent({ ...sel, ...v }); };
-    $('.as-task', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'generic', title, earliestStart: sel.allDay ? null : sel.start, totalMinutes: sel.allDay ? null : durMin }); };
+    $('.as-task', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'generic', title, earliestStart: sel.allDay ? null : sel.start, totalMinutes: sel.allDay ? null : Math.round((sel.end - sel.start) / T.MIN) }); };
     $('.as-reading', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'reading', title, earliestStart: sel.allDay ? null : sel.start }); };
   });
 }
@@ -832,10 +831,12 @@ function openItem(it, rect) {
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
+      ${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<div class="pop-row"><button class="btn small fin-early">⏹ Finished early</button></div>' : ''}
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
     $('.x', p).onclick = close;
     $('.load-tasks', p)?.addEventListener('click', () => { close(); refreshFromServer(); });
+    $('.fin-early', p)?.addEventListener('click', () => { close(); finishedEarly(it); });
     $('.pop-evcat', p).onclick = () => { close(); pickEventCategory(it); };
     $('.edit', p)?.addEventListener('click', () => { close(); editEvent(it); });
     $('.del', p)?.addEventListener('click', async () => {
@@ -867,6 +868,7 @@ function openChunk(it, rect) {
       <div class="pop-actions">
         ${isDone ? '<button class="btn small undone">↺ Mark undone</button>' : '<button class="btn small primary done">✓ Mark done</button>'}
         <button class="btn small partial">◐ Partly done…</button>
+        ${(!isDone || sess.auto) && sess.start <= now && sess.end > now ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}
         ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         <button class="btn small ghost del">Delete…</button>
@@ -881,6 +883,7 @@ function openChunk(it, rect) {
     $('.unpin', pop)?.addEventListener('click', () => act((t) => S.unpinSession(t, sess.id), 'Unpinned'));
     $('.edit', pop).onclick = () => { close(); editTask(task); };
     $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
+    $('.fin-early', pop)?.addEventListener('click', () => { close(); finishedEarly(it); });
     $('.tm-start', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'stopwatch'); });
     $('.tm-pomo', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'pomodoro'); });
     $('.sync-now', pop)?.addEventListener('click', () => { close(); openSyncPanel(); });
@@ -1390,6 +1393,85 @@ async function runCycle({ sync = true, pull = false } = {}) {
 }
 
 // ======================================================================================
+// "Finished early" and "Fill time since last event"
+// ======================================================================================
+const nowMin = () => Math.floor(Date.now() / T.MIN) * T.MIN;
+async function itemsToday() {
+  const k = T.dayKey(Date.now(), tz());
+  return collectItems([k]);
+}
+async function finishedEarly(it0) {
+  let it = it0;
+  if (!it) {
+    const now = Date.now();
+    const list = (await itemsToday()).filter((x) => !x.allDay && x.start <= now && x.end > now && (x.kind === 'chunk' ? x.status !== 'done' || x.sess.auto : x.editable && A.isOccupying(x, set())));
+    if (!list.length) { toast('Nothing is going on right now.'); return; }
+    if (list.length === 1) it = list[0];
+    else {
+      const k = await choose('Which one did you finish?', null, list.map((x) => ({ value: x.key, label: x.title, desc: `${T.fmtTime(x.start, tz(), set().h12)}–${T.fmtTime(x.end, tz(), set().h12)}` })));
+      it = list.find((x) => x.key === k);
+      if (!it) return;
+    }
+  }
+  const end = nowMin(), origEnd = it.end;
+  if (end <= it.start || end >= origEnd) { toast('That isn’t running right now.'); return; }
+  try {
+    if (it.kind === 'chunk') {
+      const cur = st().tasks.find((t) => t.id === it.task.id);
+      replaceTask(S.finishEarly(cur, it.sess.id, end));
+      await saveTasks('finish early');
+    } else {
+      const z = it.ev.end.timeZone || tz();
+      await EV.updateEvent(st(), it.ev, { end: { dateTime: new Date(end).toISOString(), timeZone: z } }, 'this');
+      undoableEventChange(`finish “${it.ev.summary || 'event'}” early`, it.ev, 'this');
+      await E.persist(st(), ['localEvents']); E.invalidate();
+    }
+  } catch (err) { handleError(err); return; }
+  const freeMin = Math.round((origEnd - end) / T.MIN);
+  const until = T.fmtTime(origEnd, tz(), set().h12);
+  const v = await choose(`Finished ${T.fmtDur(freeMin)} early`, `“${it.title}” now ends at ${T.fmtTime(end, tz(), set().h12)}. What should happen until ${until}?`, [
+    { value: 'fill', label: 'Move tasks up', desc: 'Pull your next task sessions into this time.' },
+    { value: 'free', label: 'Leave it free', desc: `Nothing gets scheduled until ${until}.` },
+  ], { cancel: 'Decide later' });
+  if (v === 'fill') await fillGap(end, origEnd);
+  else if (v === 'free') {
+    set().holds = [...(set().holds || []).filter((h) => h.end > Date.now() - T.DAY), { id: S.newId('h'), start: end, end: origEnd }];
+    await E.persist(st(), ['settings']);
+    toast(`Kept free until ${until}`);
+  }
+  await cycle();
+}
+// Pull upcoming sessions (most important first) into [start, end).
+async function fillGap(start, end) {
+  const s = set(), brk = (+s.breakMinutes || 0) * T.MIN;
+  let pos = start;
+  const moved = [];
+  for (const t0 of S.sortTasks(st().tasks.filter((t) => !t.archived))) {
+    if (end - pos < 10 * T.MIN) break;
+    const t = st().tasks.find((x) => x.id === t0.id);
+    const next = S.sessions(t).filter((c) => c.kind === 'planned' && c.start >= start).sort((a, b) => a.start - b.start)[0];
+    if (!next) continue;
+    const len = Math.min(next.minutes, Math.floor((end - pos) / T.MIN));
+    if (len < 10) continue;
+    replaceTask(S.pinSession(t, next.id, pos, pos + len * T.MIN));
+    moved.push(`${t.title} (${T.fmtDur(len)})`);
+    pos += len * T.MIN + brk;
+  }
+  if (!moved.length) { toast('No upcoming task sessions to move up.'); return; }
+  await saveTasks('move tasks up');
+  toast(`Moved up: ${moved.join(', ')}`, { ms: 7000 });
+}
+async function fillSinceLast() {
+  const now = nowMin(), z = tz();
+  const items = (await itemsToday()).filter((x) => !x.allDay && x.end <= now && A.isOccupying(x, set()));
+  let start = items.length ? Math.max(...items.map((x) => x.end)) : T.atTime(T.dayKey(now, z), set().bounds.start, z);
+  if (start >= now) start = now - 30 * T.MIN;
+  const ongoing = (await itemsToday()).some((x) => !x.allDay && x.start < now && x.end > now && A.isOccupying(x, set()));
+  if (ongoing && !items.length) { toast('Something is going on right now — nothing to fill.'); return; }
+  newEvent({ start, end: now, title: '', note: items.length ? 'Since your last event today' : 'Since the start of your day' });
+}
+
+// ======================================================================================
 // Quick add in plain language
 // ======================================================================================
 function setupQuickAdd() {
@@ -1833,10 +1915,10 @@ function pageSummary(days, items) {
   const data = A.compute(occ, A.scopeWindows(o.scope, from, to, s), z);
   const scopeName = A.SCOPES[o.scope] || (s.periods || []).find((p) => 'period:' + p.id === o.scope)?.name || '';
   let busiest = null;
-  for (const [k, d] of Object.entries(data.days)) { const used = d.available - d.free; if (used > 0 && (!busiest || used > busiest.m)) busiest = { k, m: used, of: d.available }; }
+  for (const [k, d] of Object.entries(data.days)) { const used = d.available - d.free - (d.gaps || 0); if (used > 0 && (!busiest || used > busiest.m)) busiest = { k, m: used, of: d.available }; }
   const chunks = items.filter((it) => it.kind === 'chunk' && it.start >= from && it.start < to);
   return {
-    scope: scopeName.toLowerCase(), available: data.totals.available, free: data.totals.free,
+    scope: scopeName.toLowerCase(), available: data.totals.available, free: data.totals.free, gaps: data.totals.gaps || 0,
     groups: Object.entries(data.totals.groups).map(([k, m]) => ({ label: groups[k]?.label || k, color: groups[k]?.color || '#9aa0aa', m })).sort((a, b) => b.m - a.m),
     busiest: busiest && { label: T.format(T.dayStart(busiest.k, z), z, { weekday: 'short', day: 'numeric', month: 'short' }), m: busiest.m, of: busiest.of },
     sessions: { done: chunks.filter((c) => c.status === 'done').length, total: chunks.length },
@@ -1899,12 +1981,16 @@ function bindToolbar() {
     { ic: '+', label: 'New event', run: () => $('#btn-new-event').click() },
     { ic: '⧉', label: 'New task (split into sessions)', run: () => newTask({ kind: 'generic' }) },
     { ic: '📖', label: 'New reading plan', run: () => newTask({ kind: 'reading' }) },
+    { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
+    { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
   ]);
   $('#btn-more').onclick = () => sheetMenu([
     { ic: '⟳', label: 'Refresh from Google', run: refreshFromServer },
     { ic: '✓', label: 'Sync status', run: openSyncPanel },
     { ic: '⚙', label: 'Settings', run: openSettings },
     { ic: '↶', label: 'Undo last change', run: undo },
+    { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
+    { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
     { ic: '★', label: 'Weekly review', run: openReview },
     '-', 'Export',
     { ic: 'W', label: 'This week as PDF', run: () => exportView('week', 'pdf').catch(handleError) },
@@ -1914,6 +2000,10 @@ function bindToolbar() {
   ]);
   $('#btn-settings').onclick = openSettings;
   $('#btn-undo').onclick = undo;
+  $('#btn-now').onclick = () => sheetMenu([
+    { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
+    { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
+  ]);
   $('#btn-review').onclick = openReview;
   setupQuickAdd();
   $('#sync-status').onclick = openSyncPanel;
@@ -1946,6 +2036,8 @@ function bindToolbar() {
     else if (k === 'r') refreshFromServer();
     else if (k === 'q') { e.preventDefault(); if (innerWidth < 760) $('#btn-menu').click(); $('#quick-add')?.focus(); }
     else if (k === 'v') openReview();
+    else if (k === 'f') finishedEarly();
+    else if (k === 'l') fillSinceLast();
     else if (k === 'u') undo();
     else if (k === 'escape') { closePopover(); closeDrawer(); }
   });

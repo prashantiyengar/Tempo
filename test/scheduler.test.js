@@ -327,3 +327,16 @@ console.log('new tests passed');
   assert.equal(Date.parse(call.end.dateTime) - Date.parse(call.start.dateTime), 45 * 60000);
   console.log('ics ok:', choir.join(', '));
 }
+
+// 21. Analysis: a 5-min gap between back-to-back blocks is not free time
+{
+  const A = await import('../src/js/analysis.js');
+  const at = (hm) => T.atTime('2026-10-19', hm, tz);
+  const items = [{ start: at('09:00'), end: at('10:00'), group: 'g', prio: 0, title: 'A' }, { start: at('10:05'), end: at('11:00'), group: 'g', prio: 0, title: 'B' }];
+  const d = A.compute(items, [{ start: at('09:00'), end: at('12:00') }], tz);
+  assert.equal(d.totals.gaps, 5);
+  assert.equal(d.totals.free, 60);
+  const d2 = A.compute([items[0], { ...items[1], start: at('10:30') }], [{ start: at('09:00'), end: at('12:00') }], tz);
+  assert.equal(d2.totals.gaps, 0, 'a 30-min gap is free time');
+  console.log('gaps ok');
+}
