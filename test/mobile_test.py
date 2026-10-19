@@ -128,6 +128,15 @@ async def main():
         print('3day title check done')
         await page.tap('#bottombar button[data-view="day"]'); await page.wait_for_timeout(300)
 
+        # Phone download: More -> This week as PDF -> save sheet -> tap Save
+        await page.tap('#btn-more'); await page.wait_for_selector('dialog .sheet-menu')
+        await page.tap('dialog .sheet-menu button:has-text("This week as PDF")')
+        await page.wait_for_selector('dialog .save-sheet', timeout=20000); await page.screenshot(path=f'{OUT}/m12-save-sheet.png')
+        async with page.expect_download() as dl:
+            await page.tap('dialog .save-link')
+        d = await dl.value; print('phone PDF download:', d.suggested_filename, os.path.getsize(await d.path()), 'bytes')
+        await page.tap('dialog .save-sheet [data-close]'); await page.wait_for_timeout(300)
+
         # More menu -> settings (full screen) -> connect via manual client ID (web redirect sign-in)
         await page.tap('#btn-more'); await page.wait_for_selector('dialog .sheet-menu'); await page.screenshot(path=f'{OUT}/m9-more.png')
         await page.tap('dialog .sheet-menu button:has-text("Settings")'); await page.wait_for_selector('dialog .settings-form')

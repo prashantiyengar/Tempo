@@ -6,7 +6,7 @@ import * as G from './gcal.js';
 import { expand } from './rrule.js';
 import { get, set } from './storage.js';
 
-const KEYS = ['settings', 'tasks', 'localEvents', 'gmeta', 'orphanGids', 'acks', 'reminderQueue', 'syncInfo', 'installId', 'tombstones'];
+const KEYS = ['settings', 'tasks', 'localEvents', 'gmeta', 'orphanGids', 'acks', 'reminderQueue', 'syncInfo', 'installId', 'tombstones', 'eventCats'];
 export const LOCAL_CAL = 'local';
 
 export async function loadState() {
@@ -37,6 +37,7 @@ export async function loadState() {
     syncInfo: raw.syncInfo || null,
     installId: raw.installId,
     tombstones: raw.tombstones || [],
+    eventCats: raw.eventCats || {},
   };
 }
 
@@ -206,7 +207,7 @@ export function chunkBody(task, sess, state) {
 
 // ---------- Task definitions stored on Google (so any browser / a fresh install can rebuild the task list) ----------
 const DEF_FIELDS = ['id', 'title', 'kind', 'rank', 'totalMinutes', 'reading', 'deadline', 'earliestStart', 'chunkMinutes', 'minChunkMinutes',
-  'maxPerDayMinutes', 'breakMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notes', 'created', 'rev', 'calendarId',
+  'maxPerDayMinutes', 'breakMinutes', 'wiggleMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notes', 'created', 'rev', 'calendarId',
   'categoryId', 'categoryName', 'categoryColor'];
 const PART = 900; // Google allows 1024 chars per extended-property value
 

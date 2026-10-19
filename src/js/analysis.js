@@ -49,7 +49,7 @@ function splitByDay(wins, tz) {
 // items: [{start, end, group, prio}]  → minutes per group, per day, free minutes. Overlaps are counted once.
 export function compute(items, windows, tz) {
   const days = {};
-  const totals = { available: 0, free: 0, groups: {} };
+  const totals = { available: 0, free: 0, groups: {}, titles: {} }; // titles[group][title] = { m, ids:Set }
   const segs = splitByDay(windows, tz);
   const sorted = [...items].sort((a, b) => a.start - b.start);
   for (const w of segs) {
@@ -69,6 +69,9 @@ export function compute(items, windows, tz) {
       const g = cover[0].group;
       d.groups[g] = (d.groups[g] || 0) + m;
       totals.groups[g] = (totals.groups[g] || 0) + m;
+      const tt = (totals.titles[g] ||= {});
+      const rec = (tt[cover[0].title || '(untitled)'] ||= { m: 0, ids: new Set(), kind: cover[0].kind });
+      rec.m += m; rec.ids.add(cover[0].uid ?? cover[0].start);
     }
   }
   return { days, totals };
@@ -77,9 +80,10 @@ export function compute(items, windows, tz) {
 export function groupOf(it, by, ctx) {
   const s = ctx.settings;
   if (by === 'category') {
-    if (it.kind !== 'chunk') return { key: 'events', label: 'Calendar events', color: '#9aa0aa' };
-    const c = (s.categories || []).find((x) => x.id === it.task.categoryId);
-    return c ? { key: 'cat:' + c.id, label: c.name, color: c.color } : { key: 'cat:none', label: 'Uncategorized tasks', color: '#c0c4cc' };
+    const id = it.kind === 'chunk' ? it.task.categoryId : it.catId;
+    const c = (s.categories || []).find((x) => x.id === id);
+    if (c) return { key: 'cat:' + c.id, label: c.name, color: c.color };
+    return it.kind === 'chunk' ? { key: 'cat:none-t', label: 'Uncategorized tasks', color: '#c0c4cc' } : { key: 'cat:none-e', label: 'Uncategorized events', color: '#9aa0aa' };
   }
   if (by === 'type') return it.kind === 'chunk' ? { key: 'tasks', label: 'Task sessions', color: '#8a5cf6' } : { key: 'events', label: 'Calendar events', color: '#5b7c99' };
   if (by === 'source') {
@@ -196,10 +200,21 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
       ${grid}${cols.replaceAll('url(#hatch)', 'url(#hatch2)')}</svg>`;
 
   // ---- table
+  const titleList = (keys) => {
+    const merged = {};
+    for (const k of keys) for (const [t, r] of Object.entries(totals.titles[k] || {})) {
+      const x = (merged[t] ||= { m: 0, n: 0, kind: r.kind }); x.m += r.m; x.n += r.ids.size;
+    }
+    const list = Object.entries(merged).sort((a, b) => b[1].m - a[1].m);
+    if (!list.length) return '';
+    return `<ul class="an-items">${list.map(([t, r]) => `<li><span class="an-it-k">${r.kind === 'chunk' ? 'Task' : 'Event'}</span><span class="an-it-t">${esc(t)}</span><span class="an-it-n">${r.kind === 'chunk' ? `${r.n} session${r.n === 1 ? '' : 's'}` : r.n > 1 ? `${r.n}×` : ''}</span><span class="an-it-h">${fmtH(r.m)}</span></li>`).join('')}</ul>`;
+  };
   const rows = shown.map((k) => {
     const m = meta(k);
-    const contains = k === '__other' ? rest.map((r) => groups[r].label).join(', ') : (groups[k]?.contains ? [...groups[k].contains].slice(0, 4).join(', ') + (groups[k].contains.size > 4 ? '…' : '') : '');
-    return `<tr><td><span class="sw-dot" style="background:${m.color}"></span>${m.editable ? `<button class="link lbl-edit" data-hex="${esc(k)}" title="Rename this color category">${esc(m.label)} ✎</button>` : esc(m.label)}${contains && opts.by === 'color' ? `<div class="muted small">${esc(contains)}</div>` : ''}</td>
+    const keys = k === '__other' ? rest : [k];
+    const n = keys.reduce((a, x) => a + Object.keys(totals.titles[x] || {}).length, 0);
+    const name = m.editable ? `<button type="button" class="link lbl-edit" data-hex="${esc(k)}" title="Rename this color">${esc(m.label)} ✎</button>` : esc(m.label);
+    return `<tr><td><details class="an-det"><summary><span class="sw-dot" style="background:${m.color}"></span>${name}<span class="muted small an-count">${n} item${n === 1 ? '' : 's'} ▾</span></summary>${titleList(keys)}</details></td>
       <td class="num">${fmtH(T0[k] || 0)}</td><td class="num">${pct(T0[k] || 0, totals.available)}%</td><td class="num">${pct(T0[k] || 0, occupied)}%</td></tr>`;
   }).join('');
   const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' ? 'Category' : opts.by === 'type' ? 'Type' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>

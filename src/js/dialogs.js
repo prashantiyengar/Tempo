@@ -125,6 +125,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
             ${['default', 'public', 'private'].map((v) => `<option value="${v}" ${(ev?.visibility || 'default') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}
           </select>
         </label>
+        <div class="field full"><span>Category</span><div class="ev-cat-host"></div></div>
         <div class="field"><span>Color</span>
           <div class="swatches">
             <label class="sw"><input type="radio" name="colorId" value="" ${!colorId ? 'checked' : ''}><i class="sw-cal" title="Calendar color"></i></label>
@@ -158,6 +159,16 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     f.freq.value = r0.freq;
     f.monthMode.value = r0.monthMode;
     f.ends.value = r0.ends;
+    let evCat = C.catById(s, ev ? C.eventCategoryId(ev, st.eventCats || {}) : init.categoryId);
+    C.categoryPicker($('.ev-cat-host', dlg), {
+      settings: s, selected: evCat?.id,
+      onChange: (c) => {
+        evCat = c;
+        const id = c ? G.nearestColorId(c.color) : '';
+        const r = dlg.querySelector(`input[name=colorId][value="${id}"]`); if (r) r.checked = true;
+      },
+      onCreate: async (name, color) => { const c = C.newCategory(s, name, color); await ctx.saveSettings(); return c; },
+    });
     const remBox = $('.rem-rows', dlg);
     const addRem = (o = { method: 'popup', minutes: s.defaultReminder }) => {
       let val = o.minutes, unit = 'minutes';
@@ -237,6 +248,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         transparency: f.transparency.value,
         visibility: f.visibility.value,
         colorId: f.colorId.value || null,
+        ...(() => { const ch = C.eventCategoryChanges(ev || {}, evCat); return (evCat || C.eventCategoryId(ev || {})) ? { extendedProperties: ch.extendedProperties } : {}; })(),
       };
       if (ad) {
         if (f.eDate.value < f.sDate.value) f.eDate.value = f.sDate.value;
@@ -272,6 +284,22 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   }, { cls: 'wide' });
 }
 
+// "End of work day / end of work week / within two weeks", using day bounds (working days + end time).
+export function deadlinePreset(kind, bounds, tz, now = Date.now()) {
+  const days = bounds.days?.length ? bounds.days : [1, 2, 3, 4, 5];
+  const endOf = (k) => T.atTime(k, bounds.end || '17:00', tz);
+  let k = T.dayKey(now, tz);
+  if (kind === '2w') { let d = T.addDays(k, 14); for (let i = 0; i < 7 && !days.includes(T.weekday(d)); i++) d = T.addDays(d, -1); return endOf(d); }
+  // next working day whose end is still ahead
+  for (let i = 0; i < 14 && (!days.includes(T.weekday(k)) || endOf(k) <= now); i++) k = T.addDays(k, 1);
+  if (kind === 'day') return endOf(k);
+  // last working day of that week
+  const ws = T.startOfWeek(k, 1);
+  let last = k;
+  for (let i = 0; i < 7; i++) { const d = T.addDays(ws, i); if (days.includes(T.weekday(d)) && d >= k) last = d; }
+  return endOf(last);
+}
+
 // ======================================================================================
 // Task dialog
 // ======================================================================================
@@ -280,7 +308,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
   const now = Date.now();
   const t = task || {
     id: S.newId('t'), kind: preset.kind || 'generic', title: '', rank: 3,
-    totalMinutes: 600, reading: { pages: 200, startPage: 1, speed: 20, unit: 'pph', labels: 'actual' },
+    totalMinutes: 600, reading: { pages: 100, startPage: 1, speed: 15, unit: 'pph', labels: 'actual' },
     deadline: preset.deadline || T.atTime(T.addDays(T.dayKey(now, tz), 7), s.bounds.end, tz),
     earliestStart: preset.earliestStart || null,
     chunkMinutes: null, minChunkMinutes: null, maxPerDayMinutes: null, breakMinutes: null,
@@ -288,7 +316,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
     color: TASK_COLORS[st.tasks.length % TASK_COLORS.length],
     reminderMinutes: null, notes: '', frozen: [], planned: [], skipped: [], created: now,
   };
-  const r = { pages: 200, startPage: 1, speed: 20, unit: 'pph', labels: 'actual', ...(t.reading || {}) };
+  const r = { pages: 100, startPage: 1, speed: 15, unit: 'pph', labels: 'actual', ...(t.reading || {}) };
   const b = t.bounds || s.bounds;
   const prog = task ? S.progress(task) : null;
 
@@ -323,7 +351,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
       <div class="calc muted small"></div>
 
       <div class="grid3">
-        <label class="field"><span>Deadline</span><input type="datetime-local" name="deadline" value="${t.deadline ? T.toDTInput(t.deadline, tz) : ''}" required></label>
+        <div class="field"><span>Deadline</span><input type="datetime-local" name="deadline" value="${t.deadline ? T.toDTInput(t.deadline, tz) : ''}" required>
+          <div class="dl-presets"><button type="button" class="chip-btn" data-dl="day">End of work day</button><button type="button" class="chip-btn" data-dl="week">End of work week</button><button type="button" class="chip-btn" data-dl="2w">Within two weeks</button></div></div>
         <label class="field"><span>Don't start before</span><input type="datetime-local" name="earliest" value="${t.earliestStart ? T.toDTInput(t.earliestStart, tz) : ''}"></label>
         <label class="field"><span>Rank <em class="muted">(1 = most important)</em></span><input type="number" name="rank" min="1" max="99" value="${t.rank}"></label>
       </div>
@@ -335,6 +364,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
           <label class="field"><span>Shortest session (min)</span><input type="number" name="minChunk" min="5" step="5" placeholder="${s.minChunkMinutes ? s.minChunkMinutes + ' (default)' : '= session length'}" value="${t.minChunkMinutes ?? ''}"></label>
           <label class="field"><span>Max per day (min)</span><input type="number" name="maxDay" min="5" step="5" placeholder="no limit" value="${t.maxPerDayMinutes ?? ''}"></label>
           <label class="field"><span>Break between (min)</span><input type="number" name="break" min="0" step="5" placeholder="${s.breakMinutes} (default)" value="${t.breakMinutes ?? ''}"></label>
+          <label class="field"><span>Wiggle room (min)</span><input type="number" name="wiggle" min="0" step="5" placeholder="${s.wiggleMinutes ?? 15} (default)" value="${t.wiggleMinutes ?? ''}" title="Also use free slots up to this much shorter than the session length"></label>
           ${ctx.taskCalendars().length > 1 ? `<label class="field"><span>Google calendar</span><select name="calendarId">${ctx.taskCalendars().map((c) => `<option value="${esc(c.id)}" ${c.id === (t.calendarId || ctx.defaultTaskCal()) ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select></label>` : ''}
           <label class="field"><span>Reminder (min before)</span><input type="number" name="reminder" min="-1" placeholder="${s.taskReminderMinutes} (default)" value="${t.reminderMinutes ?? ''}"></label>
           <label class="field google-only-t"><span>Email reminder (min before)</span><input type="number" name="emailReminder" min="-1" placeholder="${s.taskEmailReminderMinutes != null ? s.taskEmailReminderMinutes + ' (default)' : 'off (default)'}" value="${t.emailReminderMinutes ?? ''}"></label>
@@ -378,6 +408,13 @@ export function taskDialog(ctx, task = null, preset = {}) {
       onCreate: async (name, color) => { const c = C.newCategory(s, name, color); await ctx.saveSettings(); return c; },
     });
     showColor();
+    // Deadline shortcuts, based on the task's own day bounds if set, otherwise the default ones
+    $$('[data-dl]', dlg).forEach((b) => (b.onclick = () => {
+      const bd = f.bmode.value === 'custom' ? { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: $$('input[name=bdays]:checked', dlg).map((c) => +c.value) } : s.bounds;
+      f.deadline.value = T.toDTInput(deadlinePreset(b.dataset.dl, bd, tz), tz);
+      $$('[data-dl]', dlg).forEach((x) => x.classList.toggle('on', x === b));
+      update();
+    }));
     if (!ctx.taskCalendars().length) $$('.google-only-t', dlg).forEach((e) => (e.style.display = 'none'));
 
     const read = () => {
@@ -394,7 +431,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
         earliestStart: T.fromDTInput(f.earliest.value, tz),
         rank: Math.max(1, Math.round(+f.rank.value || 3)),
         chunkMinutes: num(f.chunk.value), minChunkMinutes: num(f.minChunk.value), maxPerDayMinutes: num(f.maxDay.value),
-        breakMinutes: num(f.break.value), reminderMinutes: num(f.reminder.value), emailReminderMinutes: num(f.emailReminder.value),
+        breakMinutes: num(f.break.value), wiggleMinutes: num(f.wiggle.value), reminderMinutes: num(f.reminder.value), emailReminderMinutes: num(f.emailReminder.value),
         color: f.color.value || t.color,
         bounds: custom ? { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: $$('input[name=bdays]:checked', dlg).map((c) => +c.value) } : null,
         ignoreBounds: f.ignoreBounds.checked,
@@ -516,6 +553,7 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Default session length (min)</span><input type="number" name="chunkMinutes" min="5" step="5" value="${s.chunkMinutes}"></label>
           <label class="field"><span>Shortest session (min) — used only to meet a deadline</span><input type="number" name="minChunkMinutes" min="5" step="5" value="${s.minChunkMinutes ?? ''}" placeholder="= session length"></label>
           <label class="field"><span>Break between sessions (min)</span><input type="number" name="breakMinutes" min="0" step="5" value="${s.breakMinutes}"></label>
+          <label class="field"><span>Wiggle room (min) — also use free slots this much shorter than a session</span><input type="number" name="wiggleMinutes" min="0" step="5" value="${s.wiggleMinutes ?? 15}"></label>
         </div>
         <label class="chk"><input type="checkbox" name="assumePastDone" ${s.assumePastDone ? 'checked' : ''}> Assume past sessions were done (mark them undone to reschedule)</label>
         <label class="chk"><input type="checkbox" name="allDayBlocks" ${s.allDayBlocks ? 'checked' : ''}> All-day events block task time</label>
@@ -626,6 +664,7 @@ export function settingsDialog(ctx) {
         overflowBounds: { start: f.oStart.value || '07:00', end: f.oEnd.value || '23:00', days: days('odays') },
         chunkMinutes: Math.max(5, +f.chunkMinutes.value || 60), minChunkMinutes: f.minChunkMinutes.value ? Math.max(5, +f.minChunkMinutes.value) : null,
         breakMinutes: Math.max(0, +f.breakMinutes.value || 0),
+        wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
         assumePastDone: f.assumePastDone.checked, allDayBlocks: f.allDayBlocks.checked,
         busyCalendars: busy.length === allCals.length ? null : busy,
         syncTasksToGoogle: f.syncTasksToGoogle.checked, taskCalendarId: f.taskCalendarId.value || null,

@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS = {
   chunkMinutes: 60,
   minChunkMinutes: 15,     // shorter sessions are only used when full-length ones can't meet the deadline
   breakMinutes: 5,
+  wiggleMinutes: 15,       // smart allocation: also use free slots up to this much shorter than a session
   snapMinutes: 15,
   weekView: 'calendar',  // 'calendar' (Mon–Sun) or 'rolling' (today + 6 days)
   allDayBlocks: false,
@@ -68,6 +69,7 @@ export function params(task, s) {
   return {
     chunk,
     minChunk: Math.min(+task.minChunkMinutes || +s.minChunkMinutes || chunk, chunk),
+    wiggle: Math.max(0, Math.min(chunk - 5, task.wiggleMinutes != null && task.wiggleMinutes !== '' ? +task.wiggleMinutes : (s.wiggleMinutes ?? 15))),
     maxPerDay: +task.maxPerDayMinutes || null,
     breakMin: task.breakMinutes != null && task.breakMinutes !== '' ? +task.breakMinutes : s.breakMinutes,
     bounds: task.ignoreBounds ? s.overflowBounds : (task.bounds || s.bounds),
@@ -136,8 +138,11 @@ function allocate(slots, need, p, tz, dayUsed) {
     while (need > 0) {
       const k = T.dayKey(pos, tz);
       const cap = p.maxPerDay ? p.maxPerDay - (used[k] || 0) : Infinity;
-      const len = Math.floor(Math.min(p.chunk, need, (s.end - pos) / T.MIN, cap));
+      let len = Math.floor(Math.min(p.chunk, need, (s.end - pos) / T.MIN, cap));
       if (len <= 0 || len < Math.min(p.minChunk, need)) break;
+      // Don't leave a tiny leftover session: absorb it into this one if it stays within the wiggle room.
+      const rest = need - len;
+      if (rest > 0 && rest < Math.max(15, p.wiggle || 0) && len + rest <= p.chunk + (p.wiggle || 0) && pos + (len + rest) * T.MIN <= s.end && len + rest <= cap) len += rest;
       out.push({ start: pos, end: pos + len * T.MIN });
       used[k] = (used[k] || 0) + len;
       need -= len;
@@ -169,8 +174,11 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366 }) {
   const dayUsed = perDay((task.frozen || []).filter(takesTime), tz);
   const free = subtract(windows(from, deadline, p.bounds, tz), busy);
 
-  // Prefer full-length sessions; fall back to shorter ones (down to the minimum) only if that's what it takes.
-  let inWindow = allocate(free, remaining, { ...p, minChunk: p.chunk }, tz, dayUsed);
+  // Smart allocation: normally full-length sessions, but a free slot up to `wiggle` minutes shorter is used as well
+  // (e.g. a 48-min gap for a 60-min session with 15 min wiggle room). Shorter sessions, down to the minimum,
+  // are used only if that's what it takes to meet the deadline.
+  const smart = { ...p, minChunk: Math.max(p.chunk - p.wiggle, Math.min(p.minChunk, p.chunk)) };
+  let inWindow = allocate(free, remaining, smart, tz, dayUsed);
   if (inWindow.need > 0 && p.minChunk < p.chunk) inWindow = allocate(free, remaining, p, tz, dayUsed);
   res.planned = inWindow.chunks;
   if (inWindow.need > 0) {
@@ -183,7 +191,7 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366 }) {
     // Keep placing past the deadline (flagged overdue) so the plan is complete, and derive a suggested deadline.
     const later = allocate(
       subtract(windows(Math.max(from, deadline), deadline + horizonDays * T.DAY, p.bounds, tz), busy),
-      inWindow.need, { ...p, minChunk: p.chunk }, tz, perDay([...(task.frozen || []).filter(takesTime), ...inWindow.chunks], tz),
+      inWindow.need, smart, tz, perDay([...(task.frozen || []).filter(takesTime), ...inWindow.chunks], tz),
     );
     res.overdue = later.chunks.length;
     res.planned = [...inWindow.chunks, ...later.chunks.map((c) => ({ ...c, overdue: true }))];

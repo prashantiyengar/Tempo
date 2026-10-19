@@ -15,6 +15,9 @@ if (!localStorage.getItem('tempo:auth')) {
 }"""
 async def main():
     g = MockGoogle(); errs = []; auth_reqs = []
+    g.cals['shared'] = {'id': 'team@group', 'summary': 'Team (read-only)', 'accessRole': 'reader', 'backgroundColor': '#616161', 'defaultReminders': []}
+    g.events['team@group'] = {'ro1': {'id': 'ro1', 'summary': 'All-hands', 'status': 'confirmed', 'start': {'dateTime': '2026-10-21T10:00:00+02:00'}, 'end': {'dateTime': '2026-10-21T11:00:00+02:00'}}}
+    g.events['work']['old1'] = {'id': 'old1', 'summary': 'Client call', 'status': 'confirmed', 'start': {'dateTime': '2026-10-20T14:00:00+02:00'}, 'end': {'dateTime': '2026-10-20T15:00:00+02:00'}}
     async def google_auth(route):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(route.request.url).query)
         auth_reqs.append({k: v[0] for k, v in q.items()})
@@ -97,6 +100,37 @@ async def main():
         shown = await page.eval_on_selector_all('.ev:not(.chunk) .ev-t', 'e => e.map(x => x.textContent.trim())')
         again = await page.evaluate("window.__tempo.checkGoogle()")
         print('8. change detected:', changed, '| shown:', 'Added on my phone' in shown, '| no loop afterwards:', not again)
+
+        # 10. Reading defaults + deadline shortcuts
+        await page.click('#btn-new-reading'); await page.wait_for_selector('dialog .task-form')
+        print('10. reading defaults: pages', await page.input_value('dialog [name=pages]'), '| speed', await page.input_value('dialog [name=speed]'), '| wiggle placeholder', await page.get_attribute('dialog [name=wiggle]', 'placeholder'))
+        for k in ('day', 'week', '2w'):
+            await page.click(f'dialog [data-dl="{k}"]'); print('    deadline', k, '->', await page.input_value('dialog [name=deadline]'))
+        await page.screenshot(path=f'{OUT}/f8-deadline-presets.png')
+        await page.keyboard.press('Escape')
+
+        # 11. Category when creating an event by dragging (quick add)
+        cols = await page.query_selector_all('.tg-col'); box = await cols[1].bounding_box(); hh = 48
+        await page.mouse.move(box['x'] + 20, box['y'] + 18 * hh + 2); await page.mouse.down(); await page.mouse.move(box['x'] + 20, box['y'] + 19 * hh - 2, steps=6); await page.mouse.up()
+        await page.wait_for_selector('.popover .qc'); await page.fill('.popover input[name=title]', 'Design review')
+        await page.click('.popover .qc-cat .cat-chip:has-text("Work")'); await page.screenshot(path=f'{OUT}/f9-quickadd-category.png')
+        await page.click('.popover button[type=submit]'); await page.wait_for_timeout(1500)
+        dr = [e for evs in g.events.values() for e in evs.values() if e.get('summary') == 'Design review']
+        print('11. new event category:', dr[0].get('extendedProperties', {}).get('private', {}).get('tempoCategory'), '| colorId', dr[0].get('colorId'))
+
+        # 12. Retrospectively classify an existing event, and a read-only one
+        await page.click('.ev:has-text("Client call")'); await page.click('.popover .pop-evcat'); await page.click('dialog .cat-chip:has-text("Personal")'); await page.wait_for_timeout(1500)
+        cc = g.events['work']['old1']
+        print('12. Client call ->', cc.get('extendedProperties', {}).get('private', {}).get('tempoCategory'), '| colorId', cc.get('colorId'))
+        await page.click('.ev:has-text("All-hands")'); await page.click('.popover .pop-evcat'); await page.click('dialog .cat-chip:has-text("Work")'); await page.wait_for_timeout(800)
+        print('    read-only All-hands stored locally:', await page.evaluate("JSON.stringify(window.__tempo.app.state.eventCats)"))
+
+        # 13. Analysis by category with item pulldown
+        await page.click('#view-seg button[data-view=analysis]'); await page.wait_for_selector('.an-det'); await page.wait_for_timeout(300)
+        await page.click('.an-det summary:has-text("Work")')
+        print('13. Work items:', (await page.inner_text('.an-det[open] .an-items')).replace('\n', ' | '))
+        await page.screenshot(path=f'{OUT}/f10-analysis-pulldown.png', full_page=True)
+        await page.click('#view-seg button[data-view=week]'); await page.wait_for_timeout(300)
 
         # 9. Reconnect prompt: consent only the first time
         await page.click('#btn-settings'); await page.click('dialog .tabs button[data-tab="2"]'); await page.eval_on_selector('dialog details.adv', 'e => e.open = true')

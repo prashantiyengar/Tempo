@@ -97,13 +97,36 @@ export function closePopover() {
   document.removeEventListener('keydown', escKey, true);
 }
 
+// Save a generated file. On phones a download must start from the user's own tap, so we show a small sheet
+// with Save / Share / Open buttons instead of starting it automatically.
 export function download(blob, name) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  const url = URL.createObjectURL(blob);
+  const phone = matchMedia('(pointer: coarse)').matches || innerWidth < 760;
+  if (!phone) {
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 60000);
+    return Promise.resolve();
+  }
+  const file = typeof File === 'function' ? new File([blob], name, { type: blob.type }) : null;
+  const canShare = !!(file && navigator.canShare?.({ files: [file] }));
+  const size = blob.size > 1048576 ? `${(blob.size / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(blob.size / 1024))} KB`;
+  return modal(`<div class="choice save-sheet"><h2>Your file is ready</h2><p class="muted small">${esc(name)} · ${size}</p>
+    <div class="actions-col">
+      <a class="btn primary save-link">Save to device</a>
+      ${canShare ? '<button type="button" class="btn share-btn">Share… (Drive, email, Files)</button>' : ''}
+      <a class="btn ghost open-link" target="_blank" rel="noopener">Open</a>
+    </div>
+    <div class="actions"><button type="button" class="btn ghost" data-close>Done</button></div></div>`, (dlg, close) => {
+    // blob: links are set directly (not via the HTML sanitizer, which would drop them)
+    const save = dlg.querySelector('.save-link'); save.href = url; save.download = name;
+    dlg.querySelector('.open-link').href = url;
+    save.addEventListener('click', () => setTimeout(() => toast(`Saved ${name} to your downloads`), 300));
+    dlg.querySelector('.share-btn')?.addEventListener('click', async () => {
+      try { await navigator.share({ files: [file], title: name }); close(); } catch { /* cancelled */ }
+    });
+  }, { cls: 'narrow' }).then(() => setTimeout(() => URL.revokeObjectURL(url), 120000));
 }
 
 export const TASK_COLORS = ['#4f6bed', '#0f9d76', '#e2683c', '#c2459b', '#8a5cf6', '#d4a20a', '#2a9bd6', '#d6455b', '#5c7a3a', '#6b7280'];

@@ -1,6 +1,7 @@
 // Task categories (Work, Personal, …): a name and a color. A task's color follows its category.
 // Category colors come from Google Calendar's own palette, so sessions show the same color in Google.
 import { $$, esc, setHTML } from './ui.js';
+import { nearestColorId } from './gcal.js';
 
 export const CAT_COLORS = ['#039be5', '#33b679', '#f6bf26', '#8e24aa', '#e67c73', '#f4511e', '#7986cb', '#0b8043', '#3f51b5', '#d50000', '#616161'];
 
@@ -79,4 +80,34 @@ export function categoryPicker(host, { settings, selected, onChange, onCreate, a
   };
   draw();
   return { get value() { return catById(settings, sel); } };
+}
+
+// ---------- Events ----------
+// An event's category is stored on the event itself (private extended properties, which only you see), so it
+// travels with the event to every device. Events you can't edit keep their category in this browser only.
+export function eventCategoryId(ev, localMap = {}) {
+  const p = ev?.extendedProperties?.private || {};
+  if (p.tempoCategory) return p.tempoCategory;
+  return localMap[eventKey(ev)] || null;
+}
+export const eventKey = (ev) => `${ev._calId}|${ev.recurringEventId || ev.id}`;
+
+// Fields to send to Google (or store locally) to give an event a category (or remove it).
+export function eventCategoryChanges(ev, cat) {
+  const priv = { ...(ev?.extendedProperties?.private || {}) };
+  if (cat) Object.assign(priv, { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color });
+  else Object.assign(priv, { tempoCategory: '', tempoCatName: '', tempoCatColor: '' });
+  return { colorId: cat ? nearestColorId(cat.color) : null, extendedProperties: { ...(ev?.extendedProperties || {}), private: priv } };
+}
+
+export function adoptCategoriesFromEvents(settings, events) {
+  let changed = false;
+  for (const ev of events) {
+    const p = ev?.extendedProperties?.private || {};
+    if (p.tempoCategory && p.tempoCatName && !catById(settings, p.tempoCategory)) {
+      settings.categories = [...(settings.categories || []), { id: p.tempoCategory, name: p.tempoCatName, color: p.tempoCatColor || CAT_COLORS[0] }];
+      changed = true;
+    }
+  }
+  return changed;
 }

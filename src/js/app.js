@@ -95,6 +95,7 @@ function eventItem(ev) {
     key: `${ev._calId}|${ev.id}`, kind: 'event', title: ev.summary || '(No title)', ...iv,
     color: ev.colorId ? G.EVENT_COLORS[ev.colorId] : calColor(ev._calId), ev,
     editable: EV.canEdit(ev, st()), declined: me?.responseStatus === 'declined', tentative: me?.responseStatus === 'tentative',
+    catId: C.eventCategoryId(ev, st().eventCats),
   };
 }
 
@@ -120,6 +121,7 @@ async function collectItems(days) {
   catch (e) { handleError(e); }
   const hidden = new Set(set().hiddenCalendars || []);
   const local = hidden.has(E.LOCAL_CAL) ? [] : E.expandLocal(st().localEvents, from, to, tz());
+  if (C.adoptCategoriesFromEvents(set(), gev)) E.persist(st(), ['settings']);
   const items = [...gev.map(eventItem), ...local.map(eventItem), ...(hidden.has('tasks') ? [] : chunkItems(from, to))];
   return items;
 }
@@ -681,6 +683,7 @@ function quickCreate(rect, sel, onClose) {
       <input name="title" placeholder="Add title" autofocus autocomplete="off">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
       <select name="cal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
+      <div class="qc-cat"></div>
       <div class="qc-actions">
         <button type="button" class="btn small ghost more">More options</button>
         <button type="submit" class="btn small primary">Save</button>
@@ -693,13 +696,19 @@ function quickCreate(rect, sel, onClose) {
     </form>`, (p, close) => {
     const f = $('form', p);
     setTimeout(() => f.title.focus(), 0);
+    let qcCat = null;
+    C.categoryPicker($('.qc-cat', p), {
+      settings: set(), selected: null,
+      onChange: (c) => { qcCat = c; },
+      onCreate: async (name, color) => { const c = C.newCategory(set(), name, color); await E.persist(st(), ['settings']); return c; },
+    });
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const body = selBody(sel, f.title.value.trim() || '(No title)', f.cal.value);
+      const body = { ...selBody(sel, f.title.value.trim() || '(No title)', f.cal.value), ...(qcCat ? C.eventCategoryChanges({}, qcCat) : {}) };
       close(); onClose?.();
       await saveNewEvent(f.cal.value, body);
     });
-    $('.more', p).onclick = () => { const v = { title: f.title.value, calId: f.cal.value }; close(); onClose?.(); newEvent({ ...sel, ...v }); };
+    $('.more', p).onclick = () => { const v = { title: f.title.value, calId: f.cal.value, categoryId: qcCat?.id }; close(); onClose?.(); newEvent({ ...sel, ...v }); };
     $('.as-task', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'generic', title, earliestStart: sel.allDay ? null : sel.start, totalMinutes: sel.allDay ? null : durMin }); };
     $('.as-reading', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'reading', title, earliestStart: sel.allDay ? null : sel.start }); };
   });
@@ -760,6 +769,7 @@ function openItem(it, rect) {
         <button class="icon-btn x" title="Close">✕</button>
       </div>
       <div class="pop-title"><i style="--c:${it.color}"></i><h3>${esc(it.title)}</h3></div>
+      <div class="pop-row small"><button class="cat-chip on pop-evcat" ${it.catId ? `style="--c:${esc(C.catById(set(), it.catId)?.color || it.color)}"` : ''}>${it.catId ? `<i></i>${esc(C.catById(set(), it.catId)?.name || 'Category')}` : '+ Category'} ▾</button></div>
       ${ev.extendedProperties?.private?.tempoTask ? '<div class="pop-row warnbox small">This is a Tempo task session that isn’t loaded in this browser yet. <button class="link load-tasks">Load tasks from Google</button></div>' : ''}
       <div class="pop-row">${esc(fmtWhen(it))}${evTz ? `<div class="muted small">Event time zone: ${esc(evTz)}</div>` : ''}${ev.recurrence?.length ? `<div class="muted small">${esc(describe(ev.recurrence))}</div>` : ev.recurringEventId ? '<div class="muted small">↻ Repeating event</div>' : ''}</div>
       ${ev.location ? `<div class="pop-row">📍 ${esc(ev.location)}</div>` : ''}
@@ -771,6 +781,7 @@ function openItem(it, rect) {
     </div>`, (p, close) => {
     $('.x', p).onclick = close;
     $('.load-tasks', p)?.addEventListener('click', () => { close(); refreshFromServer(); });
+    $('.pop-evcat', p).onclick = () => { close(); pickEventCategory(it); };
     $('.edit', p)?.addEventListener('click', () => { close(); editEvent(it); });
     $('.del', p)?.addEventListener('click', async () => {
       close();
@@ -845,6 +856,43 @@ async function pickCategory(task) {
   await saveTasks();
   toast(picked ? `“${task.title}” is now ${picked.name}` : 'Category removed');
   cycle();
+}
+
+// Classify an event (new or old) into a category. Stored on the event in Google; events you can't edit keep
+// their category in this browser.
+async function pickEventCategory(it) {
+  let picked, chosen = false;
+  await modal(`<div class="choice"><h2>Category for “${esc(it.title)}”</h2><div class="cat-host" style="margin:10px 0 4px"></div>
+    <div class="actions"><button type="button" class="btn ghost" data-close>Close</button></div></div>`, (dlg, close) => {
+    C.categoryPicker($('.cat-host', dlg), {
+      settings: set(), selected: it.catId,
+      onChange: (c) => { picked = c; chosen = true; close(); },
+      onCreate: async (name, color) => { const c = C.newCategory(set(), name, color); await E.persist(st(), ['settings']); return c; },
+    });
+  }, { cls: 'narrow' });
+  if (!chosen) return;
+  const ev = it.ev;
+  const saveLocally = async () => {
+    const k = C.eventKey(ev);
+    if (picked) st().eventCats[k] = picked.id; else delete st().eventCats[k];
+    await E.persist(st(), ['eventCats']);
+  };
+  try {
+    if (!it.editable) {
+      await saveLocally();
+      toast(picked ? `Marked as ${picked.name} (saved on this device — you can't edit this event in Google)` : 'Category removed', { ms: 6000 });
+      return render();
+    }
+    let scope = 'this';
+    if (ev.recurringEventId) { scope = await askScope('Categorize'); if (!scope) return; }
+    setStatus('Saving…');
+    await EV.updateEvent(st(), ev, C.eventCategoryChanges(ev, picked), scope);
+    await afterEventChange();
+    toast(picked ? `“${it.title}” is now ${picked.name}` : 'Category removed');
+  } catch (err) {
+    if (err instanceof G.PermissionError || /forbidden|permission|403/i.test(err.message)) { await saveLocally(); toast('Saved on this device only (Google didn’t allow changing this event)'); render(); }
+    else handleError(err);
+  }
 }
 
 // Deleting a session that was already done.
@@ -1224,7 +1272,7 @@ async function renderAnalysisView(seq) {
     const g = A.groupOf(it, o.by, actx);
     const G0 = groups[g.key] ||= { ...g, contains: new Set() };
     G0.contains.add(it.kind === 'chunk' ? it.task.title : (it.title || '(No title)'));
-    return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0 };
+    return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.kind === 'chunk' ? it.task.title : (it.title || '(No title)'), kind: it.kind, uid: it.key };
   });
   const wins = A.scopeWindows(o.scope, rng.from, rng.to, s);
   const data = A.compute(occ, wins, z);
@@ -1241,7 +1289,7 @@ async function renderAnalysisView(seq) {
       render();
     };
   });
-  $$('.lbl-edit', root).forEach((b) => (b.onclick = () => renameColor(b.dataset.hex)));
+  $$('.lbl-edit', root).forEach((b) => (b.onclick = (e) => { e.preventDefault(); e.stopPropagation(); renameColor(b.dataset.hex); }));
   bindTips(root);
 }
 
@@ -1292,8 +1340,7 @@ async function exportView(kind, fmt) {
   const name = `tempo-${kind}-${key}`;
   const blob = fmt === 'pdf' ? await X.canvasToPdf(canvas) : fmt === 'tiff' ? await X.canvasesToTiff([canvas]) : await X.canvasToBlob(canvas, fmt === 'jpeg' ? 'image/jpeg' : 'image/png');
   const ext = fmt === 'jpeg' ? 'jpg' : fmt === 'tiff' ? 'tif' : fmt;
-  download(blob, `${name}.${ext}`);
-  toast(`Exported ${name}.${ext}`);
+  await download(blob, `${name}.${ext}`);
 }
 
 // Several weeks or months -> one multi-page PDF or TIFF

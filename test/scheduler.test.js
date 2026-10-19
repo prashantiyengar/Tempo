@@ -154,3 +154,24 @@ import * as A from '../src/js/analysis.js';
   assert.equal(S.progress(g, later).done, 60);
 }
 console.log('new tests passed');
+
+// 12. Smart allocation: a 48-min gap is used for 60-min sessions with 15 min wiggle room; a 40-min gap is not
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz };
+  assert.equal(s2.wiggleMinutes, 15);
+  const meetings = [
+    { start: T.atTime('2026-10-19', '09:00', tz), end: T.atTime('2026-10-19', '10:00', tz) },
+    { start: T.atTime('2026-10-19', '10:48', tz), end: T.atTime('2026-10-19', '12:00', tz) },   // gap 10:00–10:48
+    { start: T.atTime('2026-10-19', '12:40', tz), end: T.atTime('2026-10-19', '17:00', tz) },   // gap 12:00–12:40
+  ];
+  const t = { id: 'w', title: 'Writing', kind: 'generic', rank: 1, totalMinutes: 180, deadline: T.atTime('2026-10-23', '17:00', tz), created: 1 };
+  let { tasks } = S.rescheduleAll([t], meetings, s2, now);
+  const ss = S.sessions(tasks[0]).map((c) => `${T.toDTInput(c.start, tz).slice(5)} ${c.minutes}m`);
+  assert.equal(ss[0], '10-19T10:00 48m');
+  assert.ok(!ss.some((x) => x.startsWith('10-19T12:00')), '40-min gap must not be used');
+  // wiggle 0 -> only full hours
+  ({ tasks } = S.rescheduleAll([{ ...t, wiggleMinutes: 0 }], meetings, s2, now));
+  assert.ok(S.sessions(tasks[0]).every((c) => c.minutes === 60));
+  assert.ok(!S.sessions(S.rescheduleAll([t], meetings, s2, now).tasks[0]).some((c) => c.minutes < 15), 'no tiny leftover session');
+  console.log('smart allocation:', ss.join(', '));
+}
