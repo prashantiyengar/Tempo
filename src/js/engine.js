@@ -146,8 +146,13 @@ export async function googleEvents(state, from, to, { calendars, force } = {}) {
   // Task sessions we know about are drawn from the scheduler (with their labels, status and actions), so the
   // Google copies are hidden to avoid duplicates. Tempo events we DON'T know (not yet imported) stay visible.
   const known = knownGids(state);
+  const gone = new Set((state.orphanGids || []).map((g) => normGid(state, g)));
+  for (const t of state.tasks) for (const g of t.orphanGids || []) gone.add(normGid(state, g));
+  const tomb = new Set(state.tombstones || []);
   const mine = (e) => known.has(`${normCal(state, e._calId)}::${e.id}`);
-  return all.flat().filter((e) => e.status !== 'cancelled' && !(e.extendedProperties?.private?.tempoTask && mine(e)));
+  // Copies still in the cache of sessions that were just deleted (or are about to be) are hidden right away.
+  const deleted = (e) => gone.has(`${normCal(state, e._calId)}::${e.id}`) || tomb.has(e.extendedProperties?.private?.taskId);
+  return all.flat().filter((e) => e.status !== 'cancelled' && !(e.extendedProperties?.private?.tempoTask && (mine(e) || deleted(e))));
 }
 
 export function knownGids(state) {
@@ -396,7 +401,7 @@ export async function syncTasks(state, apply, onProgress) {
       jobs.push({ task, cal, sess, body, hash: bodyHash(body), gid: sess.gid ? normGid(state, sess.gid) : null, syncHash: sess.syncHash });
     }
   }
-  let n = 0, failed = 0, lastErr = null, repaired = 0, verified = 0, unverified = [];
+  let n = 0, failed = 0, lastErr = null, repaired = 0, verified = 0, unverified = [], deletedN = 0;
   const upsert = async (j) => {
     try {
       let gid = j.gid;
@@ -440,6 +445,7 @@ export async function syncTasks(state, apply, onProgress) {
     await G.pool(orphans, G.PARALLEL, async ([taskId, gid]) => {
       const [cal, id] = splitGid(normGid(state, gid));
       await G.deleteEvent(cal, id);
+      deletedN++;
       apply((s) => {
         if (taskId) { const t = s.tasks.find((x) => x.id === taskId); if (t) t.orphanGids = (t.orphanGids || []).filter((g) => g !== gid); }
         else s.orphanGids = s.orphanGids.filter((g) => g !== gid);
@@ -468,7 +474,7 @@ export async function syncTasks(state, apply, onProgress) {
   }
   for (const j of unverified) setGid(j.task.id, j.sess.id, j.gid, null); // try again next time
   const onGoogle = state.tasks.filter((t) => !t.archived).reduce((a, t) => a + S.sessions(t).filter((c) => c.gid).length, 0);
-  const base = { total, onGoogle, calId, changed: n, verified, repaired, at: Date.now() };
+  const base = { total, onGoogle, calId, changed: n + deletedN, deleted: deletedN, verified, repaired, at: Date.now() };
   if (failed || unverified.length) {
     const msg = failed ? `${failed} session(s) could not be written: ${lastErr?.message}` : `${unverified.length} session(s) didn't arrive intact on Google; Tempo will retry.`;
     return recordSync(state, apply, { ok: false, kind: 'partial', error: msg, ...base });
