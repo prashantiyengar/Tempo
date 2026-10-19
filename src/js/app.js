@@ -728,7 +728,14 @@ function quickCreate(rect, sel, onClose) {
     <form class="qc">
       <input name="title" placeholder="Add title" autofocus autocomplete="off">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
-      ${sel.allDay ? '' : `<div class="qc-dur">${[[-60, '−1h'], [-30, '−30m'], [-10, '−10m'], [-5, '−5m'], [5, '+5m'], [15, '+15m'], [30, '+30m'], [60, '+1h']].map(([m, l]) => `<button type="button" class="chip-btn dur-add ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`).join('')}<button type="button" class="chip-btn since-last" title="From the end of your last event (up to 12 h ago) until now">⤒ Since last</button></div>`}
+      ${sel.allDay ? '' : (() => {
+        const chips = (cls) => [[-60, '−1h'], [-30, '−30m'], [-10, '−10m'], [-5, '−5m'], [5, '+5m'], [15, '+15m'], [30, '+30m'], [60, '+1h']].map(([m, l]) => `<button type="button" class="chip-btn ${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`).join('');
+        return `<div class="qc-times">
+          <div class="qc-t"><label><span>From</span><input type="time" name="qs" step="300"></label><div class="qc-dur">${chips('st-add')}</div></div>
+          <div class="qc-t"><label><span>To</span><input type="time" name="qe" step="300"></label><div class="qc-dur">${chips('dur-add')}</div></div>
+          <button type="button" class="chip-btn since-last" title="From the end of your last event (up to 12 h ago) until now">⤒ Since last event</button>
+        </div>`;
+      })()}
       <select name="cal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
       <div class="qc-cat"></div>
       <div class="qc-actions">
@@ -744,12 +751,25 @@ function quickCreate(rect, sel, onClose) {
     const f = $('form', p);
     setTimeout(() => f.title.focus(), 0);
     // length shortcuts: each click extends the event
+    const hhmm = (ms) => T.toDTInput(ms, z).slice(11, 16);
     const redraw = () => {
+      if (f.qs) { f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
       $('.qc-when', p).textContent = `${T.format(sel.start, z, { weekday: 'long', day: 'numeric', month: 'long' })} · ${T.fmtTime(sel.start, z, s.h12)} – ${T.fmtTime(sel.end, z, s.h12)} (${T.fmtDur(Math.round((sel.end - sel.start) / T.MIN))})`;
       const g = $('.ghost-sel'); if (g) g.style.height = (((sel.end - sel.start) / T.HOUR) * s.hourHeight) + 'px';
       f.title.focus();
     };
     $$('.dur-add', p).forEach((b) => (b.onclick = () => { sel.end = Math.max(sel.start + 5 * T.MIN, sel.end + +b.dataset.add * T.MIN); redraw(); }));
+    // From: move the start (the end stays, unless the event would get shorter than 5 minutes)
+    $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; redraw(); }));
+    // typed times: same day as the start; an end before the start means the next day
+    const fromInputs = () => {
+      const day = T.dayKey(sel.start, z);
+      const st0 = T.atTime(day, f.qs.value || hhmm(sel.start), z);
+      let en = T.atTime(day, f.qe.value || hhmm(sel.end), z);
+      if (en <= st0) en = T.atTime(T.addDays(day, 1), f.qe.value || hhmm(sel.end), z);
+      sel.start = st0; sel.end = en; redraw();
+    };
+    if (f.qs) { f.qs.addEventListener('change', fromInputs); f.qe.addEventListener('change', fromInputs); f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
     $('.since-last', p)?.addEventListener('click', async () => { const r = await lastEventEnd(); sel.start = r.start; sel.end = r.end; $('.ghost-sel')?.remove(); redraw(); toast(r.note, { noUndo: true }); });
     let qcCat = null;
     C.categoryPicker($('.qc-cat', p), {
