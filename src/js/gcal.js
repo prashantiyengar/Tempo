@@ -200,21 +200,38 @@ async function dropToken() {
   await setAuth({ token: null, expires: 0 });
 }
 
-async function req(method, path, { query, body, retry = true } = {}) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const MAX_TRIES = 5;
+// Safe to repeat after a network failure: reads, deletes, patches, and inserts that carry their own event id.
+const idempotent = (method, body) => method !== 'POST' || !!body?.id;
+
+async function req(method, path, { query, body, retry = true, attempt = 0 } = {}) {
   const token = await getToken(false);
   const url = new URL(path.startsWith('http') ? path : API + path);
   if (query) for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);
-  const res = await fetch(url, {
-    method,
-    headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (res.status === 401 && retry) { await dropToken(); return req(method, path, { query, body, retry: false }); }
-  if (res.status === 429 && retry) { await new Promise((r) => setTimeout(r, 1500)); return req(method, path, { query, body, retry: false }); }
+  const again = () => sleep(Math.min(16000, 400 * 2 ** attempt) + Math.random() * 300).then(() => req(method, path, { query, body, retry, attempt: attempt + 1 }));
+  let res;
+  try {
+    res = await fetch(url, {
+      method,
+      headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    // Network hiccup: retry with backoff when repeating the request can't create a duplicate.
+    if (attempt < MAX_TRIES - 1 && idempotent(method, body)) return again();
+    throw new Error(`Couldn't reach Google (${e.message || 'network error'})`);
+  }
+  if (res.status === 401 && retry) { await dropToken(); return req(method, path, { query, body, retry: false, attempt }); }
   if (res.status === 204 || res.status === 410) return null;
   const json = await res.json().catch(() => ({}));
+  // Rate limits and temporary server errors: back off exponentially and try again.
+  const reason = json?.error?.errors?.[0]?.reason || '';
+  const transient = res.status === 429 || res.status >= 500 || (res.status === 403 && /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/.test(reason + ' ' + (json?.error?.message || '')));
+  if (transient && attempt < MAX_TRIES - 1) return again();
   if (!res.ok) {
     const msg = json?.error?.message || `Google API error ${res.status}`;
+    if (res.status === 409) { const e = new Error(msg); e.status = 409; throw e; }
     if (res.status === 403 && /insufficient|scope|permission/i.test(msg) && !/writer|owner|access to/i.test(msg)) await setAuth({ consented: false });
     if (res.status === 403 && /insufficient|scope|permission/i.test(msg)) throw new PermissionError(/writer|owner|access to/i.test(msg) ? `You don't have write access to that calendar (${msg}).` : SCOPE_MSG);
     if (res.status === 401) { await setAuth({ needsReconnect: true }); throw new AuthError('Google sign-in expired — click Reconnect.'); }
@@ -262,8 +279,18 @@ export async function changedSince(calId, sinceMs) {
   return { n: ts.length, max: ts.length ? Math.max(...ts) : sinceMs };
 }
 export const getEvent = (calId, id) => req('GET', `/calendars/${enc(calId)}/events/${enc(id)}`);
-export const insertEvent = (calId, body, { conference = false } = {}) =>
-  req('POST', `/calendars/${enc(calId)}/events`, { body, query: { conferenceDataVersion: conference ? 1 : null, sendUpdates: body.attendees?.length ? 'all' : null } });
+// Every insert carries its own event id, so a retry after a lost response can't create a duplicate: if the first
+// attempt did reach Google, the retry gets "409 already exists" and we fetch that event instead.
+export const newEventId = () => { const a = '0123456789abcdefghijklmnopqrstuv'; let s = 'tmp'; const r = crypto.getRandomValues(new Uint8Array(24)); for (const x of r) s += a[x & 31]; return s; };
+export async function insertEvent(calId, body, { conference = false } = {}) {
+  const b = body.id ? body : { ...body, id: newEventId() };
+  try {
+    return await req('POST', `/calendars/${enc(calId)}/events`, { body: b, query: { conferenceDataVersion: conference ? 1 : null, sendUpdates: b.attendees?.length ? 'all' : null } });
+  } catch (e) {
+    if (e.status === 409) { const ev = await getEvent(calId, b.id).catch(() => null); if (ev && ev.status !== 'cancelled') return ev; }
+    throw e;
+  }
+}
 export const patchEvent = (calId, id, body, { conference = false, notify = false } = {}) =>
   req('PATCH', `/calendars/${enc(calId)}/events/${enc(id)}`, { body, query: { conferenceDataVersion: conference ? 1 : null, sendUpdates: notify ? 'all' : null } });
 export const deleteEvent = (calId, id) => req('DELETE', `/calendars/${enc(calId)}/events/${enc(id)}`).catch((e) => {
@@ -276,11 +303,50 @@ export const getSettingTz = () => req('GET', '/users/me/settings/timezone').then
 export const getColors = () => req('GET', '/colors');
 
 export async function listTaskEvents(calId, timeMin, timeMax) {
-  const r = await req('GET', `/calendars/${enc(calId)}/events`, {
-    query: { timeMin: new Date(timeMin).toISOString(), timeMax: new Date(timeMax).toISOString(), privateExtendedProperty: 'tempoTask=1', maxResults: 2500, singleEvents: 'true' },
-  });
-  return r.items || [];
+  const out = [];
+  let pageToken;
+  do {
+    const r = await req('GET', `/calendars/${enc(calId)}/events`, {
+      query: { timeMin: new Date(timeMin).toISOString(), timeMax: new Date(timeMax).toISOString(), privateExtendedProperty: 'tempoTask=1', maxResults: 2500, singleEvents: 'true', pageToken },
+    });
+    out.push(...(r.items || []));
+    pageToken = r.nextPageToken;
+  } while (pageToken);
+  return out;
 }
+
+// Events carrying a private property (e.g. Tempo's settings record), regardless of date.
+export async function findByProperty(calId, prop) {
+  const r = await req('GET', `/calendars/${enc(calId)}/events`, { query: { privateExtendedProperty: prop, maxResults: 50, showDeleted: 'false' } });
+  return (r.items || []).filter((e) => e.status !== 'cancelled');
+}
+
+// Read an event back after writing it and check Google really stored what we sent (title and times). If not,
+// write it once more; if it still differs, report an error instead of failing silently.
+export async function confirmEvent(calId, id, body) {
+  const same = (ev) => ev && ev.status !== 'cancelled'
+    && (body.summary == null || (ev.summary || '') === body.summary)
+    && ['start', 'end'].every((k) => !body[k] || (body[k].date ? ev[k]?.date === body[k].date : Date.parse(ev[k]?.dateTime) === Date.parse(body[k].dateTime)));
+  let ev = await getEvent(calId, id).catch(() => null);
+  if (same(ev)) return ev;
+  const fix = { ...(body.summary != null ? { summary: body.summary } : {}), ...(body.start ? { start: body.start, end: body.end } : {}) };
+  if (ev && ev.status !== 'cancelled') { await patchEvent(calId, id, fix); ev = await getEvent(calId, id).catch(() => null); if (same(ev)) return ev; }
+  throw new Error(`Google didn't save “${body.summary || 'the event'}” correctly — please try again.`);
+}
+
+// Run `fn` over `items` with up to `n` requests in flight at once. A sign-in or permission error stops the rest.
+export async function pool(items, n, fn) {
+  let i = 0, fatal = null;
+  const worker = async () => {
+    while (!fatal && i < items.length) {
+      const k = i++;
+      try { await fn(items[k], k); } catch (e) { if (e instanceof AuthError || e instanceof PermissionError) fatal = e; else throw e; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(n, items.length)) }, worker));
+  if (fatal) throw fatal;
+}
+export const PARALLEL = 6;
 
 // Google's fixed event palette (colorId -> background)
 export const EVENT_COLORS = {

@@ -192,7 +192,7 @@ function segMinutes(it, k) {
 }
 
 function itemClasses(it) {
-  return ['ev', it.kind === 'chunk' ? 'chunk' : '', it.status === 'done' ? 'done' : '', it.status === 'pinned' ? 'pinned' : '',
+  return ['ev', it.kind === 'chunk' ? 'chunk' : '', it.status === 'done' ? 'done' : '', it.sess?.partial ? 'partial' : '', it.status === 'pinned' ? 'pinned' : '',
     it.overdue ? 'overdue' : '', !it.editable ? 'ro' : '', it.declined ? 'declined' : '', it.tentative ? 'tentative' : ''].filter(Boolean).join(' ');
 }
 
@@ -262,7 +262,7 @@ function renderTimeGrid(days, items) {
       const short = h < 36;
       const timeStr = `${T.fmtTime(it.start, z, s.h12)} – ${T.fmtTime(it.end, z, s.h12)}`;
       const node = el(`<div class="${itemClasses(it)} ${short ? 'short' : ''}" data-key="${esc(it.key)}" style="top:${top}px;height:${h}px;left:calc(${left}% + 1px);width:calc(${width}% - ${g.cols > 1 ? 3 : 6}px);--c:${it.color}">
-        <div class="ev-t">${it.status === 'done' ? '<span class="tick">✓</span>' : ''}${it.status === 'pinned' ? '<span class="pin" title="Pinned">📌</span>' : ''}${esc(it.title)}</div>
+        <div class="ev-t">${it.sess?.partial ? '<span class="tick" title="Partly done">◐</span>' : it.status === 'done' ? '<span class="tick">✓</span>' : ''}${it.status === 'pinned' ? '<span class="pin" title="Pinned">📌</span>' : ''}${esc(it.title)}</div>
         <div class="ev-time">${short ? '' : esc(timeStr)}${it.ev?.recurringEventId ? ' <span class="rep" title="Repeats">↻</span>' : ''}</div>
         ${it.editable && g.endsHere ? '<div class="ev-resize"></div>' : ''}
       </div>`);
@@ -814,6 +814,7 @@ function openChunk(it, rect) {
       <div class="pop-row small">${!E.connected(st()) ? '<span class="muted">Only in this browser (Google not connected)</span>' : sess.gid ? '<span class="g-ok">✓ On Google Calendar</span>' : '<span class="g-bad">Not on Google Calendar yet</span> <button class="link sync-now">Sync now</button>'}</div>
       <div class="pop-actions">
         ${isDone ? '<button class="btn small undone">↺ Mark undone</button>' : '<button class="btn small primary done">✓ Mark done</button>'}
+        <button class="btn small partial">◐ Partly done…</button>
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
@@ -826,6 +827,7 @@ function openChunk(it, rect) {
     $('.undone', pop)?.addEventListener('click', () => act((t) => (sess.kind === 'pinned' ? S.unpinSession(t, sess.id) : S.markUndone(t, sess.id)), 'Marked undone — remaining sessions shifted'));
     $('.unpin', pop)?.addEventListener('click', () => act((t) => S.unpinSession(t, sess.id), 'Unpinned'));
     $('.edit', pop).onclick = () => { close(); editTask(task); };
+    $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
     $('.sync-now', pop)?.addEventListener('click', () => { close(); openSyncPanel(); });
     $('.pop-cat', pop).onclick = () => { close(); pickCategory(task); };
     $('.del', pop).onclick = async () => {
@@ -933,6 +935,37 @@ async function pickEventCategory(it) {
 }
 
 // Deleting a session that was already done.
+// Partly done: credit the work that was done, reschedule the rest, and optionally split the block in two.
+async function partialSession(task, sess) {
+  const r = await D.partialDialog(ctx, task, sess);
+  if (!r) return;
+  const cur = st().tasks.find((t) => t.id === task.id);
+  if (!cur) return;
+  let start = sess.start, end = sess.end, other = null;
+  if (r.split) {
+    const cut = r.split.where === 'start' ? sess.start + r.split.minutes * T.MIN : sess.end - r.split.minutes * T.MIN;
+    if (r.split.where === 'start') { start = cut; other = [sess.start, cut]; } else { end = cut; other = [cut, sess.end]; }
+  }
+  replaceTask(S.markPartial(cur, sess.id, { credit: r.credit, start, end, squeeze: r.squeeze }));
+  let msg = r.pages != null ? `${r.pages} page${r.pages === 1 ? '' : 's'} read` : `${r.pct}% done`;
+  msg += r.squeeze ? ' — the rest is spread over the remaining sessions' : ' — time added for the rest';
+  try {
+    if (other && r.split.kind === 'task') {
+      const o = st().tasks.find((t) => t.id === r.split.taskId);
+      if (o) { replaceTask(S.addDoneBlock(o, other[0], other[1])); msg += ` · ${r.split.minutes} min counted toward “${o.title}”`; }
+    } else if (other) {
+      const z = tz();
+      await EV.createEvent(st(), r.split.calId, { summary: r.split.title, start: { dateTime: new Date(other[0]).toISOString(), timeZone: z }, end: { dateTime: new Date(other[1]).toISOString(), timeZone: z }, reminders: { useDefault: false, overrides: [] } });
+      await E.persist(st(), ['localEvents']);
+      E.invalidate();
+      msg += ` · “${r.split.title}” added`;
+    }
+  } catch (err) { handleError(err); }
+  await saveTasks();
+  toast(msg, { ms: 6000 });
+  cycle();
+}
+
 async function deleteDoneSession(task, sess) {
   const r = await D.deleteDoneDialog(ctx, task, sess);
   if (!r) return;
@@ -1050,11 +1083,23 @@ function cycle(opts = {}) {
 async function runCycle({ sync = true, pull = false } = {}) {
   st().auth = (await storeGet('auth')).auth || {};
   let problems = [];
+  let sharedChanged = false;
+  if (E.connected(st()) && (pull || E.sharedDirty(st()))) {
+    // Categories (with icons) and time periods are shared with your other devices through Google.
+    try {
+      sharedChanged = (await E.syncShared(st(), { force: pull })).changed;
+      await E.persist(st(), ['settings']);
+    } catch (err) { if (err instanceof G.AuthError || err instanceof G.PermissionError) handleError(err); else console.warn('Tempo: could not sync categories', err); }
+  }
   if (pull && E.connected(st())) {
     try {
       const r = await E.pullTasks(st());
       app.lastPull = { at: Date.now(), ...r };
       if (r.adoptedCalendar | C.adoptCategoriesFromTasks(set(), st().tasks) | adoptPeriodsFromTasks()) await E.persist(st(), ['settings']);
+      if (sharedChanged) {
+        const rc = C.refreshTaskCategories(set(), st().tasks);
+        if (rc.changed.length) { st().tasks = rc.tasks; await saveTasks(); }
+      }
       if (r.imported.length || r.updated.length || r.removed.length) {
         await E.persist(st(), ['tasks', 'orphanGids']);
         const parts = [];

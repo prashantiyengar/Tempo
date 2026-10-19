@@ -8,10 +8,24 @@ class MockGoogle:
         self.seq = itertools.count(1)
         self.log = []
         self.fail_insert = fail_insert
+        # fault injection / measurement for sync tests
+        self.delay = 0            # seconds each request takes
+        self.flaky_every = 0      # every Nth write answers 503 (temporary error) without doing anything
+        self.rate_every = 0       # every Nth write answers 403 rateLimitExceeded
+        self.lose_inserts = 0     # this many inserts answer "OK" but are never stored
+        self.inflight = 0; self.max_inflight = 0; self.writes = 0
     def cal_id(self, c):
         c = urllib.parse.unquote(c)
         return 'me@example.com' if c == 'primary' else c
     async def handle(self, route):
+        import asyncio
+        self.inflight += 1; self.max_inflight = max(self.max_inflight, self.inflight)
+        try:
+            if self.delay: await asyncio.sleep(self.delay)
+            return await self._handle(route)
+        finally:
+            self.inflight -= 1
+    async def _handle(self, route):
         req = route.request
         url = urllib.parse.urlparse(req.url); q = urllib.parse.parse_qs(url.query)
         path = url.path.replace('/calendar/v3', '')
@@ -45,9 +59,17 @@ class MockGoogle:
                     items = [e for e in items if e.get('extendedProperties', {}).get('private', {}).get(k) == v]
                 return await ok({'items': items})
             if m == 'GET': return await (ok(evs[eid]) if eid in evs else ok({'error': {'message': 'Not Found'}}, 404))
+            if m in ('POST', 'PATCH', 'DELETE'):
+                self.writes += 1
+                if self.flaky_every and self.writes % self.flaky_every == 0: return await ok({'error': {'code': 503, 'message': 'Backend Error'}}, 503)
+                if self.rate_every and self.writes % self.rate_every == 0: return await ok({'error': {'code': 403, 'message': 'Rate Limit Exceeded', 'errors': [{'reason': 'rateLimitExceeded'}]}}, 403)
             if m == 'POST':
                 if self.fail_insert: return await ok({'error': {'message': 'Insufficient Permission'}}, 403)
-                eid = f'ev{next(self.seq)}'; e = {**body, 'id': eid, 'status': 'confirmed', 'htmlLink': 'https://calendar.google.com/x', 'updated': self.now()}; evs[eid] = e
+                eid = body.get('id') or f'ev{next(self.seq)}'
+                if eid in evs: return await ok({'error': {'code': 409, 'message': 'The requested identifier already exists.'}}, 409)
+                e = {**body, 'id': eid, 'status': 'confirmed', 'htmlLink': 'https://calendar.google.com/x', 'updated': self.now()}
+                if self.lose_inserts > 0: self.lose_inserts -= 1; return await ok(e)   # claims success, stores nothing
+                evs[eid] = e
                 return await ok(e)
             if m == 'PATCH':
                 if eid not in evs: return await ok({'error': {'message': 'Not Found'}}, 404)

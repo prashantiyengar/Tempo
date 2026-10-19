@@ -479,3 +479,13 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .ic-pick .cat-icin { width: 100%; margin-bottom: 4px; }
 .ask-cat .actions { display: flex; align-items: center; }
 .ask-cat .actions .grow { flex: 1; }
+.sw.custom { position: relative; }
+.sw.custom i { background: conic-gradient(#f44336, #ffeb3b, #4caf50, #03a9f4, #9c27b0, #f44336); }
+.sw.custom .sw-color { display: block; position: absolute; inset: 0; width: 20px; height: 20px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+.icon-grid { max-height: 220px; overflow-y: auto; }
+.ic-pick[open] .icon-grid { width: 300px; max-height: 260px; }
+/* Partly done sessions: half-tinted, not struck through */
+.ev.chunk.done.partial { background: linear-gradient(90deg, color-mix(in srgb, var(--c) 22%, var(--panel)) 50%, color-mix(in srgb, var(--c) 7%, var(--panel)) 50%); color: var(--ink2); }
+.ev.chunk.done.partial .ev-t { text-decoration: none; }
+.chk.disabled { opacity: .55; }
+.partial .split-box { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }

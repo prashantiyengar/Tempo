@@ -98,7 +98,13 @@ export function periodRules(task, s) {
 const dur = (c) => Math.round((c.end - c.start) / T.MIN);
 // 'waived' = a done session the user removed without redoing the work: it counts as covered but takes no time.
 const takesTime = (c) => c.status !== 'waived';
-export const doneMinutes = (task) => (task.frozen || []).reduce((a, c) => a + dur(c), 0);
+// Work credited by a frozen session: its length, or less when it was only partly done (`credit`, in work-minutes).
+const work = (c) => (c.credit != null && c.credit !== '' ? Math.max(0, +c.credit) : dur(c));
+export const doneWork = (task) => (task.frozen || []).reduce((a, c) => a + work(c), 0);
+// Time budget a frozen session used up. A partly done session whose shortfall is to be squeezed into the existing
+// slots (`squeeze`) uses up its whole original slot, so the remaining slots stay as they were and carry more work.
+const budget = (c) => (c.squeeze ? Math.max(+c.slotMin || dur(c), work(c)) : work(c));
+export const doneMinutes = (task) => (task.frozen || []).reduce((a, c) => a + budget(c), 0);
 
 export function merge(list) {
   const arr = list.filter((i) => i.end > i.start).map((i) => ({ start: i.start, end: i.end })).sort((a, b) => a.start - b.start);
@@ -185,8 +191,11 @@ export const newId = (p = 'id') => `${p}${Date.now().toString(36)}${(idSeq++).to
 export function planOne(task, { occupied, now, settings, horizonDays = 366 }) {
   const tz = settings.tz;
   const p = params(task, settings);
-  const remaining = totalMinutes(task) - doneMinutes(task);
-  const res = { planned: [], shortfall: 0, overdue: 0, suggestedDeadline: null, fitsIgnoringBounds: null, remaining: Math.max(0, remaining) };
+  const workLeft = totalMinutes(task) - doneWork(task);
+  let remaining = totalMinutes(task) - doneMinutes(task);
+  if (workLeft <= 0) remaining = 0;
+  else if (remaining < Math.min(p.minChunk, workLeft)) remaining = workLeft; // nothing left to squeeze into: add time
+  const res = { planned: [], shortfall: 0, overdue: 0, suggestedDeadline: null, fitsIgnoringBounds: null, remaining: Math.max(0, workLeft) };
   if (remaining <= 0) return res;
   const from = Math.max(ceilTo(now, 5 * T.MIN), task.earliestStart || 0);
   const deadline = task.deadline || from + 30 * T.DAY;
@@ -278,10 +287,15 @@ export function sessions(task) {
   ].sort((a, b) => a.start - b.start);
   const N = all.filter(takesTime).length;
   const total = totalMinutes(task);
+  // Planned sessions normally carry work equal to their length. After a partly done session whose shortfall was
+  // squeezed into the existing slots, the remaining work is spread over the planned sessions instead.
+  const plannedLen = (task.planned || []).reduce((a, c) => a + dur(c), 0);
+  const scale = (task.frozen || []).some((c) => c.squeeze) && plannedLen > 0
+    ? Math.max(0, Math.min(10, (total - doneWork(task)) / plannedLen)) : 1;
   let cum = 0, idx = 0;
   const out = [];
   for (const c of all) {
-    const mins = dur(c);
+    const mins = c.kind === 'planned' ? dur(c) * scale : work(c);
     if (!takesTime(c)) { cum += mins; continue; }
     idx++;
     const icon = task.categoryIcon ? `${task.categoryIcon} ` : '';
@@ -291,13 +305,13 @@ export function sessions(task) {
       const base = r.labels === 'relative' ? 1 : (+r.startPage || 1);
       const a = base + Math.round((cum / total) * r.pages);
       const b = base - 1 + Math.min(r.pages, Math.round(((cum + mins) / total) * r.pages));
-      label = `${icon}${task.title} page ${a}-${Math.max(a, b)}, task ${idx}/${N}`;
+      label = `${icon}${task.title} page ${a}-${Math.max(a, b)}, task ${idx}/${N}${c.partial ? ' (partly done)' : ''}`;
       c.pages = [a, Math.max(a, b)];
     } else {
-      label = `${icon}${task.title}, task ${idx}/${N}`;
+      label = `${icon}${task.title}, task ${idx}/${N}${c.partial ? ` (${Math.round((work(c) / Math.max(1, +c.slotMin || dur(c))) * 100)}% done)` : ''}`;
     }
     cum += mins;
-    out.push({ ...c, index: idx, count: N, minutes: mins, label, taskId: task.id });
+    out.push({ ...c, index: idx, count: N, minutes: dur(c), work: mins, label, taskId: task.id });
   }
   return out;
 }
@@ -321,7 +335,7 @@ export function markDone(task, chunkId) {
   return {
     ...task,
     planned: (task.planned || []).filter((x) => x.id !== chunkId),
-    frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), { ...c, status: 'done', auto: false, overdue: undefined, syncHash: null }],
+    frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), { ...c, status: 'done', auto: false, overdue: undefined, syncHash: null, credit: undefined, partial: undefined, squeeze: undefined }],
   };
 }
 
@@ -369,6 +383,24 @@ export function waiveSession(task, chunkId) {
   };
 }
 
+// A session that was only partly done. `credit` = work done in work-minutes (for reading: pages / speed);
+// `start`/`end` = the time actually spent on it (shorter when something else took part of the slot);
+// `squeeze` = fit the unfinished work into the remaining sessions (true) or add time for it (false).
+export function markPartial(task, chunkId, { credit, start, end, squeeze = false }) {
+  const c = (task.planned || []).find((x) => x.id === chunkId) || (task.frozen || []).find((x) => x.id === chunkId);
+  if (!c) return task;
+  const slotMin = +c.slotMin || dur(c);
+  const nc = { ...c, start: start ?? c.start, end: end ?? c.end, status: 'done', auto: false, overdue: undefined, syncHash: null,
+    credit: Math.max(0, +credit || 0), slotMin, squeeze: !!squeeze, partial: true };
+  return {
+    ...task,
+    planned: (task.planned || []).filter((x) => x.id !== chunkId),
+    frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), nc],
+  };
+}
+// Work a session was meant to cover (work-minutes), e.g. to turn "7 of 15 pages" into credit.
+export const minutesForPages = (task, pages) => (pages / pagesPerHour(task.reading || {})) * 60;
+
 // Record time actually spent on a task (e.g. replacing another session's block).
 export function addDoneBlock(task, start, end) {
   return { ...task, frozen: [...(task.frozen || []), { id: newId('c'), start, end, status: 'done', auto: false }] };
@@ -376,6 +408,6 @@ export function addDoneBlock(task, start, end) {
 
 export function progress(task, now = Date.now()) {
   const total = totalMinutes(task);
-  const done = (task.frozen || []).filter((c) => c.status === 'done' || c.status === 'waived' || (c.status === 'pinned' && c.end <= now)).reduce((a, c) => a + dur(c), 0);
+  const done = (task.frozen || []).filter((c) => c.status === 'done' || c.status === 'waived' || (c.status === 'pinned' && c.end <= now)).reduce((a, c) => a + work(c), 0);
   return { total, done: Math.min(total, done), pct: Math.min(100, Math.round((done / total) * 100)) };
 }

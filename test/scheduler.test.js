@@ -191,3 +191,31 @@ console.log('new tests passed');
   assert.equal(S.sessions(t2[0])[0].start, ss[0].start);
   console.log('periods:', ss.map((c) => T.toDTInput(c.start, tz).slice(5)).join(', '));
 }
+
+// 14. Partly done reading session: 7 of 15 pages, 20-min call at the start of the hour
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz };
+  const t = { id: 'b', title: 'Pride and Prejudice', kind: 'reading', rank: 1, reading: { pages: 90, startPage: 47, speed: 15, unit: 'pph', labels: 'actual' }, deadline: T.atTime('2026-10-30', '17:00', tz), created: 1 };
+  let { tasks } = S.rescheduleAll([t], [], s2, now);
+  const before = S.sessions(tasks[0]);
+  assert.equal(before.length, 6);
+  assert.match(before[0].label, /page 47-61, task 1\/6$/);
+  const first = before[0];
+  const mk = (squeeze) => S.markPartial(tasks[0], first.id, { credit: S.minutesForPages(tasks[0], 7), start: first.start + 20 * T.MIN, end: first.end, squeeze });
+  // a) add time for the rest
+  const ext = S.rescheduleAll([mk(false)], [], s2, now).tasks[0];
+  const se = S.sessions(ext);
+  assert.match(se[0].label, /page 47-53, task 1\/\d+ \(partly done\)$/);
+  assert.equal(se[0].minutes, 40);
+  assert.match(se[1].label, /page 54-/);
+  assert.equal(Math.round(se.slice(1).reduce((a, c) => a + c.minutes, 0)), 360 - 28);
+  assert.equal(S.progress(ext).done, 28);
+  // b) squeeze into the existing slots: same number of sessions, same times, more pages each
+  const sq = S.rescheduleAll([mk(true)], [], s2, now).tasks[0];
+  const ss = S.sessions(sq);
+  assert.equal(ss.length, 6);
+  assert.deepEqual(ss.slice(1).map((c) => c.start), before.slice(1).map((c) => c.start));
+  assert.match(ss[ss.length - 1].label, /page \d+-136, task 6\/6$/);
+  assert.match(ss[1].label, /page 54-/);
+  console.log('partial:', se.map((c) => c.label.replace('Pride and Prejudice ', '')).join(' | '), '||', ss.map((c) => c.label.replace('Pride and Prejudice ', '')).join(' | '));
+}

@@ -209,7 +209,9 @@ export function chunkBody(task, sess, state) {
       ...(rem == null || rem < 0 ? [] : [{ method: 'popup', minutes: rem }]),
       ...(emailRem == null || emailRem < 0 ? [] : [{ method: 'email', minutes: emailRem }]),
     ] },
-    extendedProperties: { private: { tempoTask: '1', taskId: task.id, chunkId: sess.id, tSeq: String(sess.index), tStatus: sess.kind, tRev: String(task.rev || task.created || 0), ...encodeDef(task) } },
+    extendedProperties: { private: { tempoTask: '1', taskId: task.id, chunkId: sess.id, tSeq: String(sess.index), tStatus: sess.kind, tRev: String(task.rev || task.created || 0),
+      // partly done: credited work (Google merges private properties on patch, so clear them explicitly otherwise)
+      ...(sess.partial ? { tCredit: String(+(+sess.credit).toFixed(2)), tSlot: String(sess.slotMin || ''), tSq: sess.squeeze ? '1' : '' } : { tCredit: '', tSlot: '', tSq: '' }), ...encodeDef(task) } },
   };
 }
 
@@ -247,7 +249,7 @@ const evEnd = (ev) => Date.parse(ev.end?.dateTime || ev.end?.date);
 // Sessions created by older versions carry no definition: rebuild a sensible task from the event titles.
 function legacyDef(taskId, events) {
   const first = events[0];
-  const clean = (s) => (s || '').replace(/^✓\s*/, '').replace(/^\p{Extended_Pictographic}[\uFE0F\u200D\p{Extended_Pictographic}]*\s*/u, '').replace(/,\s*task \d+\/\d+\s*$/, '');
+  const clean = (s) => (s || '').replace(/^✓\s*/, '').replace(/^\p{Extended_Pictographic}[\uFE0F\u200D\p{Extended_Pictographic}]*\s*/u, '').replace(/\s*\((partly|\d+%) done\)\s*$/, '').replace(/,\s*task \d+\/\d+\s*$/, '');
   const pages = events.map((e) => clean(e.summary).match(/^(.*) page (\d+)-(\d+)$/)).filter(Boolean);
   const minutes = events.reduce((a, e) => a + (evEnd(e) - evStart(e)) / T.MIN, 0);
   const def = {
@@ -280,6 +282,7 @@ export function taskFromEvents(taskId, events, calId, settings, now = Date.now()
     const c = { id, start: evStart(ev), end: evEnd(ev), gid: `${ev._cal || calId}::${ev.id}`, syncHash: null };
     // Old-version sessions carry no planning settings, so keep their exact times (pinned) instead of re-planning.
     const status = p.tStatus || (/^✓/.test(ev.summary || '') ? 'done' : def.legacy && c.start >= now ? 'pinned' : 'planned');
+    if (p.tCredit != null && p.tCredit !== '' && status === 'done') Object.assign(c, { credit: +p.tCredit, slotMin: +p.tSlot || undefined, squeeze: p.tSq === '1', partial: true });
     if (status === 'done' || status === 'pinned') frozen.push({ ...c, status });
     else if (c.start < now && settings.assumePastDone) frozen.push({ ...c, status: 'done', auto: true });
     else planned.push(c);
@@ -297,7 +300,7 @@ export async function pullTasks(state, now = Date.now()) {
   const from = now - 90 * T.DAY, to = now + 400 * T.DAY;
   const cals = [...new Set([...writableCals(state), defaultTaskCal(state), ...state.tasks.map((t) => taskCal(state, t))])];
   const events = [];
-  for (const cal of cals) {
+  await G.pool(cals, G.PARALLEL, async (cal) => {
     try {
       for (const ev of await G.listTaskEvents(cal, from, to)) if (ev.status !== 'cancelled') events.push({ ...ev, _cal: cal });
     } catch (e) {
@@ -305,7 +308,7 @@ export async function pullTasks(state, now = Date.now()) {
       console.warn('Tempo: could not read', cal, e.message);
       res.unreadable = [...(res.unreadable || []), cal];
     }
-  }
+  });
   res.calendars = cals;
   const byTask = new Map();
   for (const ev of events) {
@@ -350,9 +353,20 @@ export async function pullTasks(state, now = Date.now()) {
   return res;
 }
 
+// Does the event on Google match what we meant to write?
+function matches(ev, body) {
+  if (!ev || ev.status === 'cancelled') return false;
+  const p = ev.extendedProperties?.private || {}, q = body.extendedProperties.private;
+  return ev.summary === body.summary && Date.parse(ev.start?.dateTime || ev.start?.date) === Date.parse(body.start.dateTime)
+    && Date.parse(ev.end?.dateTime || ev.end?.date) === Date.parse(body.end.dateTime)
+    && p.chunkId === q.chunkId && p.taskId === q.taskId && (p.tStatus || '') === q.tStatus && (p.tCredit || '') === (q.tCredit || '') && p.tRev === q.tRev;
+}
+const bodyHash = (body) => JSON.stringify([body.summary, body.start, body.end, body.colorId, body.reminders, body.description, body.extendedProperties]);
+
 // Push task sessions to Google. `apply(fn)` writes results back into the live state.
-// Every run also reconciles with what is really on Google: sessions whose event was deleted there are
-// re-created, and stray Tempo events from this browser are removed.
+// Requests run in parallel (several at once, with automatic back-off when Google rate-limits). Every run also
+// verifies against what is really on Google: sessions that are missing or differ there are written again, stray
+// Tempo copies are removed, and after writing, everything is read back once more to confirm it arrived intact.
 export async function syncTasks(state, apply, onProgress) {
   if (!connected(state)) return recordSync(state, apply, { ok: false, kind: 'local', error: 'Not connected to Google — task sessions are only stored in this browser.' });
   if (!state.settings.syncTasksToGoogle) return recordSync(state, apply, { ok: false, kind: 'off', error: 'Writing task sessions to Google is turned off in Settings.' });
@@ -363,24 +377,56 @@ export async function syncTasks(state, apply, onProgress) {
     const t = s.tasks.find((x) => x.id === taskId);
     for (const arr of [t?.planned || [], t?.frozen || []]) { const k = arr.find((x) => x.id === chunkId); if (k) { k.gid = gid; k.syncHash = hash; } }
   });
-  let n = 0, failed = 0, lastErr = null;
-  try {
-    // 1. Reconcile with what is really on Google (per calendar used by tasks)
-    const starts = all.flatMap((x) => x.list.map((c) => c.start));
+  const starts = all.flatMap((x) => x.list.map((c) => c.start));
+  const range = starts.length ? [Math.min(...starts, Date.now()) - T.DAY, Math.max(...all.flatMap((x) => x.list.map((c) => c.end))) + T.DAY] : null;
+  const cals = [...new Set(all.map((x) => x.cal))];
+  const readRemote = async () => {
     const remote = new Map();
-    if (starts.length) {
-      const from = Math.min(...starts, Date.now()) - T.DAY, to = Math.max(...all.flatMap((x) => x.list.map((c) => c.end))) + T.DAY;
-      for (const cal of new Set(all.map((x) => x.cal))) {
-        for (const ev of await G.listTaskEvents(cal, from, to)) remote.set(`${cal}::${ev.id}`, ev);
-      }
+    if (!range) return remote;
+    await G.pool(cals, G.PARALLEL, async (cal) => { for (const ev of await G.listTaskEvents(cal, ...range)) if (ev.status !== 'cancelled') remote.set(`${cal}::${ev.id}`, ev); });
+    return remote;
+  };
+  // Everything we intend to have on Google
+  const jobs = [];
+  for (const { task, cal, list } of all) {
+    if (!task.calendarId) apply((s) => { const t = s.tasks.find((x) => x.id === task.id); if (t) t.calendarId = cal; });
+    const tk = { ...task, calendarId: cal };
+    for (const sess of list) {
+      const body = chunkBody(tk, sess, state);
+      jobs.push({ task, cal, sess, body, hash: bodyHash(body), gid: sess.gid ? normGid(state, sess.gid) : null, syncHash: sess.syncHash });
     }
+  }
+  let n = 0, failed = 0, lastErr = null, repaired = 0, verified = 0, unverified = [];
+  const upsert = async (j) => {
+    try {
+      let gid = j.gid;
+      if (gid && splitGid(gid)[0] !== j.cal) { await G.deleteEvent(...splitGid(gid)); gid = null; }
+      if (gid) {
+        try { await G.patchEvent(...splitGid(gid), j.body); }
+        catch (e) { if (/not found|deleted/i.test(e.message)) gid = null; else throw e; }
+      }
+      if (!gid) { const ev = await G.insertEvent(j.cal, j.body); gid = `${j.cal}::${ev.id}`; }
+      j.gid = gid; j.syncHash = j.hash;
+      n++;
+      onProgress?.(n, total);
+      setGid(j.task.id, j.sess.id, gid, j.hash);
+    } catch (e) {
+      if (e instanceof G.AuthError || e instanceof G.PermissionError) throw e;
+      failed++; lastErr = e; j.failed = true;
+    }
+  };
+  try {
+    // 1. Verify against Google: anything missing or different is written again.
+    let remote = await readRemote();
     const known = new Set();
-    for (const { task, cal, list } of all) for (const c of list) {
-      if (!c.gid) continue;
-      const g = normGid(state, c.gid);
-      if (splitGid(g)[0] !== cal) continue;
-      known.add(g);
-      if (c.start > Date.now() - 30 * T.DAY && !remote.has(g)) { setGid(task.id, c.id, null, null); c.gid = null; }
+    for (const j of jobs) {
+      if (!j.gid || splitGid(j.gid)[0] !== j.cal) continue;
+      known.add(j.gid);
+      const ev = remote.get(j.gid);
+      if (!ev) {
+        // Missing on Google (deleted there, or a write that never arrived): create it again.
+        if (j.sess.start > Date.now() - 30 * T.DAY) { if (j.syncHash) repaired++; setGid(j.task.id, j.sess.id, null, null); j.gid = null; j.syncHash = null; }
+      } else if (j.syncHash === j.hash && !matches(ev, j.body)) { j.syncHash = null; repaired++; } // changed on Google: overwrite
     }
     const localIds = new Set(state.tasks.map((t) => t.id));
     const tomb = new Set(state.tombstones || []);
@@ -389,49 +435,120 @@ export async function syncTasks(state, apply, onProgress) {
       // Only remove stray copies of OUR tasks (duplicates) or of tasks deleted here; unknown tasks are imported by pullTasks.
       if (!known.has(gid) && (localIds.has(tid) || tomb.has(tid))) state.orphanGids.includes(gid) || state.orphanGids.push(gid);
     }
-    // 2. Deletions
+    // 2. Deletions (in parallel)
     const orphans = [...state.orphanGids.map((g) => [null, g]), ...state.tasks.flatMap((t) => (t.orphanGids || []).map((g) => [t.id, g]))];
-    for (const [taskId, gid] of orphans) {
+    await G.pool(orphans, G.PARALLEL, async ([taskId, gid]) => {
       const [cal, id] = splitGid(normGid(state, gid));
       await G.deleteEvent(cal, id);
       apply((s) => {
         if (taskId) { const t = s.tasks.find((x) => x.id === taskId); if (t) t.orphanGids = (t.orphanGids || []).filter((g) => g !== gid); }
         else s.orphanGids = s.orphanGids.filter((g) => g !== gid);
       });
-    }
-    // 3. Upserts
-    for (const { task, cal, list } of all) {
-      if (!task.calendarId) apply((s) => { const t = s.tasks.find((x) => x.id === task.id); if (t) t.calendarId = cal; });
-      const tk = { ...task, calendarId: cal };
-      for (const sess of list) {
-        const body = chunkBody(tk, sess, state);
-        const hash = JSON.stringify([body.summary, body.start, body.end, body.colorId, body.reminders, body.description, body.extendedProperties]);
-        const g0 = sess.gid ? normGid(state, sess.gid) : null;
-        if (g0 && sess.syncHash === hash && splitGid(g0)[0] === cal) continue;
-        try {
-          let gid = g0;
-          if (gid && splitGid(gid)[0] !== cal) { await G.deleteEvent(...splitGid(gid)); gid = null; }
-          if (gid) {
-            try { await G.patchEvent(...splitGid(gid), body); }
-            catch (e) { if (/not found|deleted/i.test(e.message)) gid = null; else throw e; }
-          }
-          if (!gid) { const ev = await G.insertEvent(cal, body); gid = `${cal}::${ev.id}`; }
-          n++;
-          onProgress?.(n, total);
-          setGid(task.id, sess.id, gid, hash);
-        } catch (e) {
-          if (e instanceof G.AuthError || e instanceof G.PermissionError) throw e;
-          failed++; lastErr = e;
-        }
+    });
+    // 3. Creates and updates (in parallel)
+    const todo = jobs.filter((j) => !(j.gid && j.syncHash === j.hash && splitGid(j.gid)[0] === j.cal));
+    await G.pool(todo, G.PARALLEL, upsert);
+    // 4. Read back what we wrote and confirm it; write again whatever didn't arrive intact (up to two more rounds).
+    if (todo.length || orphans.length) {
+      for (let round = 0; round < 3; round++) {
+        remote = await readRemote();
+        const bad = jobs.filter((j) => !j.failed && (!j.gid || !matches(remote.get(j.gid), j.body)));
+        const strays = orphans.filter(([, g]) => remote.has(normGid(state, g)));
+        if (!bad.length && !strays.length) break;
+        if (round === 2) { unverified = bad; break; }
+        repaired += bad.length;
+        for (const j of bad) if (j.gid && !remote.has(j.gid)) j.gid = null;
+        await G.pool(strays, G.PARALLEL, ([, g]) => G.deleteEvent(...splitGid(normGid(state, g))));
+        await G.pool(bad, G.PARALLEL, upsert);
       }
     }
+    verified = jobs.filter((j) => j.gid && !j.failed && !unverified.includes(j)).length;
   } catch (e) {
     return recordSync(state, apply, { ok: false, kind: e instanceof G.PermissionError ? 'permission' : e instanceof G.AuthError ? 'auth' : 'error', error: e.message, total, calId }, e);
   }
+  for (const j of unverified) setGid(j.task.id, j.sess.id, j.gid, null); // try again next time
   const onGoogle = state.tasks.filter((t) => !t.archived).reduce((a, t) => a + S.sessions(t).filter((c) => c.gid).length, 0);
-  return recordSync(state, apply, failed
-    ? { ok: false, kind: 'partial', error: `${failed} session(s) could not be written: ${lastErr?.message}`, total, onGoogle, calId, changed: n }
-    : { ok: true, total, onGoogle, calId, changed: n });
+  const base = { total, onGoogle, calId, changed: n, verified, repaired, at: Date.now() };
+  if (failed || unverified.length) {
+    const msg = failed ? `${failed} session(s) could not be written: ${lastErr?.message}` : `${unverified.length} session(s) didn't arrive intact on Google; Tempo will retry.`;
+    return recordSync(state, apply, { ok: false, kind: 'partial', error: msg, ...base });
+  }
+  return recordSync(state, apply, { ok: true, ...base });
+}
+
+// ---------- Categories and time periods shared between devices ----------
+// They live in one hidden, all-day "Tempo settings" event on your primary calendar (private properties, dated
+// 1 Jan 2000 so it never shows up in your week). Last writer wins; a device that has never synced adopts what's
+// there and adds only categories it has that Google doesn't.
+const SHARED_PART = 450;
+const sharedOf = (s) => ({ categories: (s.categories || []).map(({ id, name, color, icon }) => ({ id, name, color, icon: icon || '' })), periods: s.periods || [] });
+const hashOf = (o) => JSON.stringify(o);
+const isBuiltin = (c) => S.DEFAULT_SETTINGS.categories.some((d) => d.id === c.id && d.name === c.name && d.color === c.color && (d.icon || '') === (c.icon || ''));
+export function sharedDirty(state) { return hashOf(sharedOf(state.settings)) !== state.settings.sharedHash; }
+function encodeShared(obj, rev) {
+  const json = JSON.stringify(obj), out = { tempoSettings: '1', sRev: String(rev) };
+  const n = Math.ceil(json.length / SHARED_PART);
+  for (let i = 0; i < n; i++) out['s_' + i] = json.slice(i * SHARED_PART, (i + 1) * SHARED_PART);
+  out.sN = String(n);
+  return out;
+}
+function decodeShared(p) {
+  const n = +p.sN; if (!n) return null;
+  let json = ''; for (let i = 0; i < n; i++) { if (p['s_' + i] == null) return null; json += p['s_' + i]; }
+  try { return JSON.parse(json); } catch { return null; }
+}
+// Returns { changed } — true when this device took on categories/periods from Google.
+export async function syncShared(state, { force = false } = {}) {
+  const s = state.settings;
+  if (!connected(state) || (!force && !sharedDirty(state))) return { changed: false };
+  const cal = primaryId(state);
+  const found = await G.findByProperty(cal, 'tempoSettings=1');
+  const ev = found.sort((a, b) => (+b.extendedProperties.private.sRev || 0) - (+a.extendedProperties.private.sRev || 0))[0];
+  const remote = ev ? decodeShared(ev.extendedProperties.private) : null;
+  const remoteRev = ev ? +ev.extendedProperties.private.sRev || 0 : 0;
+  const local = sharedOf(s);
+  const dirty = sharedDirty(state);
+  const neverSynced = !s.sharedRev;
+  let next = local, changed = false, push = false;
+  if (remote && remoteRev > (s.sharedRev || 0) && (!dirty || neverSynced)) {
+    // Newer on Google: adopt it (a device that never synced keeps its extra categories and shares them).
+    const extra = neverSynced ? local.categories.filter((c) => !remote.categories.some((r) => r.id === c.id || r.name.toLowerCase() === c.name.toLowerCase())) : [];
+    // First sync of a device that already had customised categories: keep its version where Google only has the
+    // untouched built-in one, or has no icon where this device has one.
+    let kept = 0;
+    const cats = remote.categories.map((r) => {
+      const l = neverSynced && local.categories.find((c) => c.id === r.id);
+      if (l && hashOf(l) !== hashOf(r) && ((isBuiltin(r) && !isBuiltin(l)) || (!r.icon && l.icon))) { kept++; return l; }
+      return r;
+    });
+    next = { categories: [...cats, ...extra], periods: remote.periods?.length || !neverSynced ? remote.periods : local.periods };
+    changed = hashOf(next) !== hashOf(local);
+    push = extra.length > 0 || kept > 0;
+  } else if (remote && remoteRev > (s.sharedRev || 0)) {
+    // Changed both here and elsewhere: merge by id, this device's version of a category wins.
+    const byId = new Map(remote.categories.map((c) => [c.id, c]));
+    for (const c of local.categories) byId.set(c.id, c);
+    next = { categories: [...byId.values()], periods: local.periods };
+    changed = hashOf(next) !== hashOf(local);
+    push = true;
+  } else if (!remote || dirty) push = true;
+  if (changed) { s.categories = next.categories; s.periods = next.periods; }
+  let rev = remoteRev;
+  if (push) {
+    rev = Math.max(Date.now(), remoteRev + 1);
+    const body = {
+      summary: 'Tempo settings (categories) — please keep', description: 'Used by Tempo Calendar to share your categories and time periods between devices.',
+      start: { date: '2000-01-01' }, end: { date: '2000-01-02' }, transparency: 'transparent', visibility: 'private',
+      reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: encodeShared(next, rev) },
+    };
+    if (ev) await G.patchEvent(cal, ev.id, { extendedProperties: { private: { ...Object.fromEntries(Object.keys(ev.extendedProperties.private).filter((k) => k.startsWith('s_')).map((k) => [k, ''])), ...body.extendedProperties.private } } });
+    else await G.insertEvent(cal, body);
+    for (const extraEv of found.filter((x) => x !== ev)) await G.deleteEvent(cal, extraEv.id); // stray duplicates
+  }
+  s.sharedRev = rev;
+  s.sharedHash = hashOf(sharedOf(s));
+  s.sharedSyncedAt = Date.now();
+  return { changed };
 }
 
 function recordSync(state, apply, info, err) {

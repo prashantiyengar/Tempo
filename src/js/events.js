@@ -80,7 +80,8 @@ export async function createEvent(state, calId, body, { conference = false } = {
   const b = clean(body);
   if (conference) b.conferenceData = { createRequest: { requestId: newId('meet'), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
   if (!b.recurrence?.length) delete b.recurrence;
-  const ev = await G.insertEvent(calId, b, { conference });
+  let ev = await G.insertEvent(calId, b, { conference });
+  if (!b.recurrence?.length) ev = await G.confirmEvent(calId, ev.id, b);
   invalidate();
   return { ...ev, _calId: calId };
 }
@@ -120,6 +121,7 @@ export async function updateEvent(state, ev, changes, scope = 'this', { conferen
     if (conference && !ev.conferenceData) changes.conferenceData = { createRequest: { requestId: newId('meet'), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
     if (!isInst && changes.recurrence && !changes.recurrence.length) changes.recurrence = null;
     await G.patchEvent(calId, ev.id, clean(changes), { conference: conference && !ev.conferenceData, notify: !!ev.attendees?.length });
+    if (!changes.recurrence?.length) await G.confirmEvent(calId, ev.id, changes);
   } else {
     const master = await G.getEvent(calId, ev.recurringEventId);
     if (scope === 'all') {

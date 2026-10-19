@@ -3,7 +3,18 @@
 import { $$, esc, setHTML } from './ui.js';
 import { nearestColorId } from './gcal.js';
 
-export const CAT_ICONS = ['💼', '🏠', '🎉', '📚', '💪', '🧘', '🍳', '🛒', '💰', '✈️', '🎨', '🎵', '💻', '📞', '✉️', '🩺', '👪', '🌱', '⚽', '🎮', '🧹', '🚗', '📝', '⭐'];
+export const CAT_ICONS = [
+  // work & study
+  '💼', '💻', '📊', '📈', '🗂️', '📝', '✏️', '📚', '📖', '🎓', '🔬', '🧪', '🧮', '📞', '✉️', '🗓️', '🤝', '🎤', '🧑‍💻', '🛠️',
+  // home & life
+  '🏠', '🧹', '🧺', '🍳', '🛒', '💰', '🧾', '🚗', '🚲', '✈️', '🧳', '👪', '👶', '🐶', '🐱', '🌱', '🪴', '🔧', '📦', '🏦',
+  // health
+  '💪', '🏃', '🧘', '🏊', '🚴', '🩺', '💊', '🦷', '😴', '🥗', '🍎', '❤️',
+  // leisure & social
+  '🎉', '🎨', '🎵', '🎸', '🎹', '🎬', '📺', '🎮', '♟️', '⚽', '🏀', '🎾', '⛰️', '🏖️', '☕', '🍽️', '🍷', '🎁', '📷', '✍️',
+  // misc
+  '⭐', '🔥', '⚡', '🎯', '🚀', '💡', '🧠', '🙏', '🌍', '🕊️', '⏰', '📌',
+];
 // Keep only the first emoji/symbol (or 2 letters) a person typed.
 export function cleanIcon(v) {
   const s = String(v || '').trim();
@@ -13,7 +24,25 @@ export function cleanIcon(v) {
 }
 export const catLabel = (c) => (c ? `${c.icon ? c.icon + ' ' : ''}${c.name}` : '');
 
-export const CAT_COLORS = ['#039be5', '#33b679', '#f6bf26', '#8e24aa', '#e67c73', '#f4511e', '#7986cb', '#0b8043', '#3f51b5', '#d50000', '#616161'];
+// The first 11 are Google Calendar's own event colors (shown identically there); the rest show in Tempo exactly and
+// in Google as the nearest of its colors. Any other color can be picked with the custom swatch.
+export const CAT_COLORS = ['#039be5', '#33b679', '#f6bf26', '#8e24aa', '#e67c73', '#f4511e', '#7986cb', '#0b8043', '#3f51b5', '#d50000', '#616161',
+  '#00897b', '#43a047', '#7cb342', '#c0ca33', '#fdd835', '#ffb300', '#fb8c00', '#6d4c41', '#ec407a', '#ad1457', '#5e35b1', '#1e88e5', '#00acc1', '#546e7a', '#000000'];
+// Swatch row with a custom color picker at the end. `name` = radio group name.
+export function swatchesHTML(name, selected) {
+  const custom = selected && !CAT_COLORS.includes(selected.toLowerCase()) ? selected : '';
+  return `<div class="swatches">${CAT_COLORS.map((c) => `<label class="sw" title="${c}"><input type="radio" name="${esc(name)}" value="${c}" ${c === (selected || '').toLowerCase() ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}
+    <label class="sw custom" title="Custom color"><input type="radio" name="${esc(name)}" value="${esc(custom || '#888888')}" ${custom ? 'checked' : ''} class="sw-custom-radio"><i style="${custom ? `background:${esc(custom)}` : ''}"></i><input type="color" class="sw-color" value="${esc(custom || '#888888')}" aria-label="Custom color"></label></div>`;
+}
+// Wire a swatch row: onPick(color) for both preset and custom colors.
+export function wireSwatches(host, onPick) {
+  $$('.swatches input[type=radio]', host).forEach((r) => r.addEventListener('change', () => onPick(r.value)));
+  $$('.sw.custom', host).forEach((lab) => {
+    const col = lab.querySelector('.sw-color'), radio = lab.querySelector('.sw-custom-radio'), dot = lab.querySelector('i');
+    col.addEventListener('input', () => { radio.value = col.value; radio.checked = true; dot.style.background = col.value; onPick(col.value); });
+    dot.addEventListener('click', (e) => { e.preventDefault(); try { col.showPicker(); } catch { col.click(); } });
+  });
+}
 
 export const catById = (settings, id) => (id ? (settings.categories || []).find((c) => c.id === id) || null : null);
 
@@ -71,14 +100,14 @@ export function categoryPicker(host, { settings, selected, onChange, onCreate, a
       ${adding ? `<div class="cat-new">
         <div class="row"><input class="cat-icon" placeholder="🙂" maxlength="8" aria-label="Icon" value="${esc(newIcon)}"><input class="cat-name" placeholder="New category, e.g. Leisure" maxlength="30"></div>
         <div class="icon-grid">${CAT_ICONS.map((ic) => `<button type="button" class="ic-btn" data-ic="${ic}">${ic}</button>`).join('')}</div>
-        <div class="swatches">${CAT_COLORS.map((c) => `<label class="sw"><input type="radio" name="catcolor" value="${c}" ${c === newColor ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div>
+        ${swatchesHTML('catcolor', newColor)}
         <div class="row"><button type="button" class="btn small primary cat-save">Add</button><button type="button" class="btn small ghost cat-cancel">Cancel</button></div>
       </div>` : ''}`);
     $$('[data-cat]', host).forEach((b) => (b.onclick = () => { sel = b.dataset.cat || null; draw(); onChange(catById(settings, sel)); }));
     host.querySelector('[data-add]').onclick = () => { adding = true; draw(); host.querySelector('.cat-name').focus(); };
     if (adding) {
       const name = host.querySelector('.cat-name');
-      $$('input[name=catcolor]', host).forEach((r) => (r.onchange = () => { newColor = r.value; }));
+      wireSwatches(host.querySelector('.cat-new'), (c) => { newColor = c; });
       const iconIn = host.querySelector('.cat-icon');
       iconIn.oninput = () => { newIcon = iconIn.value; };
       $$('.ic-btn', host).forEach((b) => (b.onclick = () => { newIcon = iconIn.value = b.dataset.ic; }));

@@ -748,7 +748,7 @@ export function settingsDialog(ctx) {
         <details class="ic-pick"><summary class="cat-icbtn" title="Icon" aria-label="Choose icon">${esc(c.icon || '＋')}</summary>
           <div class="icon-grid"><input class="cat-icin" placeholder="Type or paste" maxlength="8" value="${esc(c.icon || '')}">${C.CAT_ICONS.map((ic) => `<button type="button" class="ic-btn" data-ic="${ic}">${ic}</button>`).join('')}<button type="button" class="ic-btn none" data-ic="">No icon</button></div></details>
         <input class="cat-nm" value="${esc(c.name)}" maxlength="30" aria-label="Category name">
-        <div class="swatches">${C.CAT_COLORS.map((col) => `<label class="sw"><input type="radio" name="cc${i}" value="${col}" ${col === c.color ? 'checked' : ''}><i style="background:${col}"></i></label>`).join('')}</div>
+        ${C.swatchesHTML('cc' + i, c.color)}
         <button type="button" class="icon-btn cat-del" title="Delete category" aria-label="Delete category">✕</button></div>`).join('') || '<p class="muted small">No categories yet.</p>');
       $$('.cat-row', dlg).forEach((row) => {
         const i = +row.dataset.i;
@@ -758,13 +758,13 @@ export function settingsDialog(ctx) {
           if (!pick.open) return;
           $$('.ic-pick[open]', dlg).forEach((o) => { if (o !== pick) o.open = false; });
           const r = $('.cat-icbtn', row).getBoundingClientRect(), grid = $('.icon-grid', pick);
-          grid.style.left = Math.max(8, Math.min(innerWidth - 276, r.left)) + 'px';
+          grid.style.left = Math.max(8, Math.min(innerWidth - 316, r.left)) + 'px';
           grid.style.top = (r.bottom + 268 > innerHeight ? Math.max(8, r.top - 268) : r.bottom + 4) + 'px';
         };
         const setIc = (v) => { cats[i].icon = C.cleanIcon(v); $('.cat-icbtn', row).textContent = cats[i].icon || '＋'; };
         $('.cat-icin', row).oninput = (e) => setIc(e.target.value);
         $$('.ic-btn', row).forEach((b) => (b.onclick = () => { setIc(b.dataset.ic); $('.cat-icin', row).value = cats[i].icon; $('.ic-pick', row).open = false; }));
-        $$('input[type=radio]', row).forEach((r) => (r.onchange = () => { cats[i].color = r.value; $('.sw-dot', row).style.background = r.value; }));
+        C.wireSwatches(row, (col) => { cats[i].color = col; $('.sw-dot', row).style.background = col; });
         $('.cat-del', row).onclick = () => { cats.splice(i, 1); drawCats(); };
       });
     };
@@ -824,6 +824,9 @@ export function syncDialog(ctx) {
     conn ? row(true, `Sessions go to: <b>${esc(cal?.summary || 'Primary calendar')}</b>`, 'In Google Calendar, make sure this calendar is ticked under “My calendars”, then refresh the page.') : '',
     total ? row(onG === total && conn, `${onG} of ${total} task sessions are on Google Calendar`) : row(null, 'No task sessions yet'),
     info ? row(info.ok, info.ok ? `Last sync ${when(info.at)} — OK` : `Last sync ${when(info.at)} — problem`, info.ok ? '' : esc(info.error || '')) : '',
+    info && info.verified != null ? row(info.verified === info.total ? true : null, `${info.verified} of ${info.total} sessions verified on Google (read back after syncing)`,
+      info.repaired ? `${info.repaired} session${info.repaired === 1 ? ' was' : 's were'} missing or different on Google and ${info.repaired === 1 ? 'was' : 'were'} rewritten.` : '') : '',
+    conn && st.settings.sharedSyncedAt ? row(true, `Categories and time periods synced ${when(st.settings.sharedSyncedAt)}`, 'Shared with your other devices through Google Calendar.') : '',
   ].join('');
   return modal(`
     <form class="syncdlg">
@@ -1001,6 +1004,97 @@ export function deleteDoneDialog(ctx, task, sess) {
       const kind = f.rep.value;
       if (kind === 'event' && !f.evTitle.value.trim()) { f.evTitle.focus(); return; }
       close({ action: 'one', reschedule: f.resched.checked, replace: { kind, title: f.evTitle.value.trim(), calId: f.evCal.value, taskId: f.repTask?.value } });
+    });
+  }, { cls: 'narrow' });
+}
+
+// ---------- Partly done session ----------
+// Reading: how many pages were read. Other tasks: how much of the session's work got done. The rest is either added
+// as new time or squeezed into the remaining sessions. Optionally, part of the slot went to something else: the
+// block is then split into that (an event, or time on another task) and the shorter session.
+export function partialDialog(ctx, task, sess) {
+  const st = ctx.state, s = st.settings, tz = s.tz;
+  const when = `${T.format(sess.start, tz, { weekday: 'short', day: 'numeric', month: 'short' })}, ${T.fmtTime(sess.start, tz, s.h12)}–${T.fmtTime(sess.end, tz, s.h12)}`;
+  const reading = task.kind === 'reading';
+  const [pa, pb] = sess.pages || [0, 0];
+  const planned = reading ? Math.max(1, pb - pa + 1) : 0;
+  const length = Math.round((sess.end - sess.start) / T.MIN);
+  const others = S.sortTasks(st.tasks.filter((t) => !t.archived && t.id !== task.id));
+  const cals = ctx.writableCalendars();
+  const laterSessions = S.sessions(task).filter((c) => c.kind === 'planned' && c.start > sess.start && c.id !== sess.id).length;
+  const prevPct = sess.partial && sess.slotMin ? Math.round((sess.credit / sess.slotMin) * 100) : 50;
+  const prevPages = sess.partial && reading ? Math.round((sess.credit / 60) * S.pagesPerHour(task.reading)) : '';
+  return modal(`
+    <form class="partial">
+      <header class="dlg-head"><h2>Partly done</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+      <div class="dlg-body">
+        <p class="muted small" style="margin:0">“${esc(sess.label)}” · ${esc(when)}</p>
+        ${reading ? `
+          <label class="field"><span>Pages read (of ${planned}: page ${pa}–${pb})</span>
+            <div class="row"><input type="number" name="pages" min="0" max="${planned * 3}" step="1" value="${prevPages}" required autofocus style="width:7em"><span class="muted small pg-to"></span></div></label>`
+        : `
+          <label class="field"><span>How much of this session's work got done?</span>
+            <div class="row"><input type="range" name="pct" min="0" max="100" step="5" value="${prevPct}" style="flex:1"><b class="pct-val" style="width:3.5em;text-align:right">${prevPct}%</b></div></label>`}
+        <fieldset class="box">
+          <legend>The rest of the work</legend>
+          <label class="chk"><input type="radio" name="fit" value="extend" checked> <span><b>Add time for it</b> <span class="muted small">— longer or extra sessions, as needed</span></span></label>
+          <label class="chk ${laterSessions ? '' : 'disabled'}"><input type="radio" name="fit" value="squeeze" ${laterSessions ? '' : 'disabled'}> <span><b>Fit it into the remaining ${laterSessions || ''} session${laterSessions === 1 ? '' : 's'}</b> <span class="muted small">— same sessions, ${reading ? 'more pages' : 'more work'} in each${laterSessions ? '' : ' (none left, so time will be added)'}</span></span></label>
+        </fieldset>
+        <fieldset class="box">
+          <legend>Did something else take part of this time? (optional)</legend>
+          <label class="chk"><input type="checkbox" name="split"> Yes — record it and shorten this session</label>
+          <div class="split-box">
+            <div class="row">
+              <input type="number" name="otherMin" min="5" max="${Math.max(5, length - 5)}" step="5" value="${Math.min(20, Math.max(5, Math.round(length / 3 / 5) * 5))}" style="width:6em"> <span>min</span>
+              <select name="where"><option value="start">at the start</option><option value="end">at the end</option></select>
+            </div>
+            <label class="chk"><input type="radio" name="rep" value="event" checked> Something else — add it to the calendar</label>
+            <div class="row rep-event">
+              <input name="evTitle" placeholder="e.g. Phone call" style="flex:1;min-width:160px">
+              <select name="evCal">${cals.map((c) => `<option value="${esc(c.id)}">${esc(c.summary)}</option>`).join('')}</select>
+            </div>
+            ${others.length ? `<label class="chk"><input type="radio" name="rep" value="task"> Worked on another task — count that time toward it</label>
+            <div class="row rep-task"><select name="repTask" style="flex:1">${others.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}</option>`).join('')}</select></div>` : ''}
+            <p class="muted small split-preview"></p>
+          </div>
+        </fieldset>
+      </div>
+      <footer class="actions">
+        <span class="grow"></span>
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </footer>
+    </form>`, (dlg, close) => {
+    const f = $('form', dlg);
+    const fmt = (ms) => T.fmtTime(ms, tz, s.h12);
+    const sync = () => {
+      if (reading) { const n = +f.pages.value || 0; $('.pg-to', dlg).textContent = f.pages.value === '' ? '' : n ? `read page ${pa}–${pa + n - 1}` : 'nothing read'; }
+      else $('.pct-val', dlg).textContent = f.pct.value + '%';
+      const on = f.split.checked;
+      $('.split-box', dlg).style.display = on ? '' : 'none';
+      $('.rep-event', dlg).style.display = f.rep.value === 'event' ? '' : 'none';
+      const rt = $('.rep-task', dlg); if (rt) rt.style.display = f.rep.value === 'task' ? '' : 'none';
+      if (on) {
+        const m = Math.max(5, Math.min(length - 5, +f.otherMin.value || 0));
+        const cut = f.where.value === 'start' ? sess.start + m * T.MIN : sess.end - m * T.MIN;
+        const other = f.where.value === 'start' ? [sess.start, cut] : [cut, sess.end];
+        const mine = f.where.value === 'start' ? [cut, sess.end] : [sess.start, cut];
+        const what = f.rep.value === 'task' ? `“${others.find((t) => t.id === f.repTask?.value)?.title || 'other task'}”` : `“${f.evTitle.value.trim() || 'Something else'}”`;
+        $('.split-preview', dlg).textContent = `${fmt(other[0])}–${fmt(other[1])} ${what} (${m} min) · ${fmt(mine[0])}–${fmt(mine[1])} ${task.title} (${length - m} min)`;
+      }
+    };
+    f.addEventListener('input', sync); f.addEventListener('change', sync); sync();
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (reading && f.pages.value === '') { f.pages.focus(); return; }
+      const credit = reading ? S.minutesForPages(task, Math.max(0, +f.pages.value || 0)) : (Math.max(0, +f.pct.value) / 100) * (sess.partial ? sess.slotMin : (sess.work || length));
+      let split = null;
+      if (f.split.checked) {
+        if (f.rep.value === 'event' && !f.evTitle.value.trim()) { f.evTitle.focus(); return; }
+        const m = Math.max(5, Math.min(length - 5, +f.otherMin.value || 0));
+        split = { minutes: m, where: f.where.value, kind: f.rep.value, title: f.evTitle.value.trim(), calId: f.evCal.value, taskId: f.repTask?.value };
+      }
+      close({ credit, squeeze: f.fit.value === 'squeeze', split, pages: reading ? +f.pages.value : null, pct: reading ? null : +f.pct.value });
     });
   }, { cls: 'narrow' });
 }
