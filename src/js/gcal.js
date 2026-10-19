@@ -20,6 +20,7 @@ export function redirectUri() {
 export function identityAvailable() { return isWeb || !!ext?.identity?.launchWebAuthFlow; }
 const chromeNative = () => !isFirefox && !!CHROME_CLIENT_ID && !!ext?.identity?.getAuthToken && !!ext?.runtime?.getManifest?.()?.oauth2;
 export const builtinAvailable = () => !!WEB_CLIENT_ID || chromeNative();
+export const webClientId = () => WEB_CLIENT_ID;
 
 // Which client a given auth record uses.
 export function clientFor(a) {

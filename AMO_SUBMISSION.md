@@ -50,3 +50,6 @@ Third-party library: `vendor/purify.es.mjs` is DOMPurify 3.2.6, unmodified, from
 
 ## After the add-on ID change
 The Firefox add-on ID is now `tempo-calendar@nemo`, which changes the Firefox sign-in redirect address. If you already set up a Google OAuth client, open Tempo → Settings → Google Calendar → Manual setup, copy the redirect URI shown there, and add it to your OAuth client's *Authorized redirect URIs* in Google Cloud.
+
+### Optional permissions (reviewer note)
+`optional_host_permissions` (graph.microsoft.com, *.icloud.com, https://*/*) are requested at runtime **only** when the user adds an Outlook, iCloud or calendar-link (.ics) source in Settings → Other calendars. The broad https pattern is needed because a calendar link can be on any host; Tempo requests just that one origin (`permissions.request({origins:[<origin>/*]})`).

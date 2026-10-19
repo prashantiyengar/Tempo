@@ -219,3 +219,111 @@ console.log('new tests passed');
   assert.match(ss[1].label, /page 54-/);
   console.log('partial:', se.map((c) => c.label.replace('Pride and Prejudice ', '')).join(' | '), '||', ss.map((c) => c.label.replace('Pride and Prejudice ', '')).join(' | '));
 }
+
+// 15. Repeating tasks
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz };
+  const wk = { id: 'r1', title: 'Exercise', kind: 'generic', rank: 2, repeat: { every: 'week', minutes: 180, count: 3 }, repeatStart: now, created: now, deadline: 0 };
+  let { tasks } = S.rescheduleAll([wk], [], s2, now);
+  const ss = S.sessions(tasks[0]);
+  const byWeek = {};
+  for (const c of ss) byWeek[c.pk] = (byWeek[c.pk] || 0) + c.minutes;
+  assert.deepEqual(Object.values(byWeek), [180, 180, 180], 'three weeks of 3h: ' + JSON.stringify(byWeek));
+  assert.match(ss[0].label, /^Exercise · week of 19 Oct 1\/3$/);
+  const daily = { id: 'r2', title: 'Read', kind: 'generic', rank: 2, repeat: { every: 'day', minutes: 30, until: T.atTime('2026-10-25', '12:00', tz), days: [1, 2, 3, 4, 5] }, repeatStart: now, created: now };
+  ({ tasks } = S.rescheduleAll([daily], [], s2, now));
+  const ds = S.sessions(tasks[0]);
+  assert.equal(ds.length, 5, 'weekdays Mon–Fri only');
+  assert.ok(ds.every((c) => c.minutes === 30));
+  assert.match(ds[0].label, /^Read · Mon 19 Oct$/);
+  // mark one done, re-plan: that day's session stays done, others keep their ids
+  const ids = ds.map((c) => c.id);
+  const d2 = S.rescheduleAll([S.markDone(tasks[0], ids[1])], [], s2, now).tasks[0];
+  assert.deepEqual(S.sessions(d2).map((c) => c.id), ids);
+  console.log('repeat:', ss.map((c) => c.label).slice(0, 4).join(' | '), '||', ds.map((c) => c.label).join(' | '));
+}
+
+// 16. Category time preference, daily cap, safety margin
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz, bounds: { start: '08:00', end: '20:00', days: [1, 2, 3, 4, 5] },
+    categories: [{ id: 'st', name: 'Study', color: '#8e24aa', prefer: 'morning' }, { id: 'le', name: 'Leisure', color: '#f6bf26', prefer: 'evening' }] };
+  const st = { id: 'a', title: 'Study', kind: 'generic', rank: 1, totalMinutes: 240, categoryId: 'st', deadline: T.atTime('2026-10-23', '20:00', tz), created: 1 };
+  const le = { id: 'b', title: 'Guitar', kind: 'generic', rank: 2, totalMinutes: 120, categoryId: 'le', deadline: T.atTime('2026-10-23', '20:00', tz), created: 2 };
+  const { tasks } = S.rescheduleAll([st, le], [], s2, now);
+  for (const c of S.sessions(tasks[0])) assert.ok(T.minutesOfDay(c.start, tz) < 12 * 60, 'study in the morning ' + f(c.start));
+  for (const c of S.sessions(tasks[1])) assert.ok(T.minutesOfDay(c.start, tz) >= 17 * 60, 'guitar in the evening ' + f(c.start));
+  // daily cap 2h across both tasks
+  const capped = S.rescheduleAll([st, le], [], { ...s2, dailyCapMinutes: 120 }, now).tasks;
+  const perDay = {};
+  for (const t of capped) for (const c of S.sessions(t)) { const k = T.dayKey(c.start, tz); perDay[k] = (perDay[k] || 0) + c.minutes; }
+  assert.ok(Object.values(perDay).every((m) => m <= 120), 'cap: ' + JSON.stringify(perDay));
+  // margin: 2 days early; a big task that runs into the margin is flagged late, not a problem
+  const big = { id: 'c', title: 'Report', kind: 'generic', rank: 1, totalMinutes: 60 * 40, marginDays: 2, deadline: T.atTime('2026-10-23', '20:00', tz), created: 1 };
+  const r = S.rescheduleAll([big], [], s2, now);
+  assert.equal(r.problems.length, 0);
+  assert.ok(r.tasks[0].lastPlan.late > 0, 'some sessions inside the safety margin');
+  const small = S.rescheduleAll([{ ...big, totalMinutes: 300 }], [], s2, now).tasks[0];
+  assert.equal(small.lastPlan.late, 0);
+  console.log('prefs/cap/margin ok:', JSON.stringify(perDay), 'late', r.tasks[0].lastPlan.late);
+}
+
+// 17. Prerequisites and projects with ordered steps; rank inheritance
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz, projects: [{ id: 'p1', name: 'Thesis', sequential: true }] };
+  const dl = T.atTime('2026-10-30', '17:00', tz);
+  const A = { id: 'A', title: 'Outline', kind: 'generic', rank: 5, totalMinutes: 120, deadline: dl, created: 1, projectId: 'p1', projectStep: 1 };
+  const B = { id: 'B', title: 'Draft', kind: 'generic', rank: 1, totalMinutes: 180, deadline: dl, created: 2, projectId: 'p1', projectStep: 2 };
+  const X = { id: 'X', title: 'Other', kind: 'generic', rank: 3, totalMinutes: 240, deadline: dl, created: 3 };
+  const C2 = { id: 'C', title: 'Polish', kind: 'generic', rank: 2, totalMinutes: 60, deadline: dl, created: 4, after: ['X'] };
+  const { tasks } = S.rescheduleAll([A, B, X, C2], [], s2, now);
+  const get = (id) => S.sessions(tasks.find((t) => t.id === id));
+  const end = (id) => Math.max(...get(id).map((c) => c.end)), start = (id) => Math.min(...get(id).map((c) => c.start));
+  assert.ok(start('B') >= end('A'), 'Draft after Outline');
+  assert.ok(start('C') >= end('X'), 'Polish after Other');
+  assert.ok(start('A') < start('X'), 'Outline inherits Draft’s rank 1 and goes before rank-3 Other');
+  console.log('deps ok: A', f(start('A')), 'B', f(start('B')), 'X', f(start('X')), 'C', f(start('C')));
+}
+
+// 18. What moved: a new rank-1 task pushes a rank-3 task later
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz };
+  const dl = T.atTime('2026-10-30', '17:00', tz);
+  const low = { id: 'L', title: 'Low', kind: 'generic', rank: 3, totalMinutes: 120, deadline: dl, created: 1 };
+  const r1 = S.rescheduleAll([low], [], s2, now);
+  const top = { id: 'H', title: 'High', kind: 'generic', rank: 1, totalMinutes: 180, deadline: dl, created: 2 };
+  const r2 = S.rescheduleAll([...r1.tasks, top], [], s2, now);
+  assert.equal(r2.moves.length, 1);
+  assert.equal(r2.moves[0].taskId, 'L');
+  console.log('moves:', r2.moves.map((m) => `${m.title} next ${f(m.nextFrom)} -> ${f(m.nextTo)}`).join(', '));
+}
+
+// 19. Changing reading speed keeps pages already read
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz };
+  const t = { id: 'bk', title: 'Book', kind: 'reading', rank: 1, reading: { pages: 60, startPage: 1, speed: 15, unit: 'pph', labels: 'actual' }, deadline: T.atTime('2026-10-30', '17:00', tz), created: 1 };
+  let x = S.rescheduleAll([t], [], s2, now).tasks[0];
+  x = S.markDone(x, S.sessions(x)[0].id);
+  assert.match(S.sessions(x)[1].label, /page 16-30/);
+  x = S.withReadingSpeed(x, { ...x.reading, speed: 10 });
+  x = S.rescheduleAll([x], [], s2, now).tasks[0];
+  const ss = S.sessions(x);
+  assert.match(ss[0].label, /page 1-15/);
+  assert.match(ss[1].label, /page 16-/);
+  assert.equal(Math.round(ss.slice(1).reduce((a, c) => a + c.minutes, 0)), 270, '45 pages at 10/h');
+  assert.equal(S.learnedSpeed({ speedLog: [{ pages: 5, minutes: 30 }, { pages: 6, minutes: 30 }] }), 11.1);
+  console.log('speed change ok:', ss.map((c) => c.label.replace('Book ', '')).join(' | '));
+}
+
+// 20. ICS parsing (calendar links / iCloud): time zones, all-day, weekly repeats with an exception
+{
+  const AC = await import('../src/js/accounts.js');
+  const ics = `BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a1\r\nSUMMARY:Choir\r\nLOCATION:St. Mary's Hall\r\nDTSTART;TZID=Europe/Berlin:20261020T190000\r\nDTEND;TZID=Europe/Berlin:20261020T203000\r\nRRULE:FREQ=WEEKLY;COUNT=4\r\nEXDATE;TZID=Europe/Berlin:20261027T190000\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:a2\r\nSUMMARY:Holiday\r\nDTSTART;VALUE=DATE:20261023\r\nDTEND;VALUE=DATE:20261024\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:a3\r\nSUMMARY:Call with a very long\r\n  title\r\nDTSTART:20261021T080000Z\r\nDURATION:PT45M\r\nEND:VEVENT\r\nEND:VCALENDAR`;
+  const evs = AC.icsToEvents(ics, { id: 'acc', type: 'ics' }, { id: 'ics' }, T.atTime('2026-10-19', '00:00', tz), T.atTime('2026-11-30', '00:00', tz), tz);
+  const choir = evs.filter((e) => e.summary === 'Choir').map((e) => T.toDTInput(Date.parse(e.start.dateTime), tz));
+  assert.deepEqual(choir, ['2026-10-20T19:00', '2026-11-03T19:00', '2026-11-10T19:00']);
+  assert.equal(evs.find((e) => e.summary === 'Holiday').start.date, '2026-10-23');
+  const call = evs.find((e) => e.summary.startsWith('Call'));
+  assert.equal(call.summary, 'Call with a very long title');
+  assert.equal(Date.parse(call.end.dateTime) - Date.parse(call.start.dateTime), 45 * 60000);
+  console.log('ics ok:', choir.join(', '));
+}

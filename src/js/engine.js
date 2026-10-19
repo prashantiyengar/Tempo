@@ -3,6 +3,7 @@
 import * as T from './tz.js';
 import * as S from './scheduler.js';
 import * as G from './gcal.js';
+import { externalEvents } from './accounts.js';
 import { expand } from './rrule.js';
 import { get, set } from './storage.js';
 
@@ -169,6 +170,13 @@ function isBusy(ev, state, tz) {
   return true;
 }
 
+// Events at a physical place get a travel buffer before and after (online meetings don't).
+export const hasPlace = (ev) => !!ev?.location && !ev.start?.date && !/^(https?:|www\.)|zoom|meet\.google|teams\.|microsoft teams|webex|skype|whereby|online|virtual|phone|call/i.test(ev.location);
+export function travelBlocks(ev, iv, minutes) {
+  if (!minutes || !hasPlace(ev)) return [];
+  return [{ start: iv.start - minutes * T.MIN, end: iv.start }, { start: iv.end, end: iv.end + minutes * T.MIN }];
+}
+
 export async function busyIntervals(state, from, to) {
   const tz = state.settings.tz;
   const busyCals = state.settings.busyCalendars;
@@ -178,7 +186,10 @@ export async function busyIntervals(state, from, to) {
     try { gEvents = await googleEvents(state, from, to, { calendars: cals }); } catch (e) { console.warn('busy fetch failed', e); throw e; }
   }
   const local = (busyCals && !busyCals.includes(LOCAL_CAL)) ? [] : expandLocal(state.localEvents, from, to, tz);
-  const list = [...gEvents, ...local].filter((e) => isBusy(e, state, tz)).map((e) => interval(e, tz));
+  let ext = [];
+  try { ext = (await externalEvents(state, from, to)).filter((e) => e._busy); } catch (e) { console.warn('Tempo: other calendars', e); }
+  const travel = +state.settings.travelMinutes || 0;
+  const list = [...gEvents, ...local, ...ext].filter((e) => isBusy(e, state, tz)).flatMap((e) => { const iv = interval(e, tz); return [iv, ...travelBlocks(e, iv, travel)]; });
   return { busy: S.merge(list.map(({ start, end }) => ({ start, end }))), gEvents, local };
 }
 
@@ -191,10 +202,10 @@ export function horizon(state, now) {
 export async function reschedule(state, now = Date.now()) {
   const to = horizon(state, now);
   const { busy, gEvents, local } = await busyIntervals(state, now - T.DAY, to);
-  const { tasks, problems } = S.rescheduleAll(state.tasks, busy, state.settings, now);
+  const { tasks, problems, moves } = S.rescheduleAll(state.tasks, busy, state.settings, now);
   state.tasks = tasks;
   state.reminderQueue = buildReminderQueue(state, gEvents, local, now);
-  return { problems, busy };
+  return { problems, busy, moves };
 }
 
 export function chunkBody(task, sess, state) {
@@ -216,14 +227,18 @@ export function chunkBody(task, sess, state) {
     ] },
     extendedProperties: { private: { tempoTask: '1', taskId: task.id, chunkId: sess.id, tSeq: String(sess.index), tStatus: sess.kind, tRev: String(task.rev || task.created || 0),
       // partly done: credited work (Google merges private properties on patch, so clear them explicitly otherwise)
-      ...(sess.partial ? { tCredit: String(+(+sess.credit).toFixed(2)), tSlot: String(sess.slotMin || ''), tSq: sess.squeeze ? '1' : '' } : { tCredit: '', tSlot: '', tSq: '' }), ...encodeDef(task) } },
+      ...(sess.partial ? { tCredit: String(+(+sess.credit).toFixed(2)), tSlot: String(sess.slotMin || ''), tSq: sess.squeeze ? '1' : '' } : { tCredit: '', tSlot: '', tSq: '' }),
+      // period of a repeating task, pages a reading session covered, minutes actually spent (timer)
+      tPk: sess.pk || '', tPages: sess.pagesDone != null ? String(sess.pagesDone) : '', tAct: sess.actualMin != null ? String(sess.actualMin) : '',
+      ...encodeDef(task) } },
   };
 }
 
 // ---------- Task definitions stored on Google (so any browser / a fresh install can rebuild the task list) ----------
 const DEF_FIELDS = ['id', 'title', 'kind', 'rank', 'totalMinutes', 'reading', 'deadline', 'earliestStart', 'chunkMinutes', 'minChunkMinutes',
   'maxPerDayMinutes', 'breakMinutes', 'wiggleMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notes', 'created', 'rev', 'calendarId',
-  'categoryId', 'categoryName', 'categoryColor', 'categoryIcon', 'periodId', 'periodName', 'periodRules'];
+  'categoryId', 'categoryName', 'categoryColor', 'categoryIcon', 'periodId', 'periodName', 'periodRules',
+  'repeat', 'repeatStart', 'marginDays', 'after', 'projectId', 'projectName', 'projectStep', 'speedLog', 'prefer'];
 const PART = 900; // Google allows 1024 chars per extended-property value
 
 export function encodeDef(task) {
@@ -288,6 +303,9 @@ export function taskFromEvents(taskId, events, calId, settings, now = Date.now()
     // Old-version sessions carry no planning settings, so keep their exact times (pinned) instead of re-planning.
     const status = p.tStatus || (/^✓/.test(ev.summary || '') ? 'done' : def.legacy && c.start >= now ? 'pinned' : 'planned');
     if (p.tCredit != null && p.tCredit !== '' && status === 'done') Object.assign(c, { credit: +p.tCredit, slotMin: +p.tSlot || undefined, squeeze: p.tSq === '1', partial: true });
+    if (p.tPk) c.pk = p.tPk;
+    if (p.tPages) c.pagesDone = +p.tPages;
+    if (p.tAct) c.actualMin = +p.tAct;
     if (status === 'done' || status === 'pinned') frozen.push({ ...c, status });
     else if (c.start < now && settings.assumePastDone) frozen.push({ ...c, status: 'done', auto: true });
     else planned.push(c);
@@ -482,13 +500,25 @@ export async function syncTasks(state, apply, onProgress) {
   return recordSync(state, apply, { ok: true, ...base });
 }
 
-// ---------- Categories and time periods shared between devices ----------
-// They live in one hidden, all-day "Tempo settings" event on your primary calendar (private properties, dated
-// 1 Jan 2000 so it never shows up in your week). Last writer wins; a device that has never synced adopts what's
-// there and adds only categories it has that Google doesn't.
+// ---------- Settings shared between devices ----------
+// Categories, time periods, projects, work hours, limits, notification choices and the recent history live in one
+// hidden all-day "Tempo settings" event on your primary calendar (private properties, dated 1 Jan 2000 so it never
+// shows up in your week). Each setting merges on its own: what you changed here since the last sync wins, the rest
+// comes from Google. A device syncing for the first time keeps its own settings where Google only has defaults.
 const SHARED_PART = 450;
-const sharedOf = (s) => ({ categories: (s.categories || []).map(({ id, name, color, icon }) => ({ id, name, color, icon: icon || '' })), periods: s.periods || [] });
-const hashOf = (o) => JSON.stringify(o);
+export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bounds', 'overflowBounds', 'chunkMinutes', 'minChunkMinutes', 'breakMinutes',
+  'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
+  'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
+  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId'];
+const normCat = ({ id, name, color, icon, prefer }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}) });
+function sharedOf(s) {
+  const o = {};
+  for (const k of SHARED_KEYS) if (s[k] !== undefined) o[k] = k === 'categories' ? (s.categories || []).map(normCat) : s[k];
+  return o;
+}
+const hashOf = (o) => JSON.stringify(o ?? null);
+const isDefault = (k, v) => k === 'categories'
+  ? false : hashOf(v) === hashOf(S.DEFAULT_SETTINGS[k]);
 const isBuiltin = (c) => S.DEFAULT_SETTINGS.categories.some((d) => d.id === c.id && d.name === c.name && d.color === c.color && (d.icon || '') === (c.icon || ''));
 export function sharedDirty(state) { return hashOf(sharedOf(state.settings)) !== state.settings.sharedHash; }
 function encodeShared(obj, rev) {
@@ -503,7 +533,44 @@ function decodeShared(p) {
   let json = ''; for (let i = 0; i < n; i++) { if (p['s_' + i] == null) return null; json += p['s_' + i]; }
   try { return JSON.parse(json); } catch { return null; }
 }
-// Returns { changed } — true when this device took on categories/periods from Google.
+const mergeHistory = (a = [], b = []) => {
+  const m = new Map();
+  for (const h of [...a, ...b]) if (h?.id) m.set(h.id, h);
+  return [...m.values()].sort((x, y) => (x.at || 0) - (y.at || 0)).slice(-250);
+};
+// Merge Google's copy into this device's. `base` = what both had at the last sync (null if never synced).
+export function mergeShared(local, remote, base) {
+  const out = {};
+  let keptLocal = false;
+  for (const k of new Set([...Object.keys(local), ...Object.keys(remote)])) {
+    const l = local[k], r = remote[k];
+    if (r === undefined) { out[k] = l; if (l !== undefined) keptLocal = true; continue; }
+    if (l === undefined) { out[k] = r; continue; }
+    if (k === 'history') { out[k] = mergeHistory(r, l); if (hashOf(out[k]) !== hashOf(r)) keptLocal = true; continue; }
+    const changedHere = base ? hashOf(l) !== hashOf(base[k]) : false;
+    if (k === 'categories') {
+      if (!base) {
+        // first sync: keep this device's customised categories where Google only has built-in/no-icon ones
+        const cats = r.map((rc) => { const lc = l.find((c) => c.id === rc.id); if (lc && hashOf(lc) !== hashOf(rc) && ((isBuiltin(rc) && !isBuiltin(lc)) || (!rc.icon && lc.icon))) { keptLocal = true; return lc; } return rc; });
+        const extra = l.filter((c) => !r.some((rc) => rc.id === c.id || rc.name.toLowerCase() === c.name.toLowerCase()));
+        if (extra.length) keptLocal = true;
+        out[k] = [...cats, ...extra];
+      } else if (changedHere) {
+        const byId = new Map(r.map((c) => [c.id, c]));
+        const baseIds = new Set((base[k] || []).map((c) => c.id));
+        for (const c of l) byId.set(c.id, c);
+        for (const c of base[k] || []) if (!l.some((x) => x.id === c.id)) byId.delete(c.id); // deleted here
+        for (const c of r) if (!baseIds.has(c.id) && !byId.has(c.id)) byId.set(c.id, c); // added elsewhere
+        out[k] = [...byId.values()]; keptLocal = true;
+      } else out[k] = r;
+      continue;
+    }
+    if (changedHere || (!base && isDefault(k, r) && !isDefault(k, l))) { out[k] = l; if (hashOf(l) !== hashOf(r)) keptLocal = true; }
+    else out[k] = r;
+  }
+  return { merged: out, push: keptLocal };
+}
+// Returns { changed } — true when this device took on settings from Google.
 export async function syncShared(state, { force = false } = {}) {
   const s = state.settings;
   if (!connected(state) || (!force && !sharedDirty(state))) return { changed: false };
@@ -513,46 +580,29 @@ export async function syncShared(state, { force = false } = {}) {
   const remote = ev ? decodeShared(ev.extendedProperties.private) : null;
   const remoteRev = ev ? +ev.extendedProperties.private.sRev || 0 : 0;
   const local = sharedOf(s);
-  const dirty = sharedDirty(state);
-  const neverSynced = !s.sharedRev;
-  let next = local, changed = false, push = false;
-  if (remote && remoteRev > (s.sharedRev || 0) && (!dirty || neverSynced)) {
-    // Newer on Google: adopt it (a device that never synced keeps its extra categories and shares them).
-    const extra = neverSynced ? local.categories.filter((c) => !remote.categories.some((r) => r.id === c.id || r.name.toLowerCase() === c.name.toLowerCase())) : [];
-    // First sync of a device that already had customised categories: keep its version where Google only has the
-    // untouched built-in one, or has no icon where this device has one.
-    let kept = 0;
-    const cats = remote.categories.map((r) => {
-      const l = neverSynced && local.categories.find((c) => c.id === r.id);
-      if (l && hashOf(l) !== hashOf(r) && ((isBuiltin(r) && !isBuiltin(l)) || (!r.icon && l.icon))) { kept++; return l; }
-      return r;
-    });
-    next = { categories: [...cats, ...extra], periods: remote.periods?.length || !neverSynced ? remote.periods : local.periods };
-    changed = hashOf(next) !== hashOf(local);
-    push = extra.length > 0 || kept > 0;
-  } else if (remote && remoteRev > (s.sharedRev || 0)) {
-    // Changed both here and elsewhere: merge by id, this device's version of a category wins.
-    const byId = new Map(remote.categories.map((c) => [c.id, c]));
-    for (const c of local.categories) byId.set(c.id, c);
-    next = { categories: [...byId.values()], periods: local.periods };
-    changed = hashOf(next) !== hashOf(local);
-    push = true;
-  } else if (!remote || dirty) push = true;
-  if (changed) { s.categories = next.categories; s.periods = next.periods; }
+  const base = s.sharedBase || null;
+  let next = local, push = false;
+  if (!remote) push = true;
+  else if (remoteRev > (s.sharedRev || 0) || !base) ({ merged: next, push } = mergeShared(local, remote, base));
+  else push = hashOf(local) !== hashOf(base);
+  const changed = hashOf(next) !== hashOf(local);
+  if (changed) for (const k of Object.keys(next)) s[k] = next[k];
   let rev = remoteRev;
   if (push) {
     rev = Math.max(Date.now(), remoteRev + 1);
+    const priv = encodeShared(next, rev);
     const body = {
-      summary: 'Tempo settings (categories) — please keep', description: 'Used by Tempo Calendar to share your categories and time periods between devices.',
+      summary: 'Tempo settings — please keep', description: 'Used by Tempo Calendar to share your categories, work hours and other settings between devices.',
       start: { date: '2000-01-01' }, end: { date: '2000-01-02' }, transparency: 'transparent', visibility: 'private',
-      reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: encodeShared(next, rev) },
+      reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv },
     };
-    if (ev) await G.patchEvent(cal, ev.id, { extendedProperties: { private: { ...Object.fromEntries(Object.keys(ev.extendedProperties.private).filter((k) => k.startsWith('s_')).map((k) => [k, ''])), ...body.extendedProperties.private } } });
+    if (ev) await G.patchEvent(cal, ev.id, { summary: body.summary, extendedProperties: { private: { ...Object.fromEntries(Object.keys(ev.extendedProperties.private).filter((k) => k.startsWith('s_')).map((k) => [k, ''])), ...priv } } });
     else await G.insertEvent(cal, body);
     for (const extraEv of found.filter((x) => x !== ev)) await G.deleteEvent(cal, extraEv.id); // stray duplicates
   }
   s.sharedRev = rev;
-  s.sharedHash = hashOf(sharedOf(s));
+  s.sharedBase = sharedOf(s);
+  s.sharedHash = hashOf(s.sharedBase);
   s.sharedSyncedAt = Date.now();
   return { changed };
 }

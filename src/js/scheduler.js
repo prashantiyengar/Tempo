@@ -35,7 +35,16 @@ export const DEFAULT_SETTINGS = {
   sessionWarn: 20,         // ask before creating a task with more sessions than this
   sessionMax: 50,          // never create more sessions (or repeating-event occurrences) than this
   maxSpanDays: 365,        // tasks and repeating events may not extend further than this (0 = no limit)
-  askCategory: true,       // ask once for a category when a new task has none       // smart allocation: also use free slots up to this much shorter than a session
+  askCategory: true,       // ask once for a category when a new task has none
+  timePrefs: { morning: ['07:00', '12:00'], afternoon: ['12:00', '17:00'], evening: ['17:00', '22:00'] }, // for category preferences
+  dailyCapMinutes: 0,      // most task time per day across all tasks (0 = no cap)
+  marginDays: 0,           // default safety margin: aim to finish this many days before a deadline
+  repeatHorizonDays: 28,   // repeating tasks are planned this far ahead
+  travelMinutes: 15,       // buffer before and after events that have a (physical) location; 0 = off
+  pomodoro: { work: 25, rest: 5 },
+  learnSpeed: true,        // adjust reading speed from what you report
+  projects: [],            // { id, name, color, sequential, deadline }
+  history: [],             // recent slips, skips, overruns (shared between devices)
   snapMinutes: 15,
   weekView: 'calendar',  // 'calendar' (Mon–Sun) or 'rolling' (today + 6 days)
   allDayBlocks: false,
@@ -99,12 +108,17 @@ const dur = (c) => Math.round((c.end - c.start) / T.MIN);
 // 'waived' = a done session the user removed without redoing the work: it counts as covered but takes no time.
 const takesTime = (c) => c.status !== 'waived';
 // Work credited by a frozen session: its length, or less when it was only partly done (`credit`, in work-minutes).
-const work = (c) => (c.credit != null && c.credit !== '' ? Math.max(0, +c.credit) : dur(c));
-export const doneWork = (task) => (task.frozen || []).reduce((a, c) => a + work(c), 0);
+// For reading tasks a session can record the pages it covered (`pagesDone`), which stays right when the reading
+// speed changes later.
+export const work = (c, task) => {
+  if (task?.kind === 'reading' && c.pagesDone != null && c.pagesDone !== '') return (Math.max(0, +c.pagesDone) / pagesPerHour(task.reading || {})) * 60;
+  return c.credit != null && c.credit !== '' ? Math.max(0, +c.credit) : dur(c);
+};
+export const doneWork = (task) => (task.frozen || []).reduce((a, c) => a + work(c, task), 0);
 // Time budget a frozen session used up. A partly done session whose shortfall is to be squeezed into the existing
 // slots (`squeeze`) uses up its whole original slot, so the remaining slots stay as they were and carry more work.
-const budget = (c) => (c.squeeze ? Math.max(+c.slotMin || dur(c), work(c)) : work(c));
-export const doneMinutes = (task) => (task.frozen || []).reduce((a, c) => a + budget(c), 0);
+const budget = (c, task) => (c.squeeze ? Math.max(+c.slotMin || dur(c), work(c, task)) : work(c, task));
+export const doneMinutes = (task) => (task.frozen || []).reduce((a, c) => a + budget(c, task), 0);
 
 export function merge(list) {
   const arr = list.filter((i) => i.end > i.start).map((i) => ({ start: i.start, end: i.end })).sort((a, b) => a.start - b.start);
@@ -155,15 +169,17 @@ export function subtract(wins, busy) {
 
 const ceilTo = (ms, step) => Math.ceil(ms / step) * step;
 
-function allocate(slots, need, p, tz, dayUsed) {
+// `dayUsed`: this task's minutes per day so far; `gUsed`: all tasks' minutes per day (for the daily total cap).
+function allocate(slots, need, p, tz, dayUsed, gUsed = {}) {
   const out = [];
   const used = { ...dayUsed };
+  const g = { ...gUsed };
   for (const s of slots) {
     if (need <= 0) break;
     let pos = ceilTo(s.start, 5 * T.MIN);
     while (need > 0) {
       const k = T.dayKey(pos, tz);
-      const cap = p.maxPerDay ? p.maxPerDay - (used[k] || 0) : Infinity;
+      const cap = Math.min(p.maxPerDay ? p.maxPerDay - (used[k] || 0) : Infinity, p.dayCap ? p.dayCap - (g[k] || 0) : Infinity);
       let len = Math.floor(Math.min(p.chunk, need, (s.end - pos) / T.MIN, cap));
       if (len <= 0 || len < Math.min(p.minChunk, need)) break;
       // Don't leave a tiny leftover session: absorb it into this one if it stays within the wiggle room.
@@ -171,6 +187,7 @@ function allocate(slots, need, p, tz, dayUsed) {
       if (rest > 0 && rest < Math.max(15, p.wiggle || 0) && len + rest <= p.chunk + (p.wiggle || 0) && pos + (len + rest) * T.MIN <= s.end && len + rest <= cap) len += rest;
       out.push({ start: pos, end: pos + len * T.MIN });
       used[k] = (used[k] || 0) + len;
+      g[k] = (g[k] || 0) + len;
       need -= len;
       pos += (len + p.breakMin) * T.MIN;
     }
@@ -187,48 +204,127 @@ function perDay(chunks, tz) {
 let idSeq = 0;
 export const newId = (p = 'id') => `${p}${Date.now().toString(36)}${(idSeq++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
+export function intersect(a, b) {
+  const out = [];
+  let j = 0;
+  for (const x of a) {
+    while (j < b.length && b[j].end <= x.start) j++;
+    for (let k = j; k < b.length && b[k].start < x.end; k++) {
+      const s0 = Math.max(x.start, b[k].start), e0 = Math.min(x.end, b[k].end);
+      if (e0 > s0) out.push({ start: s0, end: e0 });
+    }
+  }
+  return out;
+}
+
+// Preferred time of day for the task's category (e.g. Study → morning), as day-bounds style rules.
+export function preferredWindow(task, s) {
+  const cat = (s.categories || []).find((c) => c.id === task.categoryId);
+  const key = task.prefer || cat?.prefer;
+  const w = key && (s.timePrefs || DEFAULT_SETTINGS.timePrefs)[key];
+  return w ? { start: w[0], end: w[1], days: [0, 1, 2, 3, 4, 5, 6] } : null;
+}
+// Safety margin: aim to finish this many days before the deadline (task setting, else the default).
+export const marginDays = (task, s) => Math.max(0, +(task.marginDays != null && task.marginDays !== '' ? task.marginDays : s.marginDays) || 0);
+
 // Plan one task into the given free time. Returns planned chunks + feasibility info.
-export function planOne(task, { occupied, now, settings, horizonDays = 366 }) {
+// Passes, each adding to the previous: preferred time of day before the target date (deadline minus safety
+// margin) → any time before the target → inside the safety margin → shorter sessions to meet the deadline →
+// after the deadline (flagged overdue).
+export function planOne(task, { occupied, now, settings, horizonDays = 366, gUsed = {} }) {
   const tz = settings.tz;
-  const p = params(task, settings);
+  const p = { ...params(task, settings), dayCap: +settings.dailyCapMinutes || 0 };
   const workLeft = totalMinutes(task) - doneWork(task);
   let remaining = totalMinutes(task) - doneMinutes(task);
   if (workLeft <= 0) remaining = 0;
   else if (remaining < Math.min(p.minChunk, workLeft)) remaining = workLeft; // nothing left to squeeze into: add time
-  const res = { planned: [], shortfall: 0, overdue: 0, suggestedDeadline: null, fitsIgnoringBounds: null, remaining: Math.max(0, workLeft) };
+  const res = { planned: [], shortfall: 0, overdue: 0, suggestedDeadline: null, fitsIgnoringBounds: null, remaining: Math.max(0, workLeft), late: 0, finish: null };
   if (remaining <= 0) return res;
   const from = Math.max(ceilTo(now, 5 * T.MIN), task.earliestStart || 0);
   const deadline = task.deadline || from + 30 * T.DAY;
+  const soft = Math.max(from, deadline - marginDays(task, settings) * T.DAY);
   const busy = merge([...occupied, ...(task.skipped || [])]);
-  const dayUsed = perDay((task.frozen || []).filter(takesTime), tz);
-  const free = subtract(windows(from, deadline, p.bounds, tz), busy);
-
+  const frozenTT = (task.frozen || []).filter(takesTime);
+  const free = (a, b) => (b > a ? subtract(windows(a, b, p.bounds, tz), busy) : []);
   // Smart allocation: normally full-length sessions, but a free slot up to `wiggle` minutes shorter is used as well
   // (e.g. a 48-min gap for a 60-min session with 15 min wiggle room). Shorter sessions, down to the minimum,
   // are used only if that's what it takes to meet the deadline.
   const smart = { ...p, minChunk: Math.max(p.chunk - p.wiggle, Math.min(p.minChunk, p.chunk)) };
-  let inWindow = allocate(free, remaining, smart, tz, dayUsed);
-  if (inWindow.need > 0 && p.minChunk < p.chunk) inWindow = allocate(free, remaining, p, tz, dayUsed);
-  res.planned = inWindow.chunks;
-  if (inWindow.need > 0) {
-    res.shortfall = inWindow.need;
+  const pref = preferredWindow(task, settings);
+  const phases = [];
+  if (pref) phases.push({ wins: intersect(free(from, soft), windows(from, soft, pref, tz)), p: smart });
+  phases.push({ wins: free(from, soft), p: smart });
+  if (soft < deadline) phases.push({ wins: free(soft, deadline), p: smart, late: true });
+  if (p.minChunk < p.chunk) phases.push({ wins: free(from, deadline), p, short: true });
+  let need = remaining, chunks = [];
+  const gap = p.breakMin * T.MIN;
+  for (const ph of phases) {
+    if (need <= 0) break;
+    const avail = subtract(ph.wins, merge(chunks.map((c) => ({ start: c.start - gap, end: c.end + gap }))));
+    const r = allocate(avail, need, ph.p, tz, perDay([...frozenTT, ...chunks], tz), addDays(gUsed, chunks, tz));
+    chunks.push(...r.chunks.map((c) => (ph.late || c.end > soft ? { ...c, late: true } : c)));
+    need = r.need;
+  }
+  chunks.sort((a, b) => a.start - b.start);
+  res.planned = chunks;
+  res.late = chunks.filter((c) => c.late).length;
+  if (need > 0) {
+    res.shortfall = need;
     // What if we ignored day bounds?
     if (!task.ignoreBounds) {
-      const alt = allocate(subtract(windows(from, deadline, settings.overflowBounds, tz), busy), remaining, { ...p, bounds: settings.overflowBounds }, tz, dayUsed);
+      const alt = allocate(subtract(windows(from, deadline, settings.overflowBounds, tz), busy), remaining, { ...p, bounds: settings.overflowBounds }, tz, perDay(frozenTT, tz), gUsed);
       res.fitsIgnoringBounds = alt.need <= 0;
     }
     // Keep placing past the deadline (flagged overdue) so the plan is complete, and derive a suggested deadline.
     const later = allocate(
       subtract(windows(Math.max(from, deadline), deadline + horizonDays * T.DAY, p.bounds, tz), busy),
-      inWindow.need, smart, tz, perDay([...(task.frozen || []).filter(takesTime), ...inWindow.chunks], tz),
+      need, smart, tz, perDay([...frozenTT, ...chunks], tz), addDays(gUsed, chunks, tz),
     );
     res.overdue = later.chunks.length;
-    res.planned = [...inWindow.chunks, ...later.chunks.map((c) => ({ ...c, overdue: true }))];
+    res.planned = [...chunks, ...later.chunks.map((c) => ({ ...c, overdue: true, late: true }))];
     const last = res.planned[res.planned.length - 1];
     if (later.need <= 0 && last) res.suggestedDeadline = last.end;
   }
+  res.finish = res.planned.length ? res.planned[res.planned.length - 1].end : null;
   return res;
 }
+function addDays(m, chunks, tz) {
+  const o = { ...m };
+  for (const c of chunks) { const k = T.dayKey(c.start, tz); o[k] = (o[k] || 0) + dur(c); }
+  return o;
+}
+
+// ---------- Repeating tasks ("3 hours per week", "30 minutes daily") ----------
+// task.repeat = { every: 'day'|'week', minutes, days?: [weekdays] (daily only), until?: ms, count?: n }
+// Each period (day or week) is planned like a small task due at the period's end; missed time doesn't carry over.
+export function periodStart(ms, every, tz, weekStart = 1) {
+  const k = T.dayKey(ms, tz);
+  return every === 'week' ? T.startOfWeek(k, weekStart) : k;
+}
+export function repeatEnd(task, s) {
+  const r = task.repeat;
+  if (!r) return null;
+  const first = periodStart(task.repeatStart || task.created || Date.now(), r.every, s.tz, s.weekStart);
+  let end = r.until ? T.dayStart(T.addDays(T.dayKey(r.until, s.tz), 1), s.tz) : Infinity;
+  if (r.count) end = Math.min(end, T.dayStart(T.addDays(first, r.count * (r.every === 'week' ? 7 : 1)), s.tz));
+  return end;
+}
+export function periodsOf(task, s, from, to) {
+  const r = task.repeat;
+  const tz = s.tz, step = r.every === 'week' ? 7 : 1;
+  const firstKey = periodStart(task.repeatStart || task.created || from, r.every, tz, s.weekStart);
+  const end = Math.min(repeatEnd(task, s), to);
+  const out = [];
+  let k = periodStart(Math.max(from, T.dayStart(firstKey, tz)), r.every, tz, s.weekStart);
+  for (let i = 0; i < 800; i++, k = T.addDays(k, step)) {
+    const a = T.dayStart(k, tz);
+    if (a >= end) break;
+    if (step === 1 && r.days?.length && !r.days.includes(T.weekday(k))) continue;
+    out.push({ key: k, start: a, end: Math.min(T.dayStart(T.addDays(k, step), tz), repeatEnd(task, s)) });
+  }
+  return out;
+}
+const inPeriod = (c, per) => c.start >= per.start && c.start < per.end;
 
 export function sortTasks(tasks) {
   return [...tasks].sort((a, b) => (a.rank ?? 5) - (b.rank ?? 5) || (a.deadline || Infinity) - (b.deadline || Infinity) || (a.created || 0) - (b.created || 0));
@@ -249,38 +345,132 @@ export function freezePast(task, now, settings) {
   return { ...task, frozen, planned: keep, orphanGids };
 }
 
+// Prerequisites: explicit "starts after" tasks, plus the previous step when the task belongs to a project whose
+// steps run in order.
+export function prerequisites(task, tasks, s) {
+  const out = new Set((task.after || []).filter(Boolean));
+  const proj = task.projectId && (s.projects || []).find((x) => x.id === task.projectId);
+  if (proj?.sequential) {
+    const sib = tasks.filter((t) => t.projectId === task.projectId && !t.archived)
+      .sort((a, b) => (a.projectStep ?? 1e9) - (b.projectStep ?? 1e9) || (a.created || 0) - (b.created || 0));
+    const i = sib.findIndex((t) => t.id === task.id);
+    if (i > 0) out.add(sib[i - 1].id);
+  }
+  out.delete(task.id);
+  return [...out];
+}
+
 // Full reschedule of every active task. `busy` is a list of {start,end} from calendars.
 // Higher-ranked tasks (lower number) are placed first, so they take the earliest free time and lower-ranked
-// tasks get pushed to later slots automatically.
+// tasks get pushed to later slots automatically. A task waits for its prerequisites, and a prerequisite inherits
+// the urgency (rank) of the tasks waiting for it. A daily total cap is shared by all tasks.
 export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
   let list = tasks.map((t) => (t.archived ? t : freezePast(t, now, settings)));
   const fixed = [];
+  const tz = settings.tz;
   // Task sessions keep the break before and after them for every other task too.
   const gap = (+settings.breakMinutes || 0) * T.MIN;
   const pad = (c) => ({ start: c.start - gap, end: c.end + gap });
-  for (const t of list) if (!t.archived) for (const c of t.frozen || []) if (c.end > now && takesTime(c)) fixed.push(pad(c));
+  let gUsed = {};
+  for (const t of list) if (!t.archived) for (const c of t.frozen || []) if (takesTime(c)) {
+    if (c.end > now) fixed.push(pad(c));
+    gUsed = addDays(gUsed, [c], tz);
+  }
   let occupied = merge([...busy, ...fixed]);
   const problems = [];
   const byId = new Map(list.map((t) => [t.id, t]));
-  for (const t of sortTasks(list.filter((t) => !t.archived))) {
-    const r = planOne(t, { occupied, now, settings });
-    // Keep chunk ids / google ids stable by ordinal so syncing patches instead of re-creating.
-    const prev = t.planned || [];
-    const planned = r.planned.map((c, i) => ({
-      ...c, id: prev[i]?.id || newId('c'), gid: prev[i]?.gid, syncHash: prev[i]?.syncHash,
-    }));
-    const orphanGids = [...(t.orphanGids || []), ...prev.slice(planned.length).map((c) => c.gid).filter(Boolean)];
-    const nt = { ...t, planned, orphanGids, lastPlan: { shortfall: r.shortfall, suggestedDeadline: r.suggestedDeadline, fitsIgnoringBounds: r.fitsIgnoringBounds, remaining: r.remaining, at: now } };
-    byId.set(t.id, nt);
-    occupied = merge([...occupied, ...planned.map(pad)]);
-    if (r.shortfall > 0) problems.push({ taskId: t.id, ...nt.lastPlan });
+  const active = list.filter((t) => !t.archived);
+  // Order: by effective rank, never before a prerequisite.
+  const deps = new Map(active.map((t) => [t.id, prerequisites(t, active, settings).filter((d) => byId.has(d) && !byId.get(d).archived)]));
+  const eff = new Map(active.map((t) => [t.id, t.rank ?? 5]));
+  for (let pass = 0; pass < active.length; pass++) {
+    let changed = false;
+    for (const t of active) for (const d of deps.get(t.id)) if (eff.get(t.id) < eff.get(d)) { eff.set(d, eff.get(t.id)); changed = true; }
+    if (!changed) break;
+  }
+  const sorted = [...active].sort((a, b) => eff.get(a.id) - eff.get(b.id) || (a.deadline || Infinity) - (b.deadline || Infinity) || (a.created || 0) - (b.created || 0));
+  const order = [], placed = new Set();
+  while (order.length < sorted.length) {
+    const next = sorted.find((t) => !placed.has(t.id) && deps.get(t.id).every((d) => placed.has(d))) || sorted.find((t) => !placed.has(t.id));
+    order.push(next); placed.add(next.id);
+  }
+  const lastEnd = (t) => Math.max(0, ...[...(t.frozen || []).filter(takesTime), ...(t.planned || [])].map((c) => c.end));
+  for (const t0 of order) {
+    const waitFor = deps.get(t0.id).map((d) => byId.get(d)).filter(Boolean);
+    const after = waitFor.length ? Math.max(...waitFor.map(lastEnd)) : 0;
+    const t = after ? { ...t0, earliestStart: Math.max(t0.earliestStart || 0, after + gap) } : t0;
+    const prev = t0.planned || [];
+    let planned, lastPlan;
+    if (t.repeat) {
+      // Plan each upcoming period (day or week) of a repeating task on its own.
+      const pers = periodsOf(t, settings, now - 7 * T.DAY, now + (+settings.repeatHorizonDays || 28) * T.DAY).filter((x) => x.end > now);
+      planned = []; lastPlan = { shortfall: 0, remaining: 0, at: now, periods: [] };
+      let occ = occupied, g = gUsed;
+      for (const per of pers) {
+        const vt = { ...t, repeat: null, kind: 'generic', totalMinutes: t.repeat.minutes, marginDays: 0,
+          earliestStart: Math.max(per.start, t.earliestStart || 0), deadline: per.end,
+          frozen: (t.frozen || []).filter((c) => inPeriod(c, per)), planned: prev.filter((c) => c.pk === per.key) };
+        const r = planOne(vt, { occupied: occ, now, settings, horizonDays: 0, gUsed: g });
+        const mine = r.planned.filter((c) => !c.overdue).map((c) => ({ ...c, pk: per.key, late: undefined }));
+        planned.push(...mine);
+        occ = merge([...occ, ...mine.map(pad)]); g = addDays(g, mine, tz);
+        if (r.shortfall > 0) lastPlan.periods.push({ key: per.key, short: r.shortfall });
+        lastPlan.shortfall += r.shortfall; lastPlan.remaining += r.remaining;
+      }
+      lastPlan.finish = planned.length ? planned[planned.length - 1].end : null;
+    } else {
+      const r = planOne(t, { occupied, now, settings, gUsed });
+      planned = r.planned;
+      lastPlan = { shortfall: r.shortfall, suggestedDeadline: r.suggestedDeadline, fitsIgnoringBounds: r.fitsIgnoringBounds, remaining: r.remaining, at: now, late: r.late, finish: r.finish, waitingFor: waitFor.length ? waitFor.map((w) => w.id) : undefined };
+    }
+    // Keep chunk ids / google ids stable by ordinal (per period for repeating tasks) so syncing patches instead of re-creating.
+    const used = new Set();
+    const pool = (pk) => prev.filter((c) => (c.pk || null) === (pk || null) && !used.has(c.id));
+    const withIds = planned.map((c) => {
+      const old = pool(c.pk)[0];
+      if (old) used.add(old.id);
+      return { ...c, id: old?.id || newId('c'), gid: old?.gid, syncHash: old?.syncHash };
+    });
+    const orphanGids = [...(t0.orphanGids || []), ...prev.filter((c) => !used.has(c.id)).map((c) => c.gid).filter(Boolean)];
+    const nt = { ...t0, planned: withIds, orphanGids, lastPlan };
+    byId.set(t0.id, nt);
+    occupied = merge([...occupied, ...withIds.map(pad)]);
+    gUsed = addDays(gUsed, withIds, tz);
+    if (lastPlan.shortfall > 0 && !t0.repeat) problems.push({ taskId: t0.id, ...lastPlan });
   }
   list = list.map((t) => byId.get(t.id));
-  return { tasks: list, problems };
+  return { tasks: list, problems, moves: movesBetween(tasks, list, now) };
+}
+
+// Which tasks were pushed later by a re-plan: finish time or next session moved later by 10+ minutes.
+export function movesBetween(before, after, now = Date.now()) {
+  const out = [];
+  const nextOf = (t) => (t.planned || []).filter((c) => c.end > now).map((c) => c.start).sort((a, b) => a - b)[0] ?? null;
+  const finOf = (t) => Math.max(0, ...(t.planned || []).map((c) => c.end)) || null;
+  for (const a of after) {
+    const b = before.find((x) => x.id === a.id);
+    if (!b || a.archived) continue;
+    const f0 = finOf(b), f1 = finOf(a), n0 = nextOf(b), n1 = nextOf(a);
+    const later = (x, y) => x != null && y != null && y - x >= 10 * T.MIN;
+    if (later(f0, f1) || later(n0, n1)) {
+      out.push({ taskId: a.id, title: a.title, finishFrom: f0, finishTo: f1, nextFrom: n0, nextTo: n1,
+        oldSlots: (b.planned || []).filter((c) => c.end > now).map((c) => ({ start: c.start, end: c.end })) });
+    }
+  }
+  return out;
 }
 
 // All sessions of a task, ordered, with labels like "Pride and Prejudice page 47-66, task 1/10".
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WDS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export function periodLabel(key, every) {
+  if (!key) return '';
+  const { m, d } = T.parseKey(key);
+  return every === 'week' ? `week of ${d} ${MON[m - 1]}` : `${WDS[T.weekday(key)]} ${d} ${MON[m - 1]}`;
+}
+
 export function sessions(task) {
+  if (task.repeat) return repeatSessions(task);
   const all = [
     ...(task.frozen || []).map((c) => ({ ...c, kind: c.status })),
     ...(task.planned || []).map((c) => ({ ...c, kind: 'planned' })),
@@ -295,7 +485,7 @@ export function sessions(task) {
   let cum = 0, idx = 0;
   const out = [];
   for (const c of all) {
-    const mins = c.kind === 'planned' ? dur(c) * scale : work(c);
+    const mins = c.kind === 'planned' ? dur(c) * scale : work(c, task);
     if (!takesTime(c)) { cum += mins; continue; }
     idx++;
     const icon = task.categoryIcon ? `${task.categoryIcon} ` : '';
@@ -308,10 +498,32 @@ export function sessions(task) {
       label = `${icon}${task.title} page ${a}-${Math.max(a, b)}, task ${idx}/${N}${c.partial ? ' (partly done)' : ''}`;
       c.pages = [a, Math.max(a, b)];
     } else {
-      label = `${icon}${task.title}, task ${idx}/${N}${c.partial ? ` (${Math.round((work(c) / Math.max(1, +c.slotMin || dur(c))) * 100)}% done)` : ''}`;
+      label = `${icon}${task.title}, task ${idx}/${N}${c.partial ? ` (${Math.round((work(c, task) / Math.max(1, +c.slotMin || dur(c))) * 100)}% done)` : ''}`;
     }
     cum += mins;
     out.push({ ...c, index: idx, count: N, minutes: dur(c), work: mins, label, taskId: task.id });
+  }
+  return out;
+}
+
+// Repeating task: sessions numbered within their day or week, e.g. "Exercise · week of 19 Oct 2/3".
+function repeatSessions(task) {
+  const all = [
+    ...(task.frozen || []).map((c) => ({ ...c, kind: c.status })),
+    ...(task.planned || []).map((c) => ({ ...c, kind: 'planned' })),
+  ].sort((a, b) => a.start - b.start);
+  const icon = task.categoryIcon ? `${task.categoryIcon} ` : '';
+  const groups = new Map();
+  for (const c of all) if (takesTime(c)) { const k = c.pk || 'x'; groups.set(k, (groups.get(k) || 0) + 1); }
+  const seen = new Map();
+  const out = [];
+  for (const c of all) {
+    if (!takesTime(c)) continue;
+    const k = c.pk || 'x', n = groups.get(k), i = (seen.get(k) || 0) + 1;
+    seen.set(k, i);
+    const when = periodLabel(c.pk, task.repeat.every);
+    const label = `${icon}${task.title}${when ? ` · ${when}` : ''}${n > 1 ? ` ${i}/${n}` : ''}${c.partial ? ` (${Math.round((work(c, task) / Math.max(1, +c.slotMin || dur(c))) * 100)}% done)` : ''}`;
+    out.push({ ...c, index: i, count: n, minutes: dur(c), work: work(c, task), label, taskId: task.id });
   }
   return out;
 }
@@ -329,9 +541,12 @@ export function markUndone(task, chunkId) {
   };
 }
 
-export function markDone(task, chunkId) {
-  const c = (task.planned || []).find((x) => x.id === chunkId) || (task.frozen || []).find((x) => x.id === chunkId);
-  if (!c) return task;
+export function markDone(task, chunkId, { actualMin = null } = {}) {
+  const c0 = (task.planned || []).find((x) => x.id === chunkId) || (task.frozen || []).find((x) => x.id === chunkId);
+  if (!c0) return task;
+  // Reading: remember which pages this session covered, so a later change of reading speed doesn't shift them.
+  const pg = task.kind === 'reading' ? sessions(task).find((x) => x.id === chunkId)?.pages : null;
+  const c = { ...c0, pagesDone: pg ? pg[1] - pg[0] + 1 : undefined, actualMin: actualMin != null ? Math.round(actualMin) : c0.actualMin };
   return {
     ...task,
     planned: (task.planned || []).filter((x) => x.id !== chunkId),
@@ -386,18 +601,37 @@ export function waiveSession(task, chunkId) {
 // A session that was only partly done. `credit` = work done in work-minutes (for reading: pages / speed);
 // `start`/`end` = the time actually spent on it (shorter when something else took part of the slot);
 // `squeeze` = fit the unfinished work into the remaining sessions (true) or add time for it (false).
-export function markPartial(task, chunkId, { credit, start, end, squeeze = false }) {
+export function markPartial(task, chunkId, { credit, start, end, squeeze = false, pagesDone = null, actualMin = null }) {
   const c = (task.planned || []).find((x) => x.id === chunkId) || (task.frozen || []).find((x) => x.id === chunkId);
   if (!c) return task;
   const slotMin = +c.slotMin || dur(c);
   const nc = { ...c, start: start ?? c.start, end: end ?? c.end, status: 'done', auto: false, overdue: undefined, syncHash: null,
-    credit: Math.max(0, +credit || 0), slotMin, squeeze: !!squeeze, partial: true };
+    credit: Math.max(0, +credit || 0), slotMin, squeeze: !!squeeze, partial: true,
+    pagesDone: pagesDone != null ? Math.max(0, +pagesDone) : undefined, actualMin: actualMin != null ? Math.round(actualMin) : c.actualMin };
   return {
     ...task,
     planned: (task.planned || []).filter((x) => x.id !== chunkId),
     frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), nc],
   };
 }
+// Change a reading task's speed without shifting what's already been read: done sessions keep their pages.
+export function withReadingSpeed(task, reading) {
+  if (task.kind !== 'reading') return { ...task, reading };
+  const frozen = (task.frozen || []).map((c) => (c.status === 'done' || c.status === 'waived') && (c.pagesDone == null || c.pagesDone === '')
+    ? { ...c, pagesDone: +((work(c, task) / 60) * pagesPerHour(task.reading || {})).toFixed(2), syncHash: null } : c);
+  return { ...task, frozen, reading };
+}
+// Reading speed learned from what you reported: weighted towards recent sessions. Needs at least two reports
+// covering 30+ minutes (or one of an hour or more), so one distracted session doesn't swing the plan.
+export function learnedSpeed(task) {
+  const log = (task.speedLog || []).filter((x) => x.minutes >= 5 && x.pages > 0).slice(-8);
+  const mins = log.reduce((a, x) => a + x.minutes, 0);
+  if (!((log.length >= 2 && mins >= 30) || mins >= 60)) return null;
+  let w = 0, pph = 0;
+  log.forEach((x, i) => { const wt = x.minutes * (1 + i / 4); w += wt; pph += wt * (x.pages / x.minutes) * 60; });
+  return +(pph / w).toFixed(1);
+}
+
 // Work a session was meant to cover (work-minutes), e.g. to turn "7 of 15 pages" into credit.
 export const minutesForPages = (task, pages) => (pages / pagesPerHour(task.reading || {})) * 60;
 
@@ -406,8 +640,17 @@ export function addDoneBlock(task, start, end) {
   return { ...task, frozen: [...(task.frozen || []), { id: newId('c'), start, end, status: 'done', auto: false }] };
 }
 
-export function progress(task, now = Date.now()) {
+export function progress(task, now = Date.now(), settings = null) {
+  if (task.repeat) {
+    // The period (day/week) containing now, or the next one
+    const ss = sessions(task);
+    const cur = ss.find((c) => c.end > now)?.pk || ss[ss.length - 1]?.pk;
+    const mine = ss.filter((c) => c.pk === cur);
+    const total = task.repeat.minutes || 1;
+    const done = mine.filter((c) => c.kind === 'done' || c.kind === 'waived').reduce((a, c) => a + c.work, 0);
+    return { total, done: Math.min(total, done), pct: Math.min(100, Math.round((done / total) * 100)), period: cur };
+  }
   const total = totalMinutes(task);
-  const done = (task.frozen || []).filter((c) => c.status === 'done' || c.status === 'waived' || (c.status === 'pinned' && c.end <= now)).reduce((a, c) => a + work(c), 0);
+  const done = (task.frozen || []).filter((c) => c.status === 'done' || c.status === 'waived' || (c.status === 'pinned' && c.end <= now)).reduce((a, c) => a + work(c, task), 0);
   return { total, done: Math.min(total, done), pct: Math.min(100, Math.round((done / total) * 100)) };
 }

@@ -9,8 +9,11 @@ import * as X from './export.js';
 import * as A from './analysis.js';
 import { describe } from './rrule.js';
 import * as C from './categories.js';
+import * as AC from './accounts.js';
 import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
-import { $, $$, esc, el, toast, choose, popover, closePopover, download, modal, setHTML } from './ui.js';
+import { $, $$, esc, el, toast as uiToast, choose, popover, closePopover, download, modal, setHTML } from './ui.js';
+import * as RV from './review.js';
+import { parseTask } from './parse.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -25,6 +28,7 @@ const set = () => app.state.settings;
 // Context handed to dialogs
 const ctx = {
   get state() { return app.state; },
+  externalChanged() { AC.invalidateExternal(); render(); cycle(); },
   get lastBusy() { return app.lastBusy; },
   defaultCalendar() {
     const prim = (st().gmeta.calendars || []).find((c) => c.primary);
@@ -83,6 +87,13 @@ function range(view = app.view, cursor = app.cursor) {
   return { days: Array.from({ length: 42 }, (_, i) => T.addDays(a, i)), monthKey: first };
 }
 
+// Toasts after a change offer Undo.
+function toast(msg, opts = {}) {
+  const top = undoStack[undoStack.length - 1];
+  if (!opts.action && !opts.noUndo && top && Date.now() - top.at < 2500) return uiToast(msg, { ...opts, action: 'Undo', onAction: undo, ms: Math.max(opts.ms || 0, 6000) });
+  return uiToast(msg, opts);
+}
+
 function calColor(calId) {
   if (calId === E.LOCAL_CAL) return LOCAL_COLOR;
   return (st().gmeta.calendars || []).find((c) => c.id === calId)?.color || '#4f6bed';
@@ -93,7 +104,7 @@ function eventItem(ev) {
   const me = ev.attendees?.find((a) => a.self);
   const item = {
     key: `${ev._calId}|${ev.id}`, kind: 'event', title: ev.summary || '(No title)', ...iv,
-    color: ev.colorId ? G.EVENT_COLORS[ev.colorId] : calColor(ev._calId), ev,
+    color: ev._color || (ev.colorId ? G.EVENT_COLORS[ev.colorId] : calColor(ev._calId)), ev,
     editable: EV.canEdit(ev, st()), declined: me?.responseStatus === 'declined', tentative: me?.responseStatus === 'tentative',
     catId: C.eventCategoryId(ev, st().eventCats),
   };
@@ -125,7 +136,13 @@ async function collectItems(days) {
   const hidden = new Set(set().hiddenCalendars || []);
   const local = hidden.has(E.LOCAL_CAL) ? [] : E.expandLocal(st().localEvents, from, to, tz());
   if (C.adoptCategoriesFromEvents(set(), gev)) E.persist(st(), ['settings']);
-  const items = [...gev.map(eventItem), ...local.map(eventItem), ...(hidden.has('tasks') ? [] : chunkItems(from, to))];
+  let xev = [];
+  try {
+    // calendars shared between your accounts would show twice: drop copies of events already shown from Google
+    const uids = new Set(gev.map((e) => e.iCalUID).filter(Boolean));
+    xev = (await AC.externalEvents(st(), from, to)).filter((e) => e._show && !(e.iCalUID && uids.has(e.iCalUID)) && !e.extendedProperties?.private?.tempoTask);
+  } catch (e) { console.warn(e); }
+  const items = [...gev.map(eventItem), ...local.map(eventItem), ...xev.map(eventItem), ...(hidden.has('tasks') ? [] : chunkItems(from, to))];
   return items;
 }
 
@@ -192,7 +209,7 @@ function segMinutes(it, k) {
 }
 
 function itemClasses(it) {
-  return ['ev', it.kind === 'chunk' ? 'chunk' : '', it.status === 'done' ? 'done' : '', it.sess?.partial ? 'partial' : '', it.status === 'pinned' ? 'pinned' : '',
+  return ['ev', it.kind === 'chunk' ? 'chunk' : '', it.status === 'done' ? 'done' : '', it.sess?.partial ? 'partial' : '', it.sess?.late && it.status === 'planned' && !it.overdue ? 'late' : '', it.task?.repeat ? 'rep' : '', it.status === 'pinned' ? 'pinned' : '',
     it.overdue ? 'overdue' : '', !it.editable ? 'ro' : '', it.declined ? 'declined' : '', it.tentative ? 'tentative' : ''].filter(Boolean).join(' ');
 }
 
@@ -270,6 +287,15 @@ function renderTimeGrid(days, items) {
       col.appendChild(node);
       } catch (err) { drawErrors.push([it.title, err]); }
     }
+    // travel buffers around events at a place
+    const trav = +set().travelMinutes || 0;
+    if (trav) for (const it of timed) {
+      if (it.kind !== 'event' || it.declined || !E.hasPlace(it.ev)) continue;
+      for (const b of E.travelBlocks(it.ev, it, trav)) {
+        const seg = segMinutes(b, k);
+        if (seg) col.appendChild(el(`<div class="travel" style="top:${(seg.s / 60) * hh}px;height:${Math.max(4, ((seg.e - seg.s) / 60) * hh)}px" title="Travel buffer (${trav} min)"><span>🚗</span></div>`));
+      }
+    }
     // deadline flags
     for (const t of deadlines) {
       try {
@@ -342,6 +368,7 @@ function renderSidebar() {
     ...(E.connected(st()) ? (st().gmeta.calendars || []) : []),
     { id: E.LOCAL_CAL, summary: 'Local (this browser)', color: LOCAL_COLOR },
     { id: 'tasks', summary: 'Task sessions', color: '#8a5cf6' },
+    ...AC.extCalendars().map((c) => ({ id: c.key, summary: `${c.name} · ${c.account.label}`, color: c.color || '#888' })),
   ];
   setHTML($('#cal-list'), cals.map((c) => `<label class="cal-row" title="${esc(c.summary)}">
     <input type="checkbox" data-cal="${esc(c.id)}" ${hidden.has(c.id) ? '' : 'checked'}><i style="--c:${c.color}"></i><span>${esc(c.summary)}</span></label>`).join('')
@@ -359,21 +386,40 @@ function renderSidebar() {
 
   const now = Date.now();
   const tasks = S.sortTasks(st().tasks.filter((t) => !t.archived));
-  setHTML($('#task-list'), tasks.length ? tasks.map((t) => {
+  const row = (t) => {
     const p = S.progress(t, now);
     const ss = S.sessions(t);
     const doneN = ss.filter((c) => c.kind === 'done' || (c.kind === 'pinned' && c.end <= now)).length;
-    const complete = p.pct >= 100;
+    const complete = !t.repeat && p.pct >= 100;
     const warn = !complete && t.lastPlan?.shortfall > 0;
+    const late = !complete && !warn && t.lastPlan?.late > 0;
     const next = ss.find((c) => c.kind !== 'done' && c.end > now);
-    return `<button class="task-row ${complete ? 'complete' : ''}" data-task="${t.id}" style="--c:${t.color}">
+    const waiting = t.lastPlan?.waitingFor?.length ? st().tasks.filter((x) => t.lastPlan.waitingFor.includes(x.id)).map((x) => x.title) : [];
+    const meta = t.repeat
+      ? `↻ ${T.fmtDur(p.done)} of ${T.fmtDur(p.total)} ${t.repeat.every === 'week' ? 'this week' : 'today'}`
+      : complete ? 'Done ✓' : `${doneN}/${ss.length} · due ${T.format(t.deadline, tz(), { weekday: 'short', day: 'numeric', month: 'short' })}`;
+    return `<button class="task-row ${complete ? 'complete' : ''} ${t.projectId ? 'in-proj' : ''}" data-task="${t.id}" style="--c:${t.color}">
       <span class="rank" title="Rank ${t.rank}">${t.rank}</span>
       <span class="tr-main">
-        <span class="tr-title">${t.categoryIcon ? esc(t.categoryIcon) + ' ' : (t.kind === 'reading' ? '📖 ' : '')}${esc(t.title)}${warn ? ' <span class="warn-ic" title="Not enough time before the deadline">⚠</span>' : ''}</span>
-        <span class="tr-meta">${t.categoryId ? `<span class="tr-cat">${esc(C.catById(set(), t.categoryId)?.name || t.categoryName || '')}</span> · ` : ''}${complete ? 'Done ✓' : `${doneN}/${ss.length} · due ${esc(T.format(t.deadline, tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}`}${next && !complete ? ` · next ${esc(T.format(next.start, tz(), { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: set().h12 }))}` : ''}</span>
+        <span class="tr-title">${t.categoryIcon ? esc(t.categoryIcon) + ' ' : (t.kind === 'reading' ? '📖 ' : '')}${esc(t.title)}${warn ? ' <span class="warn-ic" title="Not enough time before the deadline">⚠</span>' : ''}${late ? ' <span class="late-ic" title="Runs into the safety margin before the deadline">◔</span>' : ''}${timer?.taskId === t.id ? ' <span title="Timer running">⏱</span>' : ''}</span>
+        <span class="tr-meta">${t.categoryId ? `<span class="tr-cat">${esc(C.catById(set(), t.categoryId)?.name || t.categoryName || '')}</span> · ` : ''}${esc(meta)}${waiting.length ? ` · ⏳ after ${esc(waiting.join(', '))}` : next && !complete ? ` · next ${esc(T.format(next.start, tz(), { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: set().h12 }))}` : ''}</span>
         <span class="bar"><i style="width:${p.pct}%"></i></span>
       </span></button>`;
-  }).join('') : `<p class="muted small empty">No tasks yet. Add one and Tempo splits it into sessions around your calendar.</p>`);
+  };
+  // Tasks of a project are grouped under it, in step order.
+  const projects = set().projects || [];
+  const html = [];
+  const seen = new Set();
+  for (const t of tasks) {
+    if (seen.has(t.id)) continue;
+    const proj = t.projectId && projects.find((p) => p.id === t.projectId);
+    if (!proj) { html.push(row(t)); seen.add(t.id); continue; }
+    const kids = st().tasks.filter((x) => x.projectId === proj.id && !x.archived).sort((a, b) => (a.projectStep ?? 1e9) - (b.projectStep ?? 1e9) || (a.created || 0) - (b.created || 0));
+    const doneKids = kids.filter((x) => S.progress(x, now).pct >= 100).length;
+    html.push(`<div class="proj-head" title="${proj.sequential ? 'Steps run in order' : 'Project'}">📁 <b>${esc(proj.name)}</b> <span class="muted small">${doneKids}/${kids.length} done${proj.sequential ? ' · in order' : ''}</span></div>`);
+    for (const k of kids) { html.push(row(k)); seen.add(k.id); }
+  }
+  setHTML($('#task-list'), tasks.length ? html.join('') : `<p class="muted small empty">No tasks yet. Type one above, or use + Task — Tempo splits it into sessions around your calendar.</p>`);
   $$('#task-list .task-row').forEach((b) => b.addEventListener('click', () => editTask(st().tasks.find((t) => t.id === b.dataset.task))));
 }
 
@@ -656,14 +702,15 @@ async function commitMove(it, start, end) {
   try {
     if (it.kind === 'chunk') {
       replaceTask(S.pinSession(it.task, it.sess.id, start, end));
+      await saveTasks(`move “${it.task.title}” session`);
       toast('Session pinned — other sessions rescheduled around it.');
-      await saveTasks();
       return cycle();
     }
     let scope = 'this';
     if (it.ev.recurringEventId) { scope = await askScope('Change'); if (!scope) return render(); }
     setStatus('Saving…');
     await EV.moveEvent(st(), it.ev, start, end, scope);
+    undoableEventChange(`move “${it.ev.summary || 'event'}”`, it.ev, scope);
     await afterEventChange();
   } catch (err) { handleError(err); render(); }
 }
@@ -729,7 +776,8 @@ function selBody(sel, title, calId) {
 async function saveNewEvent(calId, body, opts) {
   try {
     setStatus('Saving…');
-    await EV.createEvent(st(), calId, body, opts);
+    const created = await EV.createEvent(st(), calId, body, opts);
+    pushUndo(`create “${body.summary || 'event'}”`, async () => { await EV.deleteEvent(st(), created, 'this'); await afterEventChange(); });
     await afterEventChange();
     toast('Event created');
   } catch (err) { handleError(err); render(); }
@@ -759,7 +807,7 @@ function fmtWhen(it) {
 function openItem(it, rect) {
   if (it.kind === 'chunk') return openChunk(it, rect);
   const ev = it.ev;
-  const cal = it.ev._calId === E.LOCAL_CAL ? { summary: 'Local (this browser)' } : (st().gmeta.calendars || []).find((c) => c.id === ev._calId);
+  const cal = it.ev._calId === E.LOCAL_CAL ? { summary: 'Local (this browser)' } : ev._calName ? { summary: ev._calName } : (st().gmeta.calendars || []).find((c) => c.id === ev._calId);
   const rems = ev.reminders?.useDefault === false ? (ev.reminders.overrides || []) : null;
   const meet = ev.hangoutLink || ev.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video')?.uri;
   const evTz = ev.start?.timeZone && ev.start.timeZone !== tz() ? ev.start.timeZone : null;
@@ -768,14 +816,14 @@ function openItem(it, rect) {
     <div class="pop">
       <div class="pop-tools">
         ${it.editable ? '<button class="icon-btn edit" title="Edit">✎</button><button class="icon-btn del" title="Delete">🗑</button>' : ''}
-        ${ev.htmlLink ? `<a class="icon-btn" href="${esc(ev.htmlLink)}" target="_blank" rel="noopener" title="Open in Google Calendar">↗</a>` : ''}
+        ${ev.htmlLink ? `<a class="icon-btn" href="${esc(ev.htmlLink)}" target="_blank" rel="noopener" title="Open in ${ev._ext === 'outlook' ? 'Outlook' : 'Google Calendar'}">↗</a>` : ''}
         <button class="icon-btn x" title="Close">✕</button>
       </div>
       <div class="pop-title"><i style="--c:${it.color}"></i><h3>${esc(it.title)}</h3></div>
       <div class="pop-row small"><button class="cat-chip on pop-evcat" ${it.catId ? `style="--c:${esc(C.catById(set(), it.catId)?.color || it.color)}"` : ''}>${it.catId ? `<i></i>${esc(C.catLabel(C.catById(set(), it.catId)) || 'Category')}` : '+ Category'} ▾</button></div>
       ${ev.extendedProperties?.private?.tempoTask ? '<div class="pop-row warnbox small">This is a Tempo task session that isn’t loaded in this browser yet. <button class="link load-tasks">Load tasks from Google</button></div>' : ''}
       <div class="pop-row">${esc(fmtWhen(it))}${evTz ? `<div class="muted small">Event time zone: ${esc(evTz)}</div>` : ''}${ev.recurrence?.length ? `<div class="muted small">${esc(describe(ev.recurrence))}</div>` : ev.recurringEventId ? '<div class="muted small">↻ Repeating event</div>' : ''}</div>
-      ${ev.location ? `<div class="pop-row">📍 ${esc(ev.location)}</div>` : ''}
+      ${ev.location ? `<div class="pop-row">📍 ${esc(ev.location)}${E.hasPlace(ev) && set().travelMinutes ? `<div class="muted small">🚗 ${set().travelMinutes} min travel buffer before and after</div>` : ''}</div>` : ''}
       ${meet ? `<div class="pop-row"><a class="btn small primary" href="${esc(meet)}" target="_blank" rel="noopener">Join video call</a></div>` : ''}
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
@@ -790,7 +838,7 @@ function openItem(it, rect) {
       close();
       let scope = 'this';
       if (ev.recurringEventId) { scope = await askScope('Delete'); if (!scope) return; }
-      try { setStatus('Deleting…'); await EV.deleteEvent(st(), ev, scope); await afterEventChange(); toast('Event deleted'); }
+      try { setStatus('Deleting…'); await EV.deleteEvent(st(), ev, scope); undoableEventDelete(ev, scope); await afterEventChange(); toast('Event deleted'); }
       catch (err) { handleError(err); }
     });
   });
@@ -815,6 +863,7 @@ function openChunk(it, rect) {
       <div class="pop-actions">
         ${isDone ? '<button class="btn small undone">↺ Mark undone</button>' : '<button class="btn small primary done">✓ Mark done</button>'}
         <button class="btn small partial">◐ Partly done…</button>
+        ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
@@ -822,12 +871,14 @@ function openChunk(it, rect) {
       <div class="muted small hint">Tip: drag a session to pin it to a specific time — the rest of the series shifts around it.</div>
     </div>`, (pop, close) => {
     $('.x', pop).onclick = close;
-    const act = async (fn, msg) => { close(); replaceTask(fn(st().tasks.find((t) => t.id === task.id))); await saveTasks(); toast(msg); cycle(); };
-    $('.done', pop)?.addEventListener('click', () => act((t) => S.markDone(t, sess.id), 'Marked done'));
-    $('.undone', pop)?.addEventListener('click', () => act((t) => (sess.kind === 'pinned' ? S.unpinSession(t, sess.id) : S.markUndone(t, sess.id)), 'Marked undone — remaining sessions shifted'));
+    const act = async (fn, msg, log) => { close(); replaceTask(fn(st().tasks.find((t) => t.id === task.id))); if (log) logHistory(log); await saveTasks(msg.split(' —')[0].toLowerCase()); toast(msg); cycle(); };
+    $('.done', pop)?.addEventListener('click', () => { close(); finishSession(st().tasks.find((t) => t.id === task.id), sess, timer?.chunkId === sess.id ? tmWork() / T.MIN : null); if (timer?.chunkId === sess.id) { timer = null; saveTimer(); drawTimer(); } });
+    $('.undone', pop)?.addEventListener('click', () => act((t) => (sess.kind === 'pinned' ? S.unpinSession(t, sess.id) : S.markUndone(t, sess.id)), 'Marked undone — remaining sessions shifted', { kind: 'undone', task, sess }));
     $('.unpin', pop)?.addEventListener('click', () => act((t) => S.unpinSession(t, sess.id), 'Unpinned'));
     $('.edit', pop).onclick = () => { close(); editTask(task); };
     $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
+    $('.tm-start', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'stopwatch'); });
+    $('.tm-pomo', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'pomodoro'); });
     $('.sync-now', pop)?.addEventListener('click', () => { close(); openSyncPanel(); });
     $('.pop-cat', pop).onclick = () => { close(); pickCategory(task); };
     $('.del', pop).onclick = async () => {
@@ -837,7 +888,7 @@ function openChunk(it, rect) {
         { value: 'one', label: 'Delete this session', desc: 'Its work moves to the next free time; later sessions in the series shift down.' },
         { value: 'all', label: 'Delete the entire series', desc: `Removes “${task.title}” and all ${sess.count} sessions.`, danger: true },
       ]);
-      if (v === 'one') { replaceTask(S.skipSession(st().tasks.find((t) => t.id === task.id), sess.id)); await saveTasks(); toast('Session deleted — series shifted'); cycle(); }
+      if (v === 'one') { replaceTask(S.skipSession(st().tasks.find((t) => t.id === task.id), sess.id)); logHistory({ kind: 'skipped', task, sess }); await saveTasks('delete session'); toast('Session deleted — series shifted'); cycle(); }
       if (v === 'all') deleteTask(task.id);
     };
   });
@@ -892,7 +943,7 @@ async function pickCategory(task) {
   const cur = st().tasks.find((t) => t.id === task.id);
   if (!cur) return;
   replaceTask(C.applyCategory(cur, picked));
-  await saveTasks();
+  await saveTasks('change category');
   toast(picked ? `“${task.title}” is now ${picked.name}` : 'Category removed');
   cycle();
 }
@@ -926,6 +977,7 @@ async function pickEventCategory(it) {
     if (ev.recurringEventId) { scope = await askScope('Categorize'); if (!scope) return; }
     setStatus('Saving…');
     await EV.updateEvent(st(), ev, C.eventCategoryChanges(ev, picked), scope);
+    undoableEventChange('change category', ev, scope);
     await afterEventChange();
     toast(picked ? `“${it.title}” is now ${picked.name}` : 'Category removed');
   } catch (err) {
@@ -936,18 +988,24 @@ async function pickEventCategory(it) {
 
 // Deleting a session that was already done.
 // Partly done: credit the work that was done, reschedule the rest, and optionally split the block in two.
-async function partialSession(task, sess) {
-  const r = await D.partialDialog(ctx, task, sess);
+async function partialSession(task, sess, opts = {}) {
+  const r = await D.partialDialog(ctx, task, sess, opts);
   if (!r) return;
-  const cur = st().tasks.find((t) => t.id === task.id);
-  if (!cur) return;
+  const cur0 = st().tasks.find((t) => t.id === task.id);
+  if (!cur0) return;
+  if (r.allDone) return finishSession(cur0, sess, opts.actualMin);
+  let cur = cur0;
   let start = sess.start, end = sess.end, other = null;
   if (r.split) {
     const cut = r.split.where === 'start' ? sess.start + r.split.minutes * T.MIN : sess.end - r.split.minutes * T.MIN;
     if (r.split.where === 'start') { start = cut; other = [sess.start, cut]; } else { end = cut; other = [cut, sess.end]; }
   }
-  replaceTask(S.markPartial(cur, sess.id, { credit: r.credit, start, end, squeeze: r.squeeze }));
+  const spent = opts.actualMin != null ? opts.actualMin : (end - start) / T.MIN;
+  let updated = S.markPartial(cur, sess.id, { credit: r.credit, start, end, squeeze: r.squeeze, pagesDone: r.pages, actualMin: opts.actualMin });
+  logHistory({ kind: 'partial', task: cur, sess, act: Math.round(spent) });
   let msg = r.pages != null ? `${r.pages} page${r.pages === 1 ? '' : 's'} read` : `${r.pct}% done`;
+  if (r.pages != null) { const sp = learnSpeed(updated, r.pages, spent); updated = sp.task; if (sp.msg) msg += ' · ' + sp.msg; }
+  replaceTask(updated);
   msg += r.squeeze ? ' — the rest is spread over the remaining sessions' : ' — time added for the rest';
   try {
     if (other && r.split.kind === 'task') {
@@ -961,9 +1019,111 @@ async function partialSession(task, sess) {
       msg += ` · “${r.split.title}” added`;
     }
   } catch (err) { handleError(err); }
-  await saveTasks();
+  await saveTasks('partly done');
   toast(msg, { ms: 6000 });
   cycle();
+}
+
+// Reading speed learned from reported pages and the time spent.
+function learnSpeed(task, pages, minutes) {
+  if (task.kind !== 'reading' || !(pages > 0) || !(minutes >= 5)) return { task };
+  let t = { ...task, speedLog: [...(task.speedLog || []), { pages, minutes: Math.round(minutes), at: Date.now() }].slice(-8) };
+  if (set().learnSpeed === false) return { task: t };
+  const learned = S.learnedSpeed(t), cur = S.pagesPerHour(t.reading || {});
+  if (!learned || Math.abs(learned - cur) / cur < 0.08) return { task: t };
+  t = S.withReadingSpeed(t, { ...t.reading, speed: learned, unit: 'pph' });
+  set().readingDefaults = { ...(set().readingDefaults || {}), speed: learned };
+  E.persist(st(), ['settings']);
+  return { task: t, msg: `reading speed now ${learned} pages/hour (was ${+cur.toFixed(1)}) — the plan is adjusted` };
+}
+
+// Timer stopped at (or past) the planned time, or "It's all done".
+async function finishSession(task, sess, actualMin) {
+  let t = S.markDone(task, sess.id, { actualMin });
+  let msg = actualMin != null ? `Recorded ${T.fmtDur(Math.round(actualMin))} — marked done` : 'Marked done';
+  if (actualMin != null && actualMin > sess.minutes + 5) logHistory({ kind: 'overrun', task, sess, act: Math.round(actualMin) });
+  if (task.kind === 'reading' && actualMin != null && sess.pages) { const sp = learnSpeed(t, sess.pages[1] - sess.pages[0] + 1, actualMin); t = sp.task; if (sp.msg) msg += ' · ' + sp.msg; }
+  replaceTask(t);
+  await saveTasks('mark done');
+  toast(msg, { ms: 6000 });
+  cycle();
+}
+
+// ======================================================================================
+// Session timer — stopwatch, or focus timer with breaks (Pomodoro)
+// ======================================================================================
+let timer = null, tickId = null;
+const saveTimer = () => storeSet({ timer });
+const tmWork = () => (timer ? timer.acc + (timer.running && timer.phase === 'work' ? Date.now() - timer.since : 0) : 0);
+const tmPhase = () => (timer ? timer.phaseAcc + (timer.running ? Date.now() - timer.phaseSince : 0) : 0);
+const mmss = (ms) => { const t = Math.max(0, Math.round(ms / 1000)); const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), x = t % 60; return `${h ? h + ':' : ''}${String(m).padStart(h ? 2 : 1, '0')}:${String(x).padStart(2, '0')}`; };
+async function loadTimer() { timer = (await storeGet('timer')).timer || null; if (timer) startTick(); drawTimer(); }
+async function startTimer(task, sess, mode) {
+  if (timer && timer.chunkId !== sess.id) {
+    const v = await choose('Replace the running timer?', `“${timer.label}” is being timed (${mmss(tmWork())}).`, [{ value: 'stop', label: 'Stop it and record it first' }, { value: 'drop', label: 'Discard it', danger: true }]);
+    if (!v) return;
+    if (v === 'stop') await stopTimer(); else timer = null;
+  }
+  const now = Date.now();
+  timer = { taskId: task.id, chunkId: sess.id, label: sess.label, planMin: sess.minutes, mode, acc: 0, since: now, running: true, phase: 'work', phaseAcc: 0, phaseSince: now, pomos: 0, startedAt: now };
+  saveTimer(); startTick();
+  if (mode === 'pomodoro' && 'Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+}
+function startTick() { clearInterval(tickId); tickId = setInterval(tick, 1000); tick(); }
+function tick() {
+  if (!timer) { clearInterval(tickId); drawTimer(); return; }
+  const p = set().pomodoro || { work: 25, rest: 5 }, now = Date.now();
+  if (timer.mode === 'pomodoro' && timer.running) {
+    if (timer.phase === 'work' && tmPhase() >= p.work * 60000) {
+      timer.acc += now - timer.since; Object.assign(timer, { phase: 'rest', phaseAcc: 0, phaseSince: now, pomos: timer.pomos + 1 }); saveTimer();
+      ping('Time for a break', `${p.rest} min break — ${timer.label}`);
+    } else if (timer.phase === 'rest' && tmPhase() >= p.rest * 60000) {
+      Object.assign(timer, { phase: 'work', phaseAcc: 0, phaseSince: now, since: now }); saveTimer();
+      ping('Back to work', timer.label);
+    }
+  }
+  if (!timer.notifiedEnd && tmWork() >= timer.planMin * 60000) { timer.notifiedEnd = true; saveTimer(); ping('Session time is up', `${timer.label} — stop the timer to record it, or keep going.`); }
+  drawTimer();
+}
+function pauseTimer() {
+  if (!timer) return;
+  const now = Date.now();
+  if (timer.running) { if (timer.phase === 'work') timer.acc += now - timer.since; timer.phaseAcc += now - timer.phaseSince; timer.running = false; }
+  else { timer.running = true; timer.since = timer.phaseSince = now; }
+  saveTimer(); drawTimer();
+}
+async function stopTimer() {
+  if (!timer) return;
+  const t0 = timer, workMin = tmWork() / T.MIN;
+  timer = null; saveTimer(); drawTimer();
+  const task = st().tasks.find((t) => t.id === t0.taskId);
+  const sess = task && S.sessions(task).find((c) => c.id === t0.chunkId);
+  if (!task || !sess) { toast('That session no longer exists — nothing recorded.'); return; }
+  if (workMin < 1) { toast('Timer stopped (under a minute — nothing recorded)'); return; }
+  if (workMin >= sess.minutes - 2) return finishSession(task, sess, workMin);
+  return partialSession(task, sess, { actualMin: workMin }); // stopped early: fill in "Partly done"
+}
+function drawTimer() {
+  const bar = $('#timer-bar');
+  if (!bar) return;
+  if (!timer) { bar.hidden = true; bar.replaceChildren(); return; }
+  const p = set().pomodoro || { work: 25, rest: 5 };
+  const work = tmWork(), plan = timer.planMin * 60000;
+  const phaseTxt = timer.mode === 'pomodoro' ? (timer.phase === 'work' ? `Focus · ${mmss(p.work * 60000 - tmPhase())} left` : `Break · ${mmss(p.rest * 60000 - tmPhase())} left`) + (timer.pomos ? ` · ${'🍅'.repeat(Math.min(timer.pomos, 6))}` : '') : 'Stopwatch';
+  bar.hidden = false;
+  bar.className = `timer-bar ${timer.running ? '' : 'paused'} ${timer.phase === 'rest' ? 'rest' : ''} ${work > plan ? 'over' : ''}`;
+  setHTML(bar, `<div class="tm-l"><b>${esc(timer.label)}</b><span class="muted small">${esc(phaseTxt)}${timer.running ? '' : ' · paused'}</span></div>
+    <div class="tm-time">${mmss(work)} <span class="muted small">/ ${timer.planMin} min</span></div>
+    <div class="tm-btns"><button class="btn small tm-pause">${timer.running ? '❚❚ Pause' : '▶ Resume'}</button><button class="btn small primary tm-stop">■ Stop</button><button class="icon-btn sm tm-drop" title="Discard timer" aria-label="Discard timer">✕</button></div>
+    <i class="tm-prog" style="width:${Math.min(100, (work / plan) * 100)}%"></i>`);
+  $('.tm-pause', bar).onclick = pauseTimer;
+  $('.tm-stop', bar).onclick = stopTimer;
+  $('.tm-drop', bar).onclick = async () => { if (await choose('Discard the timer?', 'Nothing will be recorded.', [{ value: true, label: 'Discard', danger: true }])) { timer = null; saveTimer(); drawTimer(); } };
+}
+function ping(title, body) {
+  uiToast(`${title} — ${body}`, { ms: 8000 });
+  try { const a = new (window.AudioContext || window.webkitAudioContext)(); const o = a.createOscillator(), g = a.createGain(); o.frequency.value = 880; g.gain.setValueAtTime(0.15, a.currentTime); g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + 0.6); o.connect(g).connect(a.destination); o.start(); o.stop(a.currentTime + 0.6); } catch { /* no audio */ }
+  try { if ('Notification' in window && Notification.permission === 'granted' && document.hidden) new Notification(title, { body, icon: 'icons/icon128.png', tag: 'tempo-timer' }); } catch { /* ignore */ }
 }
 
 async function deleteDoneSession(task, sess) {
@@ -991,7 +1151,7 @@ async function deleteDoneSession(task, sess) {
       msg += ` · “${r.replace.title}” added`;
     }
   } catch (err) { handleError(err); }
-  await saveTasks();
+  await saveTasks('delete done session');
   toast(msg, { ms: 5000 });
   cycle();
 }
@@ -1016,14 +1176,96 @@ async function editEvent(it) {
   }
   try {
     setStatus('Saving…');
-    if (r.action === 'delete') await EV.deleteEvent(st(), it.ev, scope);
-    else await EV.updateEvent(st(), it.ev, r.body, scope, { conference: r.conference });
+    if (r.action === 'delete') { await EV.deleteEvent(st(), it.ev, scope); undoableEventDelete(it.ev, scope); }
+    else { await EV.updateEvent(st(), it.ev, r.body, scope, { conference: r.conference }); undoableEventChange(`edit “${it.ev.summary || 'event'}”`, it.ev, scope); }
     await afterEventChange();
+    if (undoStack.length) toast(r.action === 'delete' ? 'Event deleted' : 'Event saved');
   } catch (err) { handleError(err); render(); }
 }
 
 function replaceTask(t) { t = { ...t, rev: Date.now() }; st().tasks = st().tasks.map((x) => (x.id === t.id ? t : x)); }
-async function saveTasks() { await E.persist(st(), ['tasks', 'orphanGids', 'acks', 'tombstones']); }
+// Every user change to tasks goes through saveTasks(label): the state before it is kept so it can be undone.
+async function saveTasks(label = 'last change') {
+  if (label !== false) recordTaskUndo(label);
+  await E.persist(st(), ['tasks', 'orphanGids', 'acks', 'tombstones']);
+}
+
+// ======================================================================================
+// Undo — tasks (snapshots), events (inverse operations) and settings
+// ======================================================================================
+const undoStack = [];
+let baseline = null;
+const snapTasks = () => JSON.stringify(st().tasks);
+function markBaseline() { baseline = snapTasks(); }
+function pushUndo(label, undo) {
+  undoStack.push({ label, undo, at: Date.now() });
+  if (undoStack.length > 40) undoStack.shift();
+  app.lastUserChange = Date.now();
+  app.lastChangeLabel = app.pendingWhy || label;
+  app.pendingWhy = null;
+  updateUndoBtn();
+}
+function recordTaskUndo(label) {
+  const now = snapTasks();
+  if (baseline && baseline !== now) { const before = baseline; pushUndo(label, () => restoreTasks(before)); }
+  baseline = now;
+}
+function updateUndoBtn() {
+  const b = $('#btn-undo');
+  if (!b) return;
+  const top = undoStack[undoStack.length - 1];
+  b.disabled = !top;
+  b.title = top ? `Undo: ${top.label} (Ctrl+Z)` : 'Nothing to undo';
+}
+async function undo() {
+  const top = undoStack.pop();
+  updateUndoBtn();
+  if (!top) { toast('Nothing to undo'); return; }
+  try {
+    app.undoing = true;
+    await top.undo();
+    toast(`Undone: ${top.label}`, { noUndo: true });
+  } catch (err) { handleError(err); }
+  finally { app.undoing = false; }
+}
+// Bring tasks back to an earlier snapshot; Google is updated by the next sync (deleted sessions are re-created).
+async function restoreTasks(beforeJson) {
+  const before = JSON.parse(beforeJson), cur = st().tasks, now = Date.now();
+  const gidsOf = (t) => [...(t?.planned || []), ...(t?.frozen || [])].map((c) => c.gid).filter(Boolean);
+  const keep = new Set(before.flatMap(gidsOf));
+  const orphans = [];
+  for (const c of cur) {
+    const b = before.find((x) => x.id === c.id);
+    for (const g of gidsOf(c)) if (!keep.has(g)) orphans.push(g);
+    if (!b) st().tombstones = [...(st().tombstones || []), c.id].slice(-300);
+  }
+  const restoredIds = new Set(before.map((t) => t.id));
+  st().tombstones = (st().tombstones || []).filter((id) => !restoredIds.has(id) || cur.some((c) => c.id === id));
+  st().orphanGids = [...(st().orphanGids || []).filter((g) => !keep.has(g)), ...orphans];
+  st().tasks = before.map((b) => {
+    const c = cur.find((x) => x.id === b.id);
+    const same = c && JSON.stringify({ ...c, lastPlan: 0, rev: 0 }) === JSON.stringify({ ...b, lastPlan: 0, rev: 0 });
+    return same ? c : { ...b, orphanGids: (b.orphanGids || []).filter((g) => !keep.has(g)), rev: now };
+  });
+  for (const t of st().tasks) for (const c of [...(t.planned || []), ...(t.frozen || [])]) c.syncHash = null; // re-verify on Google
+  baseline = snapTasks();
+  await E.persist(st(), ['tasks', 'orphanGids', 'acks', 'tombstones']);
+  E.invalidate();
+  await cycle();
+}
+const EV_FIELDS = ['summary', 'description', 'location', 'start', 'end', 'colorId', 'reminders', 'transparency', 'visibility', 'extendedProperties'];
+const pick = (o, ks) => Object.fromEntries(ks.filter((k) => o[k] !== undefined).map((k) => [k, JSON.parse(JSON.stringify(o[k]))]));
+function undoableEventChange(label, ev, scope) {
+  // Only single events / single occurrences can be put back exactly.
+  if (scope && scope !== 'this') return;
+  const before = pick(ev, EV_FIELDS);
+  pushUndo(label, async () => { await EV.updateEvent(st(), ev, before, 'this'); await afterEventChange(); });
+}
+function undoableEventDelete(ev, scope) {
+  if (ev.recurringEventId || (scope && scope !== 'this')) return;
+  const copy = JSON.parse(JSON.stringify(ev));
+  pushUndo(`delete “${ev.summary || 'event'}”`, async () => { await EV.createEvent(st(), copy._calId, copy); await afterEventChange(); });
+}
 
 async function newTask(preset = {}) {
   const r = await D.taskDialog(ctx, null, preset);
@@ -1033,7 +1275,8 @@ async function newTask(preset = {}) {
   if (!t.categoryId && set().askCategory !== false) t = await askCategoryOnce(t);
   t.rev = Date.now();
   st().tasks.push(t);
-  await saveTasks();
+  app.pendingWhy = `you added “${t.title}” (rank ${t.rank})`;
+  await saveTasks(`add “${t.title}”`);
   await cycle();
   const ss = S.sessions(st().tasks.find((x) => x.id === t.id));
   toast(`Scheduled ${ss.length} session${ss.length === 1 ? '' : 's'} for “${t.title}”`);
@@ -1049,8 +1292,12 @@ async function editTask(task) {
     return;
   }
   delete st().acks[task.id];
-  replaceTask({ ...r.task, frozen: task.frozen, planned: task.planned });
-  await saveTasks();
+  let nt = { ...r.task, frozen: task.frozen, planned: task.planned };
+  // A new reading speed must not shift the pages already read.
+  if (task.kind === 'reading' && nt.kind === 'reading' && S.pagesPerHour(task.reading || {}) !== S.pagesPerHour(nt.reading || {})) nt = S.withReadingSpeed({ ...nt, reading: task.reading }, nt.reading);
+  replaceTask(nt);
+  app.pendingWhy = task.rank !== nt.rank ? `you changed “${nt.title}” to rank ${nt.rank}` : `you edited “${nt.title}”`;
+  await saveTasks(`edit “${nt.title}”`);
   await cycle();
   toast('Task updated and rescheduled');
 }
@@ -1062,7 +1309,7 @@ async function deleteTask(id) {
   st().tasks = st().tasks.filter((x) => x.id !== id);
   st().tombstones = [...(st().tombstones || []), id].slice(-300);
   delete st().acks[id];
-  await saveTasks();
+  await saveTasks(`delete “${t.title}”`);
   toast(`Deleted “${t.title}”`);
   cycle();
 }
@@ -1098,7 +1345,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
       if (r.adoptedCalendar | C.adoptCategoriesFromTasks(set(), st().tasks) | adoptPeriodsFromTasks()) await E.persist(st(), ['settings']);
       if (sharedChanged) {
         const rc = C.refreshTaskCategories(set(), st().tasks);
-        if (rc.changed.length) { st().tasks = rc.tasks; await saveTasks(); }
+        if (rc.changed.length) { st().tasks = rc.tasks; await saveTasks(false); }
       }
       if (r.imported.length || r.updated.length || r.removed.length) {
         await E.persist(st(), ['tasks', 'orphanGids']);
@@ -1107,7 +1354,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
         if (r.updated.length) parts.push(`updated ${r.updated.length} changed elsewhere`);
         if (r.removed.length) parts.push(`removed ${r.removed.length} deleted elsewhere`);
         const msg = parts.join('; ');
-        toast(msg[0].toUpperCase() + msg.slice(1), r.removed.length ? { action: 'Undo', ms: 9000, onAction: async () => { for (const t of r.removed) st().tasks.push({ ...t, rev: Date.now() }); await saveTasks(); cycle(); } } : { ms: 5000 });
+        toast(msg[0].toUpperCase() + msg.slice(1), r.removed.length ? { action: 'Undo', ms: 9000, onAction: async () => { for (const t of r.removed) st().tasks.push({ ...t, rev: Date.now() }); await saveTasks(false); cycle(); } } : { ms: 5000 });
       }
     } catch (err) { handleError(err); }
   }
@@ -1116,6 +1363,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     problems = r.problems;
     app.lastBusy = r.busy;
     await E.persist(st(), ['tasks', 'reminderQueue']);
+    handleMoves(r.moves || []);
   } catch (err) {
     handleError(err);
   }
@@ -1133,7 +1381,131 @@ async function runCycle({ sync = true, pull = false } = {}) {
     await E.persist(st(), ['tasks', 'orphanGids', 'syncInfo']);
     renderBanner();
   }
+  markBaseline();
   await handleProblems(problems);
+}
+
+// ======================================================================================
+// Quick add in plain language
+// ======================================================================================
+function setupQuickAdd() {
+  const inp = $('#quick-add'), pv = $('#quick-preview');
+  if (!inp) return;
+  let parsed = null;
+  const show = () => {
+    const v = inp.value.trim();
+    if (!v) { pv.hidden = true; parsed = null; return; }
+    parsed = parseTask(v, set(), st().tasks);
+    pv.hidden = false;
+    setHTML(pv, `<div class="qp-title">${esc(parsed.draft.title)}</div><div class="qp-chips">${parsed.chips.map((c) => `<span class="chip-btn on">${esc(c)}</span>`).join('')}${parsed.hasDeadline ? '' : '<span class="chip-btn">due in a week (default)</span>'}</div>
+      <div class="qp-act"><span class="muted small">Enter to add</span><button class="link qp-edit">Edit details…</button></div>`);
+    $('.qp-edit', pv).onclick = () => { const d = buildDraft(parsed.draft); inp.value = ''; show(); newTask({ draft: d, kind: d.kind }); };
+  };
+  inp.addEventListener('input', show);
+  inp.addEventListener('keydown', async (e) => {
+    if (e.key === 'Escape') { inp.value = ''; show(); inp.blur(); }
+    if (e.key !== 'Enter' || !parsed) return;
+    e.preventDefault();
+    const t = buildDraft(parsed.draft);
+    if (!(await D.checkTaskLimits(ctx, t))) return;
+    inp.value = ''; show();
+    let nt = { ...t, rev: Date.now() };
+    if (!nt.categoryId && set().askCategory !== false) nt = await askCategoryOnce(nt);
+    st().tasks.push(nt);
+    app.pendingWhy = `you added “${nt.title}” (rank ${nt.rank})`;
+    await saveTasks(`add “${nt.title}”`);
+    await cycle();
+    const ss = S.sessions(st().tasks.find((x) => x.id === nt.id) || nt);
+    toast(`Added “${nt.title}” — ${ss.length} session${ss.length === 1 ? '' : 's'} planned`);
+  });
+}
+// A full task from what the quick-add parser understood (same defaults as the task dialog).
+function buildDraft(d) {
+  const s = set(), z = tz(), now = Date.now();
+  let t = {
+    id: S.newId('t'), kind: 'generic', title: 'Task', rank: 3, totalMinutes: 60,
+    reading: { pages: 100, startPage: 1, speed: s.readingDefaults?.speed || 15, unit: 'pph', labels: 'actual' },
+    deadline: T.atTime(T.addDays(T.dayKey(now, z), 7), s.bounds.end, z), earliestStart: null,
+    chunkMinutes: null, minChunkMinutes: null, maxPerDayMinutes: null, breakMinutes: null, bounds: null, ignoreBounds: false,
+    color: D.TASK_COLORS_PUBLIC[st().tasks.length % D.TASK_COLORS_PUBLIC.length], reminderMinutes: null, notes: '', frozen: [], planned: [], skipped: [], created: now,
+    ...d,
+  };
+  if (t.repeat) t.deadline = S.repeatEnd(t, s);
+  if (t.categoryId) t = C.applyCategory(t, C.catById(s, t.categoryId));
+  return t;
+}
+
+// ======================================================================================
+// Weekly review
+// ======================================================================================
+async function openReview() {
+  storeSet({ lastReviewWeek: T.startOfWeek(T.dayKey(Date.now(), tz()), set().weekStart) });
+  await modal(`<div class="review-dlg"><header class="dlg-head"><h2>Weekly review</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+    <div class="dlg-body">${RV.renderReview(st())}</div>
+    <footer class="actions"><button type="button" class="btn ghost hist">Plan vs actual history</button><span class="grow"></span><button type="button" class="btn primary" data-close>Done</button></footer></div>`, (dlg, close) => {
+    $$('.rv-open', dlg).forEach((b) => (b.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === b.dataset.task)); }));
+    $('.hist', dlg).onclick = () => { close(); app.view = 'analysis'; app.anMode = 'history'; render(); };
+    bindTips(dlg);
+  }, { cls: 'wide' });
+}
+// On the first day of the week, offer the review once.
+async function maybeOfferReview() {
+  const z = tz(), wk = T.startOfWeek(T.dayKey(Date.now(), z), set().weekStart);
+  const { lastReviewWeek } = await storeGet('lastReviewWeek');
+  if (lastReviewWeek === wk || T.daysBetween(wk, T.dayKey(Date.now(), z)) > 1 || !st().tasks.length) return;
+  storeSet({ lastReviewWeek: wk });
+  setTimeout(() => uiToast('Your weekly review is ready — what got done, what slipped, what’s at risk.', { action: 'Open', onAction: openReview, ms: 12000 }), 2500);
+}
+
+// ======================================================================================
+// History log, "what moved and why"
+// ======================================================================================
+function logHistory({ kind, task, sess, ...rest }) {
+  RV.logEntry(set(), { kind, taskId: task?.id, title: task?.title, cat: task?.categoryId || null, t: sess?.start, plan: sess ? Math.round((sess.end - sess.start) / T.MIN) : undefined, ...rest });
+  E.persist(st(), ['settings']);
+}
+// After a re-plan: tell which tasks were pushed later, and why. Imminent sessions pushed by something other than
+// your own change (a new meeting, time passing) are recorded as slips.
+function handleMoves(moves) {
+  if (!moves.length || app.undoing) return;
+  const now = Date.now();
+  const mine = app.lastUserChange && now - app.lastUserChange < 8000;
+  if (!mine) {
+    for (const m of moves) {
+      if (m.nextFrom && m.nextFrom - now < T.DAY && m.nextFrom > now && m.nextTo - m.nextFrom >= 30 * T.MIN) {
+        const task = st().tasks.find((t) => t.id === m.taskId);
+        logHistory({ kind: 'moved', task, t: m.nextFrom, by: Math.round((m.nextTo - m.nextFrom) / T.MIN) });
+      }
+    }
+    return;
+  }
+  // The task you just changed moving is expected; only report the others.
+  moves = moves.filter((m) => (st().tasks.find((t) => t.id === m.taskId)?.rev || 0) < app.lastUserChange - 1500);
+  if (!moves.length) return;
+  // who took the old slots?
+  for (const m of moves) {
+    const takers = new Set();
+    for (const t of st().tasks) if (t.id !== m.taskId) for (const c of t.planned || []) if (m.oldSlots.some((o) => c.start < o.end && c.end > o.start)) takers.add(t.title);
+    m.takers = [...takers];
+  }
+  app.lastMoves = { moves, why: app.lastChangeLabel, at: now };
+  const fmtShift = (m) => { const d = Math.max((m.finishTo || 0) - (m.finishFrom || 0), (m.nextTo || 0) - (m.nextFrom || 0)); return d >= T.DAY ? `+${Math.round(d / T.DAY)}d` : `+${T.fmtDur(Math.round(d / T.MIN))}`; };
+  const txt = moves.slice(0, 3).map((m) => `${m.title} (${fmtShift(m)})`).join(', ') + (moves.length > 3 ? ` +${moves.length - 3} more` : '');
+  setTimeout(() => uiToast(`Pushed later: ${txt}`, { action: 'Why?', onAction: showMoves, ms: 9000 }), 1200);
+  const pill = $('#moved-pill');
+  if (pill) { pill.hidden = false; pill.textContent = `↷ ${moves.length} moved`; pill.onclick = showMoves; clearTimeout(app.pillTimer); app.pillTimer = setTimeout(() => (pill.hidden = true), 120000); }
+}
+function showMoves() {
+  const lm = app.lastMoves;
+  if (!lm) return;
+  const z = tz(), s = set();
+  const f = (ms) => (ms ? T.format(ms, z, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 }) : '—');
+  modal(`<div class="choice moves"><h2>What moved and why</h2>
+    <p class="muted small">${/^you /.test(lm.why || '') ? `Because ${esc(lm.why)}` : `After your change (${esc(lm.why || 'last change')})`}:</p>
+    <ul class="mv-list">${lm.moves.map((m) => `<li><b>${esc(m.title)}</b>
+      <div class="small">Next session ${esc(f(m.nextFrom))} → <b>${esc(f(m.nextTo))}</b> · finishes ${esc(f(m.finishFrom))} → <b>${esc(f(m.finishTo))}</b></div>
+      ${m.takers?.length ? `<div class="muted small">Its time now goes to ${esc(m.takers.join(', '))} (higher rank or due sooner).</div>` : ''}</li>`).join('')}</ul>
+    <div class="actions"><button type="button" class="btn ghost" data-close>Close</button></div></div>`, null, { cls: 'narrow' });
 }
 
 // Persistent notice under the toolbar for anything that stops tasks reaching Google.
@@ -1185,7 +1557,7 @@ async function handleProblems(problems) {
     if (r.action === 'deadline' && r.deadline) { replaceTask({ ...cur, deadline: r.deadline }); delete st().acks[task.id]; }
     else if (r.action === 'ignore') replaceTask({ ...cur, ignoreBounds: true });
     else if (r.action === 'keep') st().acks[task.id] = key;
-    await saveTasks();
+    await saveTasks(r.action === 'keep' ? false : 'change deadline');
     if (r.action !== 'keep') { again = true; }
   }
 }
@@ -1293,10 +1665,12 @@ async function openSettings() {
     if ((r.settings.taskCalendarId || null) !== (before.taskCalendarId || null)) {
       const cal = E.normCal(st(), r.settings.taskCalendarId);
       st().tasks = st().tasks.map((t) => ({ ...t, calendarId: cal, rev: Date.now() }));
-      await saveTasks();
+      await saveTasks(false);
     }
+    const prevSettings = JSON.parse(JSON.stringify(before));
     st().settings = r.settings;
     await E.persist(st(), ['settings']);
+    if (JSON.stringify(prevSettings) !== JSON.stringify(r.settings)) pushUndo('settings change', async () => { st().settings = { ...prevSettings, sharedHash: null }; await E.persist(st(), ['settings']); E.invalidate(); await render(); await cycle(); });
     const ref = C.refreshTaskCategories(st().settings, st().tasks);
     if (ref.changed.length) st().tasks = ref.tasks;
     // keep each task's copy of its period's rules current (it syncs to other devices); deleted period -> work hours
@@ -1308,7 +1682,7 @@ async function openSettings() {
       if (JSON.stringify(per.rules) !== JSON.stringify(t.periodRules) || per.name !== t.periodName) { perChanged = true; return { ...t, periodName: per.name, periodRules: per.rules, rev: Date.now() }; }
       return t;
     });
-    if (perChanged) await saveTasks();
+    if (perChanged) await saveTasks(false);
     if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     app.miniCursor = T.dayKey(Date.now(), tz());
   }
@@ -1353,6 +1727,16 @@ app.anOpts = { period: 'next7', scope: 'bounds', by: 'category' };
 async function renderAnalysisView(seq) {
   const s = set(), z = tz(), o = app.anOpts;
   const view = $('#view');
+  const modeBar = `<div class="seg an-mode"><button data-mode="use" class="${app.anMode === 'history' ? '' : 'on'}">Time use</button><button data-mode="history" class="${app.anMode === 'history' ? 'on' : ''}">Plan vs actual</button><button data-mode="review">Weekly review…</button></div>`;
+  const bindMode = (root) => $$('.an-mode button', root).forEach((b) => (b.onclick = () => { if (b.dataset.mode === 'review') return openReview(); app.anMode = b.dataset.mode; render(); }));
+  if (app.anMode === 'history') {
+    const weeks = app.histWeeks || 8;
+    setHTML(view, `<div class="analysis">${modeBar}<div class="row an-ctl"><label class="field inline"><span>Show the last</span><select class="hist-w">${[4, 8, 12, 26].map((w) => `<option value="${w}" ${w === weeks ? 'selected' : ''}>${w} weeks</option>`).join('')}</select></label></div>${RV.renderHistory(st(), weeks)}</div>`);
+    bindMode(view);
+    $('.hist-w', view).onchange = (e) => { app.histWeeks = +e.target.value; render(); };
+    bindTips(view);
+    return;
+  }
   if (!$('.analysis', view)) setHTML(view, '<div class="analysis"><p class="muted">Calculating…</p></div>');
   const rng = A.periodRange(o.period, s, Date.now(), { from: o.from, to: o.to });
   const days = [];
@@ -1372,7 +1756,8 @@ async function renderAnalysisView(seq) {
   for (const k of days) data.days[k] ||= { available: 0, free: 0, groups: {} };
   app.anLast = { data, groups };
   const root = $('.analysis', view) || view.appendChild(el('<div class="analysis"></div>'));
-  setHTML(root, A.renderAnalysis({ data, groups, opts: o, settings: s, rangeInfo: rng }));
+  setHTML(root, modeBar + A.renderAnalysis({ data, groups, opts: o, settings: s, rangeInfo: rng }));
+  bindMode(root);
   $$('[data-o]', root).forEach((c) => {
     if (c.dataset.o === 'csv') { c.onclick = () => { download(new Blob([A.toCsv(data, groups, z)], { type: 'text/csv' }), `tempo-analysis-${T.dayKey(rng.from, z)}.csv`); }; return; }
     c.onchange = () => {
@@ -1489,6 +1874,8 @@ function bindToolbar() {
     { ic: '⟳', label: 'Refresh from Google', run: refreshFromServer },
     { ic: '✓', label: 'Sync status', run: openSyncPanel },
     { ic: '⚙', label: 'Settings', run: openSettings },
+    { ic: '↶', label: 'Undo last change', run: undo },
+    { ic: '★', label: 'Weekly review', run: openReview },
     '-', 'Export',
     { ic: 'W', label: 'This week as PDF', run: () => exportView('week', 'pdf').catch(handleError) },
     { ic: 'W', label: 'This week as image (PNG)', run: () => exportView('week', 'png').catch(handleError) },
@@ -1496,6 +1883,9 @@ function bindToolbar() {
     { ic: '⧉', label: 'Several weeks or months…', run: exportMulti },
   ]);
   $('#btn-settings').onclick = openSettings;
+  $('#btn-undo').onclick = undo;
+  $('#btn-review').onclick = openReview;
+  setupQuickAdd();
   $('#sync-status').onclick = openSyncPanel;
   $('#btn-refresh').onclick = refreshFromServer;
   $('#btn-new-event').onclick = () => {
@@ -1514,6 +1904,7 @@ function bindToolbar() {
   $$('#export-menu button[data-kind]').forEach((b) => (b.onclick = () => { menu.hidden = true; exportView(b.dataset.kind, b.dataset.fmt).catch(handleError); }));
   $('#export-multi').onclick = () => { menu.hidden = true; exportMulti(); };
   document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest('input, textarea, select, [contenteditable]') && !document.querySelector('dialog[open]')) { e.preventDefault(); undo(); return; }
     if (e.target.closest('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]') || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === 't') $('#btn-today').click();
@@ -1523,11 +1914,17 @@ function bindToolbar() {
     else if (k === 'c' || k === 'n') $('#btn-new-event').click();
     else if (k === 'a') newTask({ kind: 'generic' });
     else if (k === 'r') refreshFromServer();
+    else if (k === 'q') { e.preventDefault(); if (innerWidth < 760) $('#btn-menu').click(); $('#quick-add')?.focus(); }
+    else if (k === 'v') openReview();
+    else if (k === 'u') undo();
     else if (k === 'escape') { closePopover(); closeDrawer(); }
   });
 }
 
 async function init() {
+  // A sign-in popup for another account landed here: hand the result back and close.
+  if (AC.handlePopupReturn()) return;
+  await AC.loadAccounts();
   // Web app: finish a Google sign-in that just came back in the URL, or renew an expired one silently.
   const redirect = await G.completeRedirect();
   app.state = await E.loadState();
@@ -1564,7 +1961,11 @@ async function init() {
       await E.persist(st(), ['gmeta', 'settings']);
     } catch (err) { handleError(err); }
   }
+  window.__tempo = { app, cycle, render, S, T, E, checkGoogle: async () => { app.gCursors ||= {}; if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); return true; } return false; } }; // handy for debugging from the console
+  markBaseline();
+  loadTimer();
   await cycle({ pull: true });
+  maybeOfferReview();
   if (isWeb) startWebReminders();
   if (isWeb && 'serviceWorker' in navigator && document.querySelector('link[rel=manifest]')) navigator.serviceWorker.register('sw.js').catch(() => {});
   setInterval(() => cycle({ pull: true }), 5 * 60 * 1000);
@@ -1592,7 +1993,6 @@ async function init() {
     if (!document.hidden && Date.now() - lastVisible > 15000) { E.invalidate(); cycle({ pull: true }); }
     if (document.hidden) lastVisible = Date.now();
   });
-  window.__tempo = { app, cycle, render, S, T, E, checkGoogle: async () => { app.gCursors ||= {}; if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); return true; } return false; } }; // handy for debugging from the console
 }
 
 // Web app: show reminders while the app is open (the Google Calendar app on your phone also notifies,

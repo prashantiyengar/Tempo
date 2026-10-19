@@ -17,9 +17,11 @@ Tempo Calendar ("Tempo") is a browser extension that shows your Google Calendar 
 | Your calendar list and calendar events (titles, times, locations, guests, descriptions, reminders) | To display your calendar, create and edit events at your request, and find free time for tasks | Read from and written to **your own Google Calendar** |
 | Tasks you create (name, deadline, rank, session settings, notes, done/undone status) | To schedule task sessions | Stored in your browser, and written into the matching session events in **your own Google Calendar**, so other browsers where you use Tempo can load them |
 | Google sign-in token | To talk to Google Calendar on your behalf | Stored only in your browser's extension storage; revoked when you click **Disconnect** |
+| Your settings (categories, work hours, limits, projects, recent history of skipped or moved sessions) | To keep your devices consistent | Stored in your browser and in one hidden event ("Tempo settings") in **your own Google Calendar** |
+| Other calendars you add (optional): another Google account, Outlook / Microsoft 365, iCloud, or a calendar link | To show those events and treat them as busy time | Read directly from that provider; sign-in tokens, the iCloud app-specific password and links are stored **only in this browser** and never written anywhere else |
 | Settings, local events and cached data | So the app works and remembers your preferences | Stored only in your browser's extension storage |
 
-Tempo contacts only these addresses: `accounts.google.com` (sign-in), `www.googleapis.com` (Calendar API), `openidconnect.googleapis.com` (your email address) and `oauth2.googleapis.com` (revoking access when you disconnect).
+Tempo contacts only these addresses: `accounts.google.com` (sign-in), `www.googleapis.com` (Calendar API), `openidconnect.googleapis.com` (your email address) and `oauth2.googleapis.com` (revoking access when you disconnect). Only if you add other calendars: `login.microsoftonline.com` and `graph.microsoft.com` (Outlook), `caldav.icloud.com` (iCloud), or the address of a calendar link you paste. The browser asks your permission before Tempo can reach these.
 
 If you never connect a Google account, Tempo works fully offline and no data leaves your browser.
 

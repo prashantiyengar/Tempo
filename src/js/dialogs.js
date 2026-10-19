@@ -6,6 +6,7 @@ import { parseRRule, buildRRule, describe, WD, expand } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
 import { $, $$, esc, modal, TASK_COLORS, setHTML, choose } from './ui.js';
 import * as C from './categories.js';
+import * as AC from './accounts.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -304,6 +305,17 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   }, { cls: 'wide' });
 }
 
+export const TASK_COLORS_PUBLIC = TASK_COLORS;
+// Limits check for a task created outside the dialog (quick add).
+export async function checkTaskLimits(ctx, nt) {
+  const s = ctx.state.settings;
+  if (!(await checkSpan(nt.repeat ? 'Repeating task' : 'Deadline', nt.deadline, s))) return false;
+  const others = ctx.state.tasks.filter((x) => x.id !== nt.id);
+  const mine = S.rescheduleAll([...others, nt], ctx.lastBusy || [], s, Date.now()).tasks.find((x) => x.id === nt.id);
+  const ss = S.sessions(mine).filter((c) => c.kind !== 'done');
+  const n = nt.repeat ? Math.max(0, ...Object.values(ss.reduce((m, c) => ({ ...m, [c.pk]: (m[c.pk] || 0) + 1 }), {}))) : ss.length;
+  return checkCount('sessions', n, s);
+}
 // ---------- Creation limits (Settings → Scheduling → Limits) ----------
 const limitHint = 'You can change this limit in Settings → Scheduling → Limits.';
 async function checkCount(kind, n, s) {
@@ -318,7 +330,8 @@ async function checkCount(kind, n, s) {
 }
 async function checkSpan(what, endMs, s, now = Date.now()) {
   if (!s.maxSpanDays || endMs <= now + s.maxSpanDays * T.DAY) return true;
-  await choose(`${what} too far ahead`, `${what === 'Deadline' ? 'The deadline' : 'This repeating event'} would extend more than ${s.maxSpanDays} days ahead. ${what === 'Deadline' ? 'Choose an earlier deadline.' : 'Set an end date or a number of times.'} ${limitHint}`, [], { cancel: 'OK' });
+  const msg = what === 'Deadline' ? ['The deadline', 'Choose an earlier deadline.'] : what === 'Repeating task' ? ['This repeating task', 'End it sooner (fewer weeks or an earlier date).'] : ['This repeating event', 'Set an end date or a number of times.'];
+  await choose(`${what} too far ahead`, `${msg[0]} would extend more than ${s.maxSpanDays} days ahead. ${msg[1]} ${limitHint}`, [], { cancel: 'OK' });
   return false;
 }
 // How many times a repeating event occurs and when it ends (Infinity if it never ends). With `upTo`, also lists
@@ -374,10 +387,14 @@ export function taskDialog(ctx, task = null, preset = {}) {
     bounds: null, ignoreBounds: false,
     color: TASK_COLORS[st.tasks.length % TASK_COLORS.length],
     reminderMinutes: null, notes: '', frozen: [], planned: [], skipped: [], created: now,
+    ...(preset.draft || {}),
   };
   const r = { pages: 100, startPage: 1, speed: 15, unit: 'pph', labels: 'actual', ...(t.reading || {}) };
   const b = t.bounds || s.bounds;
   const prog = task ? S.progress(task) : null;
+  const rep = t.repeat || null;
+  const others = S.sortTasks(st.tasks.filter((x) => !x.archived && x.id !== t.id));
+  const projects = s.projects || [];
 
   const html = `
   <form class="task-form" autocomplete="off">
@@ -394,7 +411,14 @@ export function taskDialog(ctx, task = null, preset = {}) {
       ${prog ? `<div class="progress-line"><div class="bar"><i style="width:${prog.pct}%;background:${t.color}"></i></div><span class="muted small">${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)} done</span></div>` : ''}
 
       <div class="grid3 only-generic">
-        <label class="field"><span>Total time (hours)</span><input type="number" name="hours" min="0" step="0.25" value="${+(t.totalMinutes / 60).toFixed(2)}"></label>
+        <label class="field only-once"><span>Total time (hours)</span><input type="number" name="hours" min="0" step="0.25" value="${+(t.totalMinutes / 60).toFixed(2)}"></label>
+        <label class="field"><span>Repeats</span><select name="repEvery"><option value="">Doesn't repeat</option><option value="day" ${rep?.every === 'day' ? 'selected' : ''}>Every day</option><option value="week" ${rep?.every === 'week' ? 'selected' : ''}>Every week</option></select></label>
+        <label class="field only-rep"><span>Hours each <span class="rep-unit">${rep?.every === 'day' ? 'day' : 'week'}</span></span><input type="number" name="repHours" min="0.25" step="0.25" value="${rep ? +(rep.minutes / 60).toFixed(2) : 3}"></label>
+        <div class="field only-rep"><span>Ends</span><div class="row nowrap">
+          <select name="repEnd"><option value="count" ${!rep?.until ? 'selected' : ''}>After</option><option value="until" ${rep?.until ? 'selected' : ''}>On</option></select>
+          <input type="number" name="repCount" min="1" max="520" class="num rep-c" value="${rep?.count || 12}"><span class="rep-c rep-count-unit">${rep?.every === 'day' ? 'days' : 'weeks'}</span>
+          <input type="date" name="repUntil" class="rep-u" value="${rep?.until ? T.dayKey(rep.until, tz) : T.addDays(T.dayKey(now, tz), 84)}"></div></div>
+        <div class="field only-rep rep-days-f"><span>On these days</span>${weekdayToggles('repDays', rep?.days?.length ? rep.days : [0, 1, 2, 3, 4, 5, 6])}</div>
       </div>
       <div class="grid3 only-reading">
         <label class="field"><span>Pages to read</span><input type="number" name="pages" min="1" value="${r.pages}"></label>
@@ -410,11 +434,23 @@ export function taskDialog(ctx, task = null, preset = {}) {
       <div class="calc muted small"></div>
 
       <div class="grid3">
-        <div class="field"><span>Deadline</span><input type="datetime-local" name="deadline" value="${t.deadline ? T.toDTInput(t.deadline, tz) : ''}" required>
+        <div class="field only-once"><span>Deadline</span><input type="datetime-local" name="deadline" value="${t.deadline ? T.toDTInput(t.deadline, tz) : ''}" required>
           <div class="dl-presets"><button type="button" class="chip-btn" data-dl="day">End of work day</button><button type="button" class="chip-btn" data-dl="week">End of work week</button><button type="button" class="chip-btn" data-dl="2w">Within two weeks</button></div></div>
         <label class="field"><span>Don't start before</span><input type="datetime-local" name="earliest" value="${t.earliestStart ? T.toDTInput(t.earliestStart, tz) : ''}"></label>
         <label class="field"><span>Rank <em class="muted">(1 = most important)</em></span><input type="number" name="rank" min="1" max="99" value="${t.rank}"></label>
+        <label class="field only-once"><span>Aim to finish early (days)</span><input type="number" name="margin" min="0" step="0.5" placeholder="${s.marginDays ? s.marginDays + ' (default)' : '0 — use the full time'}" value="${t.marginDays ?? ''}" title="Safety margin: plan to be done this many days before the deadline; the deadline itself stays the hard limit"></label>
       </div>
+
+      <fieldset class="box">
+        <legend>Project &amp; order</legend>
+        <div class="grid3">
+          <label class="field"><span>Part of project</span><select name="projectId"><option value="">— none —</option>${projects.map((p) => `<option value="${esc(p.id)}" ${t.projectId === p.id ? 'selected' : ''}>${esc(p.name)}${p.sequential ? ' (steps in order)' : ''}</option>`).join('')}<option value="__new">+ New project…</option></select></label>
+          <label class="field new-proj"><span>Project name</span><input name="projName" placeholder="e.g. Thesis"></label>
+          <label class="chk new-proj"><input type="checkbox" name="projSeq" checked> Steps run in order (each starts when the previous is done)</label>
+        </div>
+        ${others.length ? `<details class="after-box" ${t.after?.length ? 'open' : ''}><summary>Starts only after… ${t.after?.length ? `<b>(${t.after.length})</b>` : ''}</summary>
+          <div class="after-list">${others.map((o) => `<label class="chk"><input type="checkbox" name="after" value="${esc(o.id)}" ${t.after?.includes(o.id) ? 'checked' : ''}> ${esc(o.title)}</label>`).join('')}</div></details>` : ''}
+      </fieldset>
 
       <fieldset class="box">
         <legend>Sessions</legend>
@@ -503,7 +539,30 @@ export function taskDialog(ctx, task = null, preset = {}) {
         ignoreBounds: f.ignoreBounds.checked,
         notes: f.notes.value,
         calendarId: f.calendarId ? f.calendarId.value : t.calendarId,
+        marginDays: num(f.margin.value),
+        after: $$('input[name=after]:checked', dlg).map((c) => c.value),
+        ...readRepeat(kind),
+        ...readProject(),
       };
+    };
+    const readRepeat = (kind) => {
+      const every = kind === 'generic' ? f.repEvery.value : '';
+      if (!every) return { repeat: null };
+      const repeat = { every, minutes: Math.max(5, Math.round((+f.repHours.value || 0) * 60)) };
+      if (every === 'day') { const d = $$('input[name=repDays]:checked', dlg).map((c) => +c.value); if (d.length && d.length < 7) repeat.days = d; }
+      if (f.repEnd.value === 'until') repeat.until = T.atTime(f.repUntil.value || T.dayKey(now, tz), '23:59', tz);
+      else repeat.count = Math.max(1, Math.round(+f.repCount.value || 1));
+      const repeatStart = t.repeatStart || now;
+      const draft = { repeat, repeatStart, created: t.created };
+      return { repeat, repeatStart, deadline: S.repeatEnd(draft, s) };
+    };
+    const readProject = () => {
+      const v = f.projectId.value;
+      if (!v) return { projectId: null, projectName: null };
+      if (v === '__new') return { projectId: '__new', projectName: f.projName.value.trim() || 'Project' };
+      const p = projects.find((x) => x.id === v);
+      const step = t.projectId === v && t.projectStep != null ? t.projectStep : Math.max(0, ...st.tasks.filter((x) => x.projectId === v).map((x) => x.projectStep || 0)) + 1;
+      return { projectId: v, projectName: p?.name, projectStep: step };
     };
     const readWithCat = () => C.applyCategory(read(), cat);
 
@@ -513,12 +572,24 @@ export function taskDialog(ctx, task = null, preset = {}) {
       $$('.only-reading', dlg).forEach((e) => (e.style.display = kind === 'reading' ? '' : 'none'));
       f.title.placeholder = kind === 'reading' ? 'Book title, e.g. Pride and Prejudice' : 'Task name';
       $('.custom-bounds', dlg).style.display = f.bmode.value === 'custom' ? '' : 'none';
-      const draft = read();
+      const repOn = kind === 'generic' && !!f.repEvery.value;
+      $$('.only-rep', dlg).forEach((e) => (e.style.display = repOn ? '' : 'none'));
+      $$('.only-once', dlg).forEach((e) => (e.style.display = repOn ? 'none' : ''));
+      $('.rep-days-f', dlg).style.display = repOn && f.repEvery.value === 'day' ? '' : 'none';
+      $$('.rep-c', dlg).forEach((e) => (e.style.display = f.repEnd.value === 'count' ? '' : 'none'));
+      $$('.rep-u', dlg).forEach((e) => (e.style.display = f.repEnd.value === 'until' ? '' : 'none'));
+      $('.rep-unit', dlg).textContent = f.repEvery.value === 'day' ? 'day' : 'week';
+      $('.rep-count-unit', dlg).textContent = f.repEvery.value === 'day' ? 'days' : 'weeks';
+      f.deadline.required = !repOn;
+      $$('.new-proj', dlg).forEach((e) => (e.style.display = f.projectId.value === '__new' ? '' : 'none'));
+      const draft0 = read();
+      const draft = draft0.projectId === '__new' ? { ...draft0, projectId: null } : draft0;
       const total = S.totalMinutes(draft);
       const p = S.params(draft, s);
       $('.calc', dlg).textContent = kind === 'reading'
         ? `≈ ${T.fmtDur(total)} of reading · ${+(S.pagesPerHour(draft.reading)).toFixed(1)} pages/hour · ≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`
-        : `≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`;
+        : draft.repeat ? `≈ ${Math.ceil(draft.repeat.minutes / p.chunk)} session${Math.ceil(draft.repeat.minutes / p.chunk) > 1 ? 's' : ''} of up to ${p.chunk} min each ${draft.repeat.every}, until ${T.format(draft.deadline - 1, tz, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`
+          : `≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`;
       // Live preview using the last known busy time and the other tasks
       const others = st.tasks.filter((x) => x.id !== draft.id);
       const { tasks, problems } = S.rescheduleAll([...others, draft], ctx.lastBusy || [], s, Date.now());
@@ -528,7 +599,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
       const fmt = (ms) => T.format(ms, tz, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 });
       let out = '';
       if (ss.length) {
-        out += `<div class="pv-head">${ss.length} session${ss.length > 1 ? 's' : ''} · first ${fmt(ss[0].start)} · last ends ${fmt(ss[ss.length - 1].end)}</div>`;
+        out += draft.repeat ? `<div class="pv-head">Next ${ss.length} session${ss.length > 1 ? 's' : ''} (planned ${s.repeatHorizonDays || 28} days ahead) · first ${fmt(ss[0].start)}</div>`
+          : `<div class="pv-head">${ss.length} session${ss.length > 1 ? 's' : ''} · first ${fmt(ss[0].start)} · last ends ${fmt(ss[ss.length - 1].end)}</div>`;
         out += `<ol class="pv-list">${ss.slice(0, 6).map((c) => `<li><b>${fmt(c.start)}</b> ${esc(c.label)}</li>`).join('')}${ss.length > 6 ? `<li class="muted">… ${ss.length - 6} more</li>` : ''}</ol>`;
       }
       if (prob) {
@@ -536,6 +608,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
           ${prob.suggestedDeadline ? `Earliest feasible deadline: <b>${fmt(prob.suggestedDeadline)}</b>. <button type="button" class="link use-sugg" data-v="${prob.suggestedDeadline}">Use it</button>` : ''}
           ${prob.fitsIgnoringBounds ? ' It would fit if you ignore day bounds.' : ''}</div>`;
       }
+      if (mine?.lastPlan?.late > 0 && !prob) out += `<div class="warn soft">◔ ${mine.lastPlan.late} session${mine.lastPlan.late > 1 ? 's' : ''} fall inside your safety margin — finishing ${fmt(mine.lastPlan.finish)}, later than ${S.marginDays(draft, s)} day${S.marginDays(draft, s) === 1 ? '' : 's'} before the deadline.</div>`;
+      if (mine?.lastPlan?.waitingFor?.length) out += `<div class="muted small">⏳ Starts after ${mine.lastPlan.waitingFor.map((id) => esc(st.tasks.find((x) => x.id === id)?.title || 'another task')).join(', ')}.</div>`;
+      if (draft.repeat && mine?.lastPlan?.periods?.length) out += `<div class="warn soft">◔ Not enough free time in ${mine.lastPlan.periods.length} upcoming ${draft.repeat.every === 'day' ? 'day' : 'week'}${mine.lastPlan.periods.length > 1 ? 's' : ''} (e.g. ${esc(S.periodLabel(mine.lastPlan.periods[0].key, draft.repeat.every))}).</div>`;
       setHTML($('.preview', dlg), out);
       $('.use-sugg', dlg)?.addEventListener('click', (e) => { f.deadline.value = T.toDTInput(+e.target.dataset.v, tz); update(); });
     };
@@ -547,12 +622,20 @@ export function taskDialog(ctx, task = null, preset = {}) {
     $('.del', dlg)?.addEventListener('click', () => close({ delete: true }));
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const nt = readWithCat();
+      let nt = readWithCat();
       if (!nt.deadline) return;
-      if (!(await checkSpan('Deadline', nt.deadline, s))) return;
+      if (!(await checkSpan(nt.repeat ? 'Repeating task' : 'Deadline', nt.deadline, s))) return;
       const others = st.tasks.filter((x) => x.id !== nt.id);
+      if (nt.projectId === '__new') {
+        const proj = { id: S.newId('p'), name: nt.projectName, sequential: f.projSeq.checked, color: nt.color };
+        s.projects = [...(s.projects || []), proj];
+        await ctx.saveSettings();
+        nt = { ...nt, projectId: proj.id, projectStep: 1 };
+      }
       const mine = S.rescheduleAll([...others, nt], ctx.lastBusy || [], s, Date.now()).tasks.find((x) => x.id === nt.id);
-      const n = S.sessions(mine).filter((c) => c.kind !== 'done').length;
+      const ss = S.sessions(mine).filter((c) => c.kind !== 'done');
+      // repeating tasks: the limit applies per day/week
+      const n = nt.repeat ? Math.max(0, ...Object.values(ss.reduce((m, c) => ({ ...m, [c.pk]: (m[c.pk] || 0) + 1 }), {}))) : ss.length;
       if (!(await checkCount('sessions', n, s))) return;
       close({ task: nt });
     });
@@ -585,6 +668,7 @@ export function problemDialog(ctx, task, prob) {
 // ======================================================================================
 // Settings
 // ======================================================================================
+const isWebApp = () => !(globalThis.browser ?? globalThis.chrome)?.runtime?.id;
 export function settingsDialog(ctx) {
   const st = ctx.state, s = st.settings;
   const auth = st.auth || {};
@@ -596,10 +680,12 @@ export function settingsDialog(ctx) {
   const agendaOn = !!agendaCal?.notificationSettings?.notifications?.some((n) => n.type === 'agenda' && n.method === 'email');
   let cats = (s.categories || []).map((c) => ({ ...c }));
   let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
+  let projects = (s.projects || []).map((p) => ({ ...p }));
+  const tp = s.timePrefs || S.DEFAULT_SETTINGS.timePrefs;
   const html = `
   <form class="settings-form">
     <header class="dlg-head"><h2>Settings</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
-    <nav class="tabs">${[['General', 0], ['Scheduling', 1], ['Categories', 5], ['Google Calendar', 2], ['Notifications', 3], ['Data', 4]].map(([n, i]) => `<button type="button" data-tab="${i}" class="${i ? '' : 'on'}">${n}</button>`).join('')}</nav>
+    <nav class="tabs">${[['General', 0], ['Scheduling', 1], ['Categories', 5], ['Google Calendar', 2], ['Other calendars', 6], ['Notifications', 3], ['Data', 4]].map(([n, i]) => `<button type="button" data-tab="${i}" class="${i ? '' : 'on'}">${n}</button>`).join('')}</nav>
     <div class="dlg-body">
       <section data-pane="0">
         <label class="field"><span>Display time zone</span><input name="tz" list="tzlist2" value="${esc(s.tz)}" spellcheck="false"></label>${tzDatalist('tzlist2')}
@@ -638,6 +724,18 @@ export function settingsDialog(ctx) {
             <label class="field"><span>Never create more than … sessions / repeats</span><input type="number" name="sessionMax" min="0" value="${s.sessionMax ?? 50}"></label>
             <label class="field"><span>Furthest ahead a task or repeating event may run (days, 0 = no limit)</span><input type="number" name="maxSpanDays" min="0" value="${s.maxSpanDays ?? 365}"></label>
           </div>
+        </fieldset>
+        <fieldset class="box"><legend>Planning</legend>
+          <div class="grid3">
+            <label class="field"><span>Most task time per day, all tasks together (min, 0 = no cap)</span><input type="number" name="dailyCapMinutes" min="0" step="15" value="${s.dailyCapMinutes || 0}"></label>
+            <label class="field"><span>Default safety margin — aim to finish … days before a deadline</span><input type="number" name="marginDays" min="0" step="0.5" value="${s.marginDays || 0}"></label>
+            <label class="field"><span>Travel buffer around events with a place (min, 0 = off)</span><input type="number" name="travelMinutes" min="0" step="5" value="${s.travelMinutes ?? 15}"></label>
+            <label class="field"><span>Plan repeating tasks … days ahead</span><input type="number" name="repeatHorizonDays" min="7" max="120" value="${s.repeatHorizonDays || 28}"></label>
+            <label class="field"><span>Focus timer: work / break (min)</span><div class="join"><input type="number" name="pomoWork" min="5" max="120" value="${s.pomodoro?.work || 25}" class="num"><input type="number" name="pomoRest" min="1" max="60" value="${s.pomodoro?.rest || 5}" class="num"></div></label>
+          </div>
+          <div class="field"><span>Times of day (for category preferences)</span>
+            <div class="tod-grid">${['morning', 'afternoon', 'evening'].map((k) => `<span class="tod-l">${k[0].toUpperCase() + k.slice(1)}</span><input type="time" name="tp_${k}_0" value="${tp[k][0]}" step="900"><span class="muted">to</span><input type="time" name="tp_${k}_1" value="${tp[k][1]}" step="900">`).join('')}</div></div>
+          <label class="chk"><input type="checkbox" name="learnSpeed" ${s.learnSpeed !== false ? 'checked' : ''}> Learn my reading speed from the pages I report, and adjust reading plans</label>
         </fieldset>
         <label class="chk"><input type="checkbox" name="assumePastDone" ${s.assumePastDone ? 'checked' : ''}> Assume past sessions were done (mark them undone to reschedule)</label>
         <label class="chk"><input type="checkbox" name="allDayBlocks" ${s.allDayBlocks ? 'checked' : ''}> All-day events block task time</label>
@@ -691,6 +789,21 @@ export function settingsDialog(ctx) {
         <label class="chk"><input type="checkbox" name="askCategory" ${s.askCategory !== false ? 'checked' : ''}> When I create a task without a category, ask me for one</label>
         <div class="cats-list"></div>
         <button type="button" class="btn small add-cat">+ Add category</button>
+        <fieldset class="box"><legend>Projects</legend>
+          <p class="muted small" style="margin:0">Group tasks into a project in the task dialog. When steps run in order, each task starts only after the previous one is done.</p>
+          <div class="proj-list"></div>
+        </fieldset>
+      </section>
+      <section data-pane="6" hidden>
+        <p class="muted small">Show calendars from other accounts next to your Google calendar. Their events count as busy time for task planning (untick “busy” to ignore a calendar). They're read-only here: create and edit events in your main Google account. Sign-ins for these accounts stay on this device.</p>
+        <div class="acct-list"></div>
+        <div class="acct-add">
+          <button type="button" class="btn small" data-add="google">+ Another Google account</button>
+          <button type="button" class="btn small" data-add="outlook">+ Outlook / Microsoft 365</button>
+          <button type="button" class="btn small" data-add="icloud">+ iCloud</button>
+          <button type="button" class="btn small" data-add="ics">+ Calendar link (.ics)</button>
+        </div>
+        <div class="acct-form"></div>
       </section>
       <section data-pane="4" hidden>
         <p class="muted small">Tasks, settings and local events live in this browser's extension storage. Back them up or move them to another browser:</p>
@@ -747,12 +860,14 @@ export function settingsDialog(ctx) {
         <span class="sw-dot big" style="background:${esc(c.color)}"></span>
         <details class="ic-pick"><summary class="cat-icbtn" title="Icon" aria-label="Choose icon">${esc(c.icon || '＋')}</summary>
           <div class="icon-grid"><input class="cat-icin" placeholder="Type or paste" maxlength="8" value="${esc(c.icon || '')}">${C.CAT_ICONS.map((ic) => `<button type="button" class="ic-btn" data-ic="${ic}">${ic}</button>`).join('')}<button type="button" class="ic-btn none" data-ic="">No icon</button></div></details>
+        <select class="cat-pref" title="Preferred time of day" aria-label="Preferred time of day">${[['', 'Any time'], ['morning', 'Mornings'], ['afternoon', 'Afternoons'], ['evening', 'Evenings']].map(([v, l]) => `<option value="${v}" ${(c.prefer || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <input class="cat-nm" value="${esc(c.name)}" maxlength="30" aria-label="Category name">
         ${C.swatchesHTML('cc' + i, c.color)}
         <button type="button" class="icon-btn cat-del" title="Delete category" aria-label="Delete category">✕</button></div>`).join('') || '<p class="muted small">No categories yet.</p>');
       $$('.cat-row', dlg).forEach((row) => {
         const i = +row.dataset.i;
         $('.cat-nm', row).oninput = (e) => { cats[i].name = e.target.value; };
+        $('.cat-pref', row).onchange = (e) => { cats[i].prefer = e.target.value || undefined; };
         const pick = $('.ic-pick', row);
         pick.ontoggle = () => {
           if (!pick.open) return;
@@ -769,6 +884,76 @@ export function settingsDialog(ctx) {
       });
     };
     drawCats();
+    const drawProjects = () => {
+      setHTML($('.proj-list', dlg), projects.map((p, i) => {
+        const n = st.tasks.filter((t) => t.projectId === p.id && !t.archived).length;
+        return `<div class="row proj-row" data-i="${i}"><input class="pj-name" value="${esc(p.name)}" maxlength="40" aria-label="Project name">
+          <label class="chk"><input type="checkbox" class="pj-seq" ${p.sequential ? 'checked' : ''}> steps in order</label>
+          <span class="muted small">${n} task${n === 1 ? '' : 's'}</span><span class="grow"></span>
+          <button type="button" class="icon-btn pj-del" title="Delete project (tasks stay)" aria-label="Delete project">✕</button></div>`;
+      }).join('') || '<p class="muted small">No projects yet — create one from a task’s “Part of project”.</p>');
+      $$('.proj-row', dlg).forEach((row) => {
+        const p = projects[+row.dataset.i];
+        $('.pj-name', row).oninput = (e) => { p.name = e.target.value; };
+        $('.pj-seq', row).onchange = (e) => { p.sequential = e.target.checked; };
+        $('.pj-del', row).onclick = () => { projects.splice(+row.dataset.i, 1); drawProjects(); };
+      });
+    };
+    drawProjects();
+    // ----- Other calendars (accounts) -----
+    const typeName = { google: 'Google', outlook: 'Outlook', icloud: 'iCloud', ics: 'Calendar link' };
+    const drawAccounts = async () => {
+      await AC.loadAccounts();
+      const list = AC.accounts();
+      setHTML($('.acct-list', dlg), list.map((a) => `<div class="acct" data-id="${esc(a.id)}">
+        <div class="row"><b>${esc(typeName[a.type])}</b> <span>${esc(a.label)}</span>
+          ${a.error || a.needsReconnect ? `<span class="pill bad">${esc(a.error || 'Reconnect needed')}</span>` : '<span class="pill ok">OK</span>'}
+          <span class="grow"></span>
+          ${a.type !== 'ics' ? '<button type="button" class="btn small ghost ac-re">Reconnect</button>' : ''}
+          <button type="button" class="btn small ghost danger ac-del">Remove</button></div>
+        ${(a.calendars || []).map((c) => `<div class="row acal" data-cal="${esc(c.id)}"><i class="sw-dot" style="background:${esc(c.color || '#888')}"></i><span class="grow">${esc(c.name)}</span>
+          <label class="chk"><input type="checkbox" class="ac-show" ${c.show !== false ? 'checked' : ''}> show</label>
+          <label class="chk"><input type="checkbox" class="ac-busy" ${c.busy !== false ? 'checked' : ''}> busy</label></div>`).join('')}
+      </div>`).join('') || '<p class="muted small">No other calendars yet.</p>');
+      $$('.acct', dlg).forEach((row) => {
+        const id = row.dataset.id;
+        $('.ac-del', row).onclick = async () => { await AC.removeAccount(id); ctx.externalChanged?.(); drawAccounts(); };
+        $('.ac-re', row)?.addEventListener('click', async () => { try { await AC.reconnect(id); ctx.externalChanged?.(); } catch (e) { alertIn(e); } drawAccounts(); });
+        $$('.acal', row).forEach((cr) => {
+          $('.ac-show', cr).onchange = async (e) => { await AC.setCalendarFlags(id, cr.dataset.cal, { show: e.target.checked }); ctx.externalChanged?.(); };
+          $('.ac-busy', cr).onchange = async (e) => { await AC.setCalendarFlags(id, cr.dataset.cal, { busy: e.target.checked }); ctx.externalChanged?.(); };
+        });
+      });
+    };
+    const alertIn = (e) => setHTML($('.acct-form', dlg), `<div class="warn">${esc(e.message || String(e))}</div>`);
+    const busyBtn = async (btn, fn) => {
+      const lbl = btn.textContent; btn.disabled = true; btn.textContent = 'Connecting…';
+      try { await fn(); setHTML($('.acct-form', dlg), ''); ctx.externalChanged?.(); await drawAccounts(); }
+      catch (e) { alertIn(e); }
+      finally { btn.disabled = false; btn.textContent = lbl; }
+    };
+    $$('[data-add]', dlg).forEach((b) => (b.onclick = () => {
+      const kind = b.dataset.add, form = $('.acct-form', dlg);
+      if (kind === 'google') {
+        const cid = (st.auth?.mode !== 'builtin' && st.auth?.clientId) || G.webClientId?.() || '';
+        setHTML(form, `<div class="box"><p class="small">Pick the other Google account in the window that opens. ${st.auth?.clientId ? '' : '<b>Needs your own Google OAuth client (Settings → Google Calendar → Manual setup).</b>'} While your Google project is in “Testing”, add that account under <i>Audience → Test users</i> first.</p>
+          <button type="button" class="btn small primary go">Choose account…</button></div>`);
+        $('.go', form).onclick = (e) => busyBtn(e.target, () => AC.addGoogle(cid));
+      } else if (kind === 'outlook') {
+        setHTML(form, `<div class="box"><p class="small">Outlook needs a free Microsoft app registration, once: <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure portal → App registrations</a> → <i>New registration</i> → “Accounts in any organizational directory and personal Microsoft accounts” → platform <i>Single-page application</i> with redirect URI <code class="mono">${esc(redirect)}</code> → under <i>Authentication</i> tick <i>Access tokens (implicit flow)</i>. Paste its Application (client) ID:</p>
+          <div class="join"><input class="mono ol-id" placeholder="00000000-0000-0000-0000-000000000000" value="${esc(s.outlookClientId || '')}"><button type="button" class="btn small primary go">Sign in to Microsoft…</button></div></div>`);
+        $('.go', form).onclick = (e) => { const id = $('.ol-id', form).value.trim(); s.outlookClientId = id; busyBtn(e.target, () => AC.addOutlook(id)); };
+      } else if (kind === 'icloud') {
+        setHTML(form, `<div class="box"><p class="small">${isWebApp() ? '<b>iCloud only works in the Tempo browser extension</b> (Apple blocks web pages from reading it). ' : ''}Use your Apple ID and an <b>app-specific password</b> (create one at <a href="https://account.apple.com" target="_blank" rel="noopener">account.apple.com</a> → Sign-In and Security → App-Specific Passwords). It's stored only on this device.</p>
+          <div class="row"><input class="ic-user" placeholder="Apple ID (email)" autocomplete="off"><input class="ic-pass" type="password" placeholder="xxxx-xxxx-xxxx-xxxx" autocomplete="off"><button type="button" class="btn small primary go">Connect</button></div></div>`);
+        $('.go', form).onclick = (e) => busyBtn(e.target, () => AC.addICloud($('.ic-user', form).value.trim(), $('.ic-pass', form).value));
+      } else {
+        setHTML(form, `<div class="box"><p class="small">Paste a calendar's subscription link (.ics or webcal://) — e.g. Outlook “Publish calendar” ICS link, a shared iCloud calendar's public link, a school or sports schedule.${isWebApp() ? ' Many sites only allow this in the browser extension.' : ''}</p>
+          <div class="row"><input class="ics-url mono" placeholder="https://… or webcal://…" style="flex:2"><input class="ics-name" placeholder="Name"><button type="button" class="btn small primary go">Add</button></div></div>`);
+        $('.go', form).onclick = (e) => busyBtn(e.target, () => AC.addIcs($('.ics-url', form).value, $('.ics-name', form).value.trim()));
+      }
+    }));
+    drawAccounts();
     $('.add-cat', dlg).onclick = () => { cats.push({ id: 'cat-' + Math.random().toString(36).slice(2, 8), name: 'New category', color: C.CAT_COLORS[cats.length % C.CAT_COLORS.length], icon: '' }); drawCats(); $$('.cat-nm', dlg).at(-1).select(); };
     $('.export-json', dlg).onclick = () => ctx.exportJson();
     $('.import-json', dlg).onchange = (e) => { const file = e.target.files[0]; if (file) close({ action: 'import', file }); };
@@ -787,6 +972,12 @@ export function settingsDialog(ctx) {
         chunkMinutes: Math.max(5, +f.chunkMinutes.value || 60), minChunkMinutes: f.minChunkMinutes.value ? Math.max(5, +f.minChunkMinutes.value) : null,
         breakMinutes: Math.max(0, +f.breakMinutes.value || 0),
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
+        dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),
+        travelMinutes: Math.max(0, +f.travelMinutes.value || 0), repeatHorizonDays: Math.max(7, +f.repeatHorizonDays.value || 28),
+        pomodoro: { work: Math.max(5, +f.pomoWork.value || 25), rest: Math.max(1, +f.pomoRest.value || 5) }, learnSpeed: f.learnSpeed.checked,
+        outlookClientId: s.outlookClientId || '',
+        timePrefs: Object.fromEntries(['morning', 'afternoon', 'evening'].map((k) => [k, [f[`tp_${k}_0`].value || tp[k][0], f[`tp_${k}_1`].value || tp[k][1]]])),
+        projects: projects.map((p) => ({ ...p, name: (p.name || '').trim() || 'Project' })),
         sessionWarn: Math.max(0, +f.sessionWarn.value || 0), sessionMax: Math.max(0, +f.sessionMax.value || 0), maxSpanDays: Math.max(0, +f.maxSpanDays.value || 0),
         assumePastDone: f.assumePastDone.checked, allDayBlocks: f.allDayBlocks.checked,
         busyCalendars: busy.length === allCals.length ? null : busy,
@@ -1012,7 +1203,7 @@ export function deleteDoneDialog(ctx, task, sess) {
 // Reading: how many pages were read. Other tasks: how much of the session's work got done. The rest is either added
 // as new time or squeezed into the remaining sessions. Optionally, part of the slot went to something else: the
 // block is then split into that (an event, or time on another task) and the shorter session.
-export function partialDialog(ctx, task, sess) {
+export function partialDialog(ctx, task, sess, opts = {}) {
   const st = ctx.state, s = st.settings, tz = s.tz;
   const when = `${T.format(sess.start, tz, { weekday: 'short', day: 'numeric', month: 'short' })}, ${T.fmtTime(sess.start, tz, s.h12)}–${T.fmtTime(sess.end, tz, s.h12)}`;
   const reading = task.kind === 'reading';
@@ -1022,13 +1213,16 @@ export function partialDialog(ctx, task, sess) {
   const others = S.sortTasks(st.tasks.filter((t) => !t.archived && t.id !== task.id));
   const cals = ctx.writableCalendars();
   const laterSessions = S.sessions(task).filter((c) => c.kind === 'planned' && c.start > sess.start && c.id !== sess.id).length;
-  const prevPct = sess.partial && sess.slotMin ? Math.round((sess.credit / sess.slotMin) * 100) : 50;
-  const prevPages = sess.partial && reading ? Math.round((sess.credit / 60) * S.pagesPerHour(task.reading)) : '';
+  // Prefill: what was recorded before, or an estimate from the timer.
+  const est = opts.actualMin != null ? opts.actualMin / Math.max(1, length) : null;
+  const prevPct = est != null ? Math.max(0, Math.min(100, Math.round((est * 100) / 5) * 5)) : sess.partial && sess.slotMin ? Math.round((sess.credit / sess.slotMin) * 100) : 50;
+  const prevPages = reading ? (opts.actualMin != null ? Math.round((opts.actualMin / 60) * S.pagesPerHour(task.reading)) : sess.partial ? (sess.pagesDone ?? Math.round((sess.credit / 60) * S.pagesPerHour(task.reading))) : '') : '';
   return modal(`
     <form class="partial">
       <header class="dlg-head"><h2>Partly done</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
       <div class="dlg-body">
         <p class="muted small" style="margin:0">“${esc(sess.label)}” · ${esc(when)}</p>
+        ${opts.actualMin != null ? `<p class="small timer-note">⏱ You worked <b>${T.fmtDur(Math.round(opts.actualMin))}</b> of ${T.fmtDur(length)}. ${reading ? 'The pages below are an estimate at your current speed — correct them.' : 'Adjust how much got done if needed.'}</p>` : ''}
         ${reading ? `
           <label class="field"><span>Pages read (of ${planned}: page ${pa}–${pb})</span>
             <div class="row"><input type="number" name="pages" min="0" max="${planned * 3}" step="1" value="${prevPages}" required autofocus style="width:7em"><span class="muted small pg-to"></span></div></label>`
@@ -1060,12 +1254,14 @@ export function partialDialog(ctx, task, sess) {
         </fieldset>
       </div>
       <footer class="actions">
+        ${opts.actualMin != null ? '<button type="button" class="btn ghost all-done">It’s all done</button>' : ''}
         <span class="grow"></span>
         <button type="button" class="btn ghost" data-close>Cancel</button>
         <button type="submit" class="btn primary">Save</button>
       </footer>
     </form>`, (dlg, close) => {
     const f = $('form', dlg);
+    $('.all-done', dlg)?.addEventListener('click', () => close({ allDone: true }));
     const fmt = (ms) => T.fmtTime(ms, tz, s.h12);
     const sync = () => {
       if (reading) { const n = +f.pages.value || 0; $('.pg-to', dlg).textContent = f.pages.value === '' ? '' : n ? `read page ${pa}–${pa + n - 1}` : 'nothing read'; }

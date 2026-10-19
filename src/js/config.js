@@ -11,3 +11,7 @@
 //                     Uses Chrome's built-in account picker and refreshes tokens automatically.
 export const WEB_CLIENT_ID = '';
 export const CHROME_CLIENT_ID = '';
+// Microsoft app (client) ID for showing Outlook / Microsoft 365 calendars. Leave empty to let each user paste
+// their own in Settings (Azure portal → App registrations → new "Single-page application" with the redirect URI
+// shown in Settings and "Access tokens" enabled under Implicit grant).
+export const OUTLOOK_CLIENT_ID = '';

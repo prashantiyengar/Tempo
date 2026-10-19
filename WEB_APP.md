@@ -55,3 +55,13 @@ It opens full screen like an app and works offline. Changes made offline appear 
 - **Reminders:** the web app shows notifications only while it's open (browsers don't let a closed website run timers). Task sessions are written to Google Calendar with reminders, so **your phone's Google Calendar app notifies you even when Tempo is closed**.
 - **Exports** (PDF, PNG, TIFF) download to your phone's Downloads folder.
 - **Updating:** upload the new `web` folder to the same host. The app picks up the new version the next time it opens.
+
+## Outlook / Microsoft 365 calendars (optional)
+To show an Outlook calendar next to Google (Settings → Other calendars → *+ Outlook*), register a free Microsoft app once:
+1. Go to <https://portal.azure.com> → **App registrations** → **New registration**.
+2. Supported account types: *Accounts in any organizational directory and personal Microsoft accounts*.
+3. Platform **Single-page application**. Redirect URI: this app's address, e.g. `https://prashantiyengar.github.io/Tempo/`. For the extension, use the redirect URI shown in Settings.
+4. Under **Authentication**, tick **Access tokens (used for implicit flows)**.
+5. Copy the **Application (client) ID** into Tempo when asked.
+
+iCloud calendars work in the browser extension only, because Apple doesn't let web pages read them. In the web app, add an iCloud calendar's public link (.ics) instead, if the link allows it.

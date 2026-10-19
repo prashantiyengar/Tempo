@@ -111,6 +111,7 @@ async def main():
         await page.keyboard.press('Escape')
 
         # 11. Category when creating an event by dragging (quick add)
+        await page.evaluate("document.querySelector('#toast').classList.remove('show')")  # e.g. 'Pushed later' from step 6
         cols = await page.query_selector_all('.tg-col'); box = await cols[1].bounding_box(); hh = 48
         await page.mouse.move(box['x'] + 20, box['y'] + 18 * hh + 2); await page.mouse.down(); await page.mouse.move(box['x'] + 20, box['y'] + 19 * hh - 2, steps=6); await page.mouse.up()
         await page.wait_for_selector('.popover .qc'); await page.fill('.popover input[name=title]', 'Design review')
