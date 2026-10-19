@@ -124,7 +124,9 @@ async def main():
         print('7b. renamed:', [e['summary'] for e in g.task_events() if 'Tax return' in e['summary']][:1])
 
         # 8. Events show their category icon; "Don't ask again"
-        await page.click('.ev:not(.chunk):has-text("Standup") >> nth=0'); await page.click('.popover .pop-evcat'); await page.click('dialog .cat-chip:has-text("Work")'); await page.wait_for_timeout(2000)
+        await page.click('.ev:not(.chunk):has-text("Standup") >> nth=0'); await page.click('.popover .pop-evcat'); await page.click('dialog .cat-chip:has-text("Work")'); await page.wait_for_timeout(600)
+        if await page.query_selector('dialog.narrow .choice-btn:has-text("All events")'): await page.click('dialog.narrow .choice-btn:has-text("All events")')  # repeating event
+        await page.wait_for_timeout(2000)
         print('8. event chips with icons:', await page.eval_on_selector_all('.ev:not(.chunk) .ev-t', 'e => e.map(x => x.textContent.trim()).filter(t => /^\\p{Extended_Pictographic}/u.test(t))'))
         await task_form('Call bank', 1, '2026-10-23T17:00')
         await page.click('dialog .task-form button[type=submit]'); await page.wait_for_selector('dialog .ask-cat'); await page.click('dialog .ask-cat .never'); await page.wait_for_timeout(2000)

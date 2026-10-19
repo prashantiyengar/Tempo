@@ -148,3 +148,14 @@ export function describe(lines) {
   else if (r.until) s += `, until ${r.until.slice(0, 4)}-${r.until.slice(4, 6)}-${r.until.slice(6, 8)}`;
   return s;
 }
+
+// Do two recurrence rules mean the same thing? (Ignores spelling differences such as WKST, INTERVAL=1, order,
+// or how UNTIL is written — compared by day.)
+export function sameRule(a, b) {
+  const x = parseRRule(a), y = parseRRule(b);
+  if (!x || !y) return !x && !y;
+  const days = (r) => r.byday.map((d) => `${d.n || ''}${d.wd}`).sort().join(',');
+  const until = (r) => (r.until ? r.until.slice(0, 8) : '');
+  return x.freq === y.freq && x.interval === y.interval && days(x) === days(y) && x.bymonthday.join() === y.bymonthday.join()
+    && x.bymonth.join() === y.bymonth.join() && (x.count || 0) === (y.count || 0) && until(x) === until(y);
+}

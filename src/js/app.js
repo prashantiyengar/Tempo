@@ -11,7 +11,7 @@ import { describe } from './rrule.js';
 import * as C from './categories.js';
 import * as AC from './accounts.js';
 import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
-import { $, $$, esc, el, toast as uiToast, choose, popover, closePopover, download, modal, setHTML } from './ui.js';
+import { $, $$, esc, el, toast as uiToast, choose, popover, closePopover, download, modal, setHTML, setQuickTz } from './ui.js';
 import * as RV from './review.js';
 import { parseTask } from './parse.js';
 
@@ -30,9 +30,13 @@ const ctx = {
   get state() { return app.state; },
   externalChanged() { AC.invalidateExternal(); render(); cycle(); },
   get lastBusy() { return app.lastBusy; },
+  // New events go to the calendar chosen for task sessions (Settings → Google Calendar), else the primary one.
   defaultCalendar() {
-    const prim = (st().gmeta.calendars || []).find((c) => c.primary);
-    return E.connected(st()) && prim ? prim.id : E.LOCAL_CAL;
+    if (!E.connected(st())) return E.LOCAL_CAL;
+    const cals = st().gmeta.calendars || [];
+    const want = set().taskCalendarId && cals.find((c) => c.id === E.normCal(st(), set().taskCalendarId) && ['owner', 'writer'].includes(c.accessRole));
+    const prim = cals.find((c) => c.primary);
+    return want ? want.id : prim ? prim.id : E.LOCAL_CAL;
   },
   writableCalendars() {
     const g = E.connected(st()) ? (st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)) : [];
@@ -1670,6 +1674,7 @@ async function openSettings() {
     const prevSettings = JSON.parse(JSON.stringify(before));
     st().settings = r.settings;
     await E.persist(st(), ['settings']);
+    setQuickTz(r.settings.tz);
     if (JSON.stringify(prevSettings) !== JSON.stringify(r.settings)) pushUndo('settings change', async () => { st().settings = { ...prevSettings, sharedHash: null }; await E.persist(st(), ['settings']); E.invalidate(); await render(); await cycle(); });
     const ref = C.refreshTaskCategories(st().settings, st().tasks);
     if (ref.changed.length) st().tasks = ref.tasks;
@@ -1807,10 +1812,35 @@ async function renderPage(kind, cursorKey, scale = 2) {
   const items = await collectItems(r.days);
   const z = tz();
   if (kind === 'month') {
-    return { canvas: X.renderMonth({ monthKey: r.monthKey, gridStart: r.days[0], items, settings: set(), scale, title: T.format(T.dayStart(r.monthKey, z), z, { month: 'long', year: 'numeric' }) }), key: r.monthKey.slice(0, 7) };
+    const inMonth = r.days.filter((k) => k.slice(0, 7) === r.monthKey.slice(0, 7));
+    return { canvas: X.renderMonth({ monthKey: r.monthKey, gridStart: r.days[0], items, settings: set(), scale, title: T.format(T.dayStart(r.monthKey, z), z, { month: 'long', year: 'numeric' }), summary: pageSummary(inMonth, items) }), key: r.monthKey.slice(0, 7) };
   }
   const a = T.dayStart(r.days[0], z), b = T.dayStart(r.days[6], z);
-  return { canvas: X.renderWeek({ days: r.days, items, settings: set(), scale, title: `Week of ${T.format(a, z, { day: 'numeric', month: 'long' })} – ${T.format(b, z, { day: 'numeric', month: 'long', year: 'numeric' })}` }), key: r.days[0] };
+  return { canvas: X.renderWeek({ days: r.days, items, settings: set(), scale, title: `Week of ${T.format(a, z, { day: 'numeric', month: 'long' })} – ${T.format(b, z, { day: 'numeric', month: 'long', year: 'numeric' })}`, summary: pageSummary(r.days, items) }), key: r.days[0] };
+}
+
+// The breakdown of time used for one printed page (same hours and grouping as the Analysis view).
+function pageSummary(days, items) {
+  const s = set(), z = tz(), o = app.anOpts || { scope: 'bounds', by: 'category' };
+  const from = T.dayStart(days[0], z), to = T.dayStart(T.addDays(days[days.length - 1], 1), z);
+  const actx = { settings: s, gmeta: st().gmeta, calColor };
+  const groups = {};
+  const occ = items.filter((it) => A.isOccupying(it, s) && it.end > from && it.start < to).map((it) => {
+    const g = A.groupOf(it, o.by, actx);
+    groups[g.key] ||= g;
+    return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.kind === 'chunk' ? it.task.title : (it.title || ''), kind: it.kind, uid: it.key };
+  });
+  const data = A.compute(occ, A.scopeWindows(o.scope, from, to, s), z);
+  const scopeName = A.SCOPES[o.scope] || (s.periods || []).find((p) => 'period:' + p.id === o.scope)?.name || '';
+  let busiest = null;
+  for (const [k, d] of Object.entries(data.days)) { const used = d.available - d.free; if (used > 0 && (!busiest || used > busiest.m)) busiest = { k, m: used, of: d.available }; }
+  const chunks = items.filter((it) => it.kind === 'chunk' && it.start >= from && it.start < to);
+  return {
+    scope: scopeName.toLowerCase(), available: data.totals.available, free: data.totals.free,
+    groups: Object.entries(data.totals.groups).map(([k, m]) => ({ label: groups[k]?.label || k, color: groups[k]?.color || '#9aa0aa', m })).sort((a, b) => b.m - a.m),
+    busiest: busiest && { label: T.format(T.dayStart(busiest.k, z), z, { weekday: 'short', day: 'numeric', month: 'short' }), m: busiest.m, of: busiest.of },
+    sessions: { done: chunks.filter((c) => c.status === 'done').length, total: chunks.length },
+  };
 }
 
 async function exportView(kind, fmt) {
@@ -1928,6 +1958,7 @@ async function init() {
   // Web app: finish a Google sign-in that just came back in the URL, or renew an expired one silently.
   const redirect = await G.completeRedirect();
   app.state = await E.loadState();
+  setQuickTz(set().tz);
   app.cursor = app.miniCursor = T.dayKey(Date.now(), tz());
   if (innerWidth < 760) app.view = 'day';
   { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis'].includes(v)) app.view = v; }

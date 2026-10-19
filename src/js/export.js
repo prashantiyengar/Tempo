@@ -66,7 +66,7 @@ export function layoutColumns(items) {
   return out;
 }
 
-export function renderWeek({ days, items, settings, title, scale = 2 }) {
+export function renderWeek({ days, items, settings, title, scale = 2, summary = null }) {
   const tz = settings.tz;
   const W = 1600, gutter = 64, headH = 100, colW = (W - gutter - 24) / days.length;
   const allDay = items.filter((i) => i.allDay);
@@ -97,7 +97,8 @@ export function renderWeek({ days, items, settings, title, scale = 2 }) {
   }
   const adH = rows.length ? rows.length * 26 + 10 : 0;
   const top = headH + adH;
-  const H = top + (h1 - h0) * hourH + 24;
+  const gridBottom = top + (h1 - h0) * hourH;
+  const H = gridBottom + 24 + (summary ? SUMMARY_H : 0);
 
   const cv = document.createElement('canvas');
   cv.width = W * scale; cv.height = H * scale;
@@ -184,13 +185,65 @@ export function renderWeek({ days, items, settings, title, scale = 2 }) {
       ctx.restore();
     }
   });
+  if (summary) drawSummary(ctx, summary, 24, gridBottom + 18, W - 48);
   return cv;
 }
 
-export function renderMonth({ monthKey, gridStart, items, settings, title, scale = 2 }) {
+// ---------- Time-used infographic at the bottom of each printed page ----------
+const SUMMARY_H = 190;
+const fmtH = (m) => { const h = m / 60; return h >= 10 ? `${Math.round(h)}h` : `${Math.round(h * 10) / 10}h`; };
+function drawSummary(ctx, s, x, y, w) {
+  const h = SUMMARY_H - 24;
+  ctx.fillStyle = '#f7f8fa'; rr(ctx, x, y, w, h, 12); ctx.fill();
+  ctx.strokeStyle = C.line; rr(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 12); ctx.stroke();
+  const px = x + 20, py = y + 16;
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = C.ink; ctx.font = `600 16px ${FONT}`;
+  ctx.fillText('Where the time goes', px, py);
+  ctx.fillStyle = C.muted; ctx.font = `12px ${FONT}`;
+  ctx.fillText(`${fmtH(s.available)} ${s.scope}`, px + ctx.measureText('Where the time goes').width + 70, py + 3);
+  // key figures
+  const used = s.available - s.free;
+  const tiles = [
+    ['Occupied', fmtH(used), s.available ? `${Math.round((used / s.available) * 100)}% of ${fmtH(s.available)}` : ''],
+    ['Free', fmtH(s.free), s.available ? `${Math.round((s.free / s.available) * 100)}%` : ''],
+    ['Busiest day', s.busiest ? s.busiest.label : '—', s.busiest ? `${fmtH(s.busiest.m)} of ${fmtH(s.busiest.of)}` : ''],
+    ['Task sessions', s.sessions.total ? `${s.sessions.done}/${s.sessions.total}` : '—', s.sessions.total ? 'done' : 'none planned'],
+  ];
+  const tw = 170;
+  tiles.forEach(([l, v, sub], i) => {
+    const tx = x + w - 20 - (tiles.length - i) * (tw + 10);
+    ctx.fillStyle = C.muted; ctx.font = `600 11px ${FONT}`; ctx.fillText(l.toUpperCase(), tx, py);
+    ctx.fillStyle = C.ink; ctx.font = `600 22px ${FONT}`; ellipsis(ctx, v, tx, py + 16, tw);
+    ctx.fillStyle = C.muted; ctx.font = `12px ${FONT}`; ellipsis(ctx, sub, tx, py + 44, tw);
+  });
+  // stacked share bar
+  const bx = px, by = py + 70, bw = w - 40, bh = 22;
+  const total = Math.max(1, s.available);
+  let cx = bx;
+  ctx.save(); rr(ctx, bx, by, bw, bh, 6); ctx.clip();
+  ctx.fillStyle = '#eceef2'; ctx.fillRect(bx, by, bw, bh);
+  for (const g of s.groups) { const gw = (g.m / total) * bw; ctx.fillStyle = g.color; ctx.fillRect(cx, by, gw, bh); cx += gw; }
+  ctx.restore();
+  // legend
+  let lx = bx, ly = by + bh + 12;
+  ctx.font = `12px ${FONT}`;
+  const entries = [...s.groups.map((g) => ({ ...g })), { label: 'Free', color: '#eceef2', m: s.free }];
+  for (const g of entries) {
+    const txt = `${g.label}  ${fmtH(g.m)} · ${Math.round((g.m / total) * 100)}%`;
+    const tw2 = ctx.measureText(txt).width + 30;
+    if (lx + tw2 > bx + bw) { lx = bx; ly += 20; if (ly > y + h - 18) break; }
+    ctx.fillStyle = g.color; rr(ctx, lx, ly + 1, 12, 12, 3); ctx.fill();
+    if (g.label === 'Free') { ctx.strokeStyle = '#c9ccd3'; rr(ctx, lx + 0.5, ly + 1.5, 11, 11, 3); ctx.stroke(); }
+    ctx.fillStyle = C.ink; ctx.fillText(txt, lx + 18, ly);
+    lx += tw2;
+  }
+}
+
+export function renderMonth({ monthKey, gridStart, items, settings, title, scale = 2, summary = null }) {
   const tz = settings.tz;
-  const W = 1600, H = 1130, left = 24, topH = 100, cols = 7, rowsN = 6;
-  const cw = (W - left * 2) / cols, ch = (H - topH - 24) / rowsN;
+  const W = 1600, gridH = 1130, H = gridH + (summary ? SUMMARY_H : 0), left = 24, topH = 100, cols = 7, rowsN = 6;
+  const cw = (W - left * 2) / cols, ch = (gridH - topH - 24) / rowsN;
   const cv = document.createElement('canvas');
   cv.width = W * scale; cv.height = H * scale;
   const ctx = cv.getContext('2d');
@@ -245,6 +298,7 @@ export function renderMonth({ monthKey, gridStart, items, settings, title, scale
       ctx.fillText(`+${list.length - maxN + 1} more`, x + 10, y + 34 + (maxN - 1) * 20 + 3);
     }
   }
+  if (summary) drawSummary(ctx, summary, left, gridH - 6, W - left * 2);
   return cv;
 }
 

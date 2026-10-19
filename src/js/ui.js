@@ -2,6 +2,7 @@
 // All markup built from strings goes through DOMPurify (the official, unmodified library in /vendor) before it
 // touches the DOM. Values interpolated into those strings are additionally escaped with esc().
 import DOMPurify from '../vendor/purify.es.mjs';
+import * as T from './tz.js';
 
 const PURIFY = {
   RETURN_DOM_FRAGMENT: true,
@@ -43,6 +44,7 @@ export function modal(html, setup, { cls = '' } = {}) {
     dlg.addEventListener('mousedown', (e) => { if (e.target === dlg) close(undefined); });
     $$('[data-close]', dlg).forEach((b) => b.addEventListener('click', () => close(undefined)));
     setup?.(dlg, close);
+    addDateShortcuts(dlg);
     dlg.showModal();
     const first = dlg.querySelector('[autofocus]');
     if (first) { first.focus(); first.select?.(); }
@@ -82,6 +84,7 @@ export function popover(anchorRect, html, setup) {
   p.style.left = left + 'px';
   p.style.top = Math.max(8, top) + 'px';
   setup?.(p, closePopover);
+  addDateShortcuts(p);
   setTimeout(() => {
     document.addEventListener('mousedown', outside, true);
     document.addEventListener('keydown', escKey, true);
@@ -130,3 +133,67 @@ export function download(blob, name) {
 }
 
 export const TASK_COLORS = ['#4f6bed', '#0f9d76', '#e2683c', '#c2459b', '#8a5cf6', '#d4a20a', '#2a9bd6', '#d6455b', '#5c7a3a', '#6b7280'];
+
+// ---------- Quick date shortcuts next to every date / date-time field: Now, +1 hour, +1 day, +1 week ----------
+// A date field followed by a time field (e.g. an event's start) is treated as one date-time. Moving an event's
+// start moves its end by the same amount, so the length stays the same.
+let quickTz = T.systemTz();
+export function setQuickTz(tz) { if (tz && T.isValidTz(tz)) quickTz = tz; }
+const QUICK = [['now', 'Now'], ['h', '+1 hour'], ['d', '+1 day'], ['w', '+1 week']];
+export function addDateShortcuts(root) {
+  for (const inp of root.querySelectorAll('input[type=datetime-local], input[type=date]')) {
+    if (inp.dataset.quick === 'off' || inp.dataset.quickDone || inp.readOnly || inp.disabled) continue;
+    inp.dataset.quickDone = '1';
+    const sel = document.createElement('select');
+    sel.className = 'dt-quick';
+    sel.title = 'Quick set'; sel.setAttribute('aria-label', 'Quick set date');
+    sel.add(new Option('⏱', ''));
+    for (const [v, l] of QUICK) sel.add(new Option(l, v));
+    const wrap = document.createElement('span');
+    // carry the field's classes, so code that shows/hides the field (e.g. "Ends on") hides the shortcut too
+    wrap.className = ['dt-wrap', ...[...inp.classList].filter((c) => c !== 'num')].join(' ');
+    if (inp.style.display === 'none') { wrap.style.display = 'none'; inp.style.display = ''; }
+    inp.replaceWith(wrap);
+    wrap.append(inp, sel);
+    sel.addEventListener('change', () => { const v = sel.value; sel.value = ''; if (v) applyQuick(inp, v); });
+  }
+}
+function pairOf(inp) {
+  // the time field that goes with a date field: the next time input in the same row/field, or by name (sDate→sTime)
+  const f = inp.form;
+  const byName = f && inp.name && /Date$/.test(inp.name) ? f.elements[inp.name.replace(/Date$/, 'Time')] : null;
+  return byName && byName.type === 'time' ? byName : null;
+}
+function readMs(inp) {
+  if (inp.type === 'datetime-local') return inp.value ? T.fromDTInput(inp.value, quickTz) : null;
+  if (!inp.value) return null;
+  const t = pairOf(inp);
+  return T.atTime(inp.value, t?.value && !t.disabled && t.offsetParent !== null ? t.value : '09:00', quickTz);
+}
+function writeMs(inp, ms) {
+  const dt = T.toDTInput(ms, quickTz);
+  if (inp.type === 'datetime-local') inp.value = dt;
+  else { inp.value = dt.slice(0, 10); const t = pairOf(inp); if (t && !t.disabled) { t.value = dt.slice(11, 16); fire(t); } }
+  fire(inp);
+}
+const fire = (el2) => { el2.dispatchEvent(new Event('input', { bubbles: true })); el2.dispatchEvent(new Event('change', { bubbles: true })); };
+function applyQuick(inp, v) {
+  const now = Date.now();
+  const base = readMs(inp);
+  let ms;
+  if (v === 'now') ms = Math.ceil(now / (5 * T.MIN)) * 5 * T.MIN;
+  else {
+    const from = base ?? now;
+    ms = v === 'h' ? from + T.HOUR : v === 'd' ? T.atTime(T.addDays(T.dayKey(from, quickTz), 1), T.toDTInput(from, quickTz).slice(11, 16), quickTz)
+      : T.atTime(T.addDays(T.dayKey(from, quickTz), 7), T.toDTInput(from, quickTz).slice(11, 16), quickTz);
+  }
+  // keep an event's length: moving the start moves the end too
+  const f = inp.form;
+  if (f && inp.name === 'sDate' && f.elements.eDate) {
+    const end = readMs(f.elements.eDate), start0 = base;
+    writeMs(inp, ms);
+    if (end != null && start0 != null) writeMs(f.elements.eDate, end + (ms - start0));
+    return;
+  }
+  writeMs(inp, ms);
+}

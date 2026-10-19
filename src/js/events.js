@@ -134,8 +134,11 @@ export async function updateEvent(state, ev, changes, scope = 'this', { conferen
       const oldRule = truncateRule(master.recurrence, master, occMs, tz);
       const newRec = changes.recurrence?.length ? changes.recurrence : remainingRule(master.recurrence, master, occMs, tz);
       const body = { ...clean(master), ...clean(ev), ...clean(changes), recurrence: newRec };
-      if (oldRule) await G.patchEvent(calId, master.id, { recurrence: oldRule });
-      else await G.deleteEvent(calId, master.id);
+      if (oldRule) {
+        await G.patchEvent(calId, master.id, { recurrence: oldRule });
+        // Occurrences you had changed individually after the split would otherwise stay as extra copies.
+        try { for (const x of await G.listInstances(calId, master.id, occMs)) await G.deleteEvent(calId, x.id); } catch { /* best effort */ }
+      } else await G.deleteEvent(calId, master.id);
       await G.insertEvent(calId, body);
     }
   }

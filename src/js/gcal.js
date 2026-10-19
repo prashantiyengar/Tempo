@@ -279,6 +279,10 @@ export async function changedSince(calId, sinceMs) {
   const ts = (r.items || []).map((e) => Date.parse(e.updated)).filter((t) => t > sinceMs);
   return { n: ts.length, max: ts.length ? Math.max(...ts) : sinceMs };
 }
+export async function listInstances(calId, id, fromMs) {
+  const r = await req('GET', `/calendars/${enc(calId)}/events/${enc(id)}/instances`, { query: { timeMin: new Date(fromMs).toISOString(), maxResults: 250 } });
+  return (r?.items || []).filter((e) => e.status !== 'cancelled');
+}
 export const getEvent = (calId, id) => req('GET', `/calendars/${enc(calId)}/events/${enc(id)}`);
 // Every insert carries its own event id, so a retry after a lost response can't create a duplicate: if the first
 // attempt did reach Google, the retry gets "409 already exists" and we fetch that event instead.

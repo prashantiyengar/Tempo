@@ -2,7 +2,7 @@
 import * as T from './tz.js';
 import * as S from './scheduler.js';
 import * as G from './gcal.js';
-import { parseRRule, buildRRule, describe, WD, expand } from './rrule.js';
+import { parseRRule, buildRRule, describe, WD, expand, sameRule } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
 import { $, $$, esc, modal, TASK_COLORS, setHTML, choose } from './ui.js';
 import * as C from './categories.js';
@@ -74,7 +74,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         <input type="time" name="sTime" value="${sTime}" step="300" class="timed">
         <span class="muted">to</span>
         <input type="time" name="eTime" value="${eTime}" step="300" class="timed">
-        <input type="date" name="eDate" value="${eKey}" required>
+        <input type="date" name="eDate" value="${eKey}" required data-quick="off">
       </div>
       <div class="row timed">
         <label class="field grow"><span>Time zone</span>
@@ -226,6 +226,10 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       return [buildRRule(o)];
     };
 
+    let recTouched = false;
+    const REC_FIELDS = new Set(['freq', 'interval', 'byday', 'monthMode', 'ends', 'until', 'count']);
+    f.addEventListener('input', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
+    f.addEventListener('change', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
     f.addEventListener('input', sync);
     f.addEventListener('change', (e) => {
       if (e.target.name === 'sDate' && f.eDate.value < f.sDate.value) f.eDate.value = f.sDate.value;
@@ -263,7 +267,9 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         body.end = { dateTime: new Date(b).toISOString(), timeZone: zone };
       }
       let recNow = buildRec();
-      const recChanged = JSON.stringify(recNow) !== JSON.stringify((rec || []).filter((l) => l.startsWith('RRULE:')));
+      // Only a real change to the repeat settings counts (the same rule written differently, e.g. by Google, doesn't),
+      // and only if you touched them — so editing one occurrence never splits the series.
+      const recChanged = isNew ? recNow.length > 0 : recTouched && !sameRule(recNow, rec || []);
       if (isNew || recChanged) body.recurrence = recNow;
       if (recChanged && recNow.length) {
         const allDay0 = !!body.start.date;
@@ -763,7 +769,7 @@ export function settingsDialog(ctx) {
           <div class="row"><button type="button" class="btn small connect">Connect with this client ID</button></div>
         </details>
         <label class="chk"><input type="checkbox" name="syncTasksToGoogle" ${s.syncTasksToGoogle ? 'checked' : ''}> Write task sessions to Google Calendar</label>
-        <label class="field"><span>Calendar for task sessions</span>
+        <label class="field"><span>Calendar for task sessions and new events</span>
           <div class="join"><select name="taskCalendarId"><option value="">Primary calendar</option>${cals.filter((c) => !c.primary).map((c) => `<option value="${esc(c.id)}" ${s.taskCalendarId === c.id ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
           <button type="button" class="btn small create-cal" ${auth.connected ? '' : 'disabled'}>Create “Tempo Tasks”</button></div></label>
         <button type="button" class="btn small ghost cleanup" ${auth.connected ? '' : 'disabled'}>Remove stray task events from Google</button>
