@@ -3,18 +3,28 @@
 import { $$, esc, setHTML } from './ui.js';
 import { nearestColorId } from './gcal.js';
 
+export const CAT_ICONS = ['💼', '🏠', '🎉', '📚', '💪', '🧘', '🍳', '🛒', '💰', '✈️', '🎨', '🎵', '💻', '📞', '✉️', '🩺', '👪', '🌱', '⚽', '🎮', '🧹', '🚗', '📝', '⭐'];
+// Keep only the first emoji/symbol (or 2 letters) a person typed.
+export function cleanIcon(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  const seg = typeof Intl !== 'undefined' && Intl.Segmenter ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)].map((x) => x.segment) : [...s];
+  return /\p{Extended_Pictographic}|\p{Emoji_Presentation}/u.test(seg[0]) ? seg[0] : seg.slice(0, 2).join('');
+}
+export const catLabel = (c) => (c ? `${c.icon ? c.icon + ' ' : ''}${c.name}` : '');
+
 export const CAT_COLORS = ['#039be5', '#33b679', '#f6bf26', '#8e24aa', '#e67c73', '#f4511e', '#7986cb', '#0b8043', '#3f51b5', '#d50000', '#616161'];
 
 export const catById = (settings, id) => (id ? (settings.categories || []).find((c) => c.id === id) || null : null);
 
 export function applyCategory(task, cat) {
-  if (!cat) return { ...task, categoryId: null, categoryName: null, categoryColor: null };
-  return { ...task, categoryId: cat.id, categoryName: cat.name, categoryColor: cat.color, color: cat.color };
+  if (!cat) return { ...task, categoryId: null, categoryName: null, categoryColor: null, categoryIcon: null };
+  return { ...task, categoryId: cat.id, categoryName: cat.name, categoryColor: cat.color, categoryIcon: cat.icon || null, color: cat.color };
 }
 
-export function newCategory(settings, name, color) {
+export function newCategory(settings, name, color, icon = '') {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'cat';
-  const cat = { id: `${base}-${Math.random().toString(36).slice(2, 6)}`, name: name.trim(), color };
+  const cat = { id: `${base}-${Math.random().toString(36).slice(2, 6)}`, name: name.trim(), color, icon: cleanIcon(icon) };
   settings.categories = [...(settings.categories || []), cat];
   return cat;
 }
@@ -24,7 +34,7 @@ export function adoptCategoriesFromTasks(settings, tasks) {
   let changed = false;
   for (const t of tasks) {
     if (t.categoryId && !catById(settings, t.categoryId) && t.categoryName) {
-      settings.categories = [...(settings.categories || []), { id: t.categoryId, name: t.categoryName, color: t.categoryColor || t.color || CAT_COLORS[0] }];
+      settings.categories = [...(settings.categories || []), { id: t.categoryId, name: t.categoryName, color: t.categoryColor || t.color || CAT_COLORS[0], icon: t.categoryIcon || '' }];
       changed = true;
     }
   }
@@ -38,7 +48,7 @@ export function refreshTaskCategories(settings, tasks) {
     if (!t.categoryId) return t;
     const c = catById(settings, t.categoryId);
     if (!c) { changed.push(t.id); return { ...applyCategory(t, null), rev: Date.now() }; }
-    if (c.name !== t.categoryName || c.color !== t.categoryColor || c.color !== t.color) { changed.push(t.id); return { ...applyCategory(t, c), rev: Date.now() }; }
+    if (c.name !== t.categoryName || c.color !== t.categoryColor || c.color !== t.color || (c.icon || null) !== (t.categoryIcon || null)) { changed.push(t.id); return { ...applyCategory(t, c), rev: Date.now() }; }
     return t;
   });
   return { tasks: out, changed };
@@ -49,16 +59,18 @@ export function refreshTaskCategories(settings, tasks) {
 export function categoryPicker(host, { settings, selected, onChange, onCreate, allowNone = true }) {
   let sel = selected || null;
   let adding = false;
+  let newIcon = '';
   let newColor = CAT_COLORS.find((c) => !(settings.categories || []).some((x) => x.color === c)) || CAT_COLORS[0];
   const draw = () => {
     setHTML(host, `
       <div class="cat-chips">
         ${allowNone ? `<button type="button" class="cat-chip none ${!sel ? 'on' : ''}" data-cat="">None</button>` : ''}
-        ${(settings.categories || []).map((c) => `<button type="button" class="cat-chip ${sel === c.id ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}"><i></i>${esc(c.name)}</button>`).join('')}
+        ${(settings.categories || []).map((c) => `<button type="button" class="cat-chip ${sel === c.id ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}"><i></i>${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`).join('')}
         <button type="button" class="cat-chip add" data-add="1">+ New</button>
       </div>
       ${adding ? `<div class="cat-new">
-        <input class="cat-name" placeholder="New category, e.g. Leisure" maxlength="30">
+        <div class="row"><input class="cat-icon" placeholder="🙂" maxlength="8" aria-label="Icon" value="${esc(newIcon)}"><input class="cat-name" placeholder="New category, e.g. Leisure" maxlength="30"></div>
+        <div class="icon-grid">${CAT_ICONS.map((ic) => `<button type="button" class="ic-btn" data-ic="${ic}">${ic}</button>`).join('')}</div>
         <div class="swatches">${CAT_COLORS.map((c) => `<label class="sw"><input type="radio" name="catcolor" value="${c}" ${c === newColor ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div>
         <div class="row"><button type="button" class="btn small primary cat-save">Add</button><button type="button" class="btn small ghost cat-cancel">Cancel</button></div>
       </div>` : ''}`);
@@ -67,10 +79,14 @@ export function categoryPicker(host, { settings, selected, onChange, onCreate, a
     if (adding) {
       const name = host.querySelector('.cat-name');
       $$('input[name=catcolor]', host).forEach((r) => (r.onchange = () => { newColor = r.value; }));
+      const iconIn = host.querySelector('.cat-icon');
+      iconIn.oninput = () => { newIcon = iconIn.value; };
+      $$('.ic-btn', host).forEach((b) => (b.onclick = () => { newIcon = iconIn.value = b.dataset.ic; }));
       const save = async () => {
         const n = name.value.trim();
         if (!n) { name.focus(); return; }
-        const cat = await onCreate(n, newColor);
+        const cat = await onCreate(n, newColor, cleanIcon(newIcon));
+        newIcon = '';
         adding = false; sel = cat.id; draw(); onChange(cat);
       };
       host.querySelector('.cat-save').onclick = save;
@@ -95,8 +111,8 @@ export const eventKey = (ev) => `${ev._calId}|${ev.recurringEventId || ev.id}`;
 // Fields to send to Google (or store locally) to give an event a category (or remove it).
 export function eventCategoryChanges(ev, cat) {
   const priv = { ...(ev?.extendedProperties?.private || {}) };
-  if (cat) Object.assign(priv, { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color });
-  else Object.assign(priv, { tempoCategory: '', tempoCatName: '', tempoCatColor: '' });
+  if (cat) Object.assign(priv, { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color, tempoCatIcon: cat.icon || '' });
+  else Object.assign(priv, { tempoCategory: '', tempoCatName: '', tempoCatColor: '', tempoCatIcon: '' });
   return { colorId: cat ? nearestColorId(cat.color) : null, extendedProperties: { ...(ev?.extendedProperties || {}), private: priv } };
 }
 
@@ -105,7 +121,7 @@ export function adoptCategoriesFromEvents(settings, events) {
   for (const ev of events) {
     const p = ev?.extendedProperties?.private || {};
     if (p.tempoCategory && p.tempoCatName && !catById(settings, p.tempoCategory)) {
-      settings.categories = [...(settings.categories || []), { id: p.tempoCategory, name: p.tempoCatName, color: p.tempoCatColor || CAT_COLORS[0] }];
+      settings.categories = [...(settings.categories || []), { id: p.tempoCategory, name: p.tempoCatName, color: p.tempoCatColor || CAT_COLORS[0], icon: p.tempoCatIcon || '' }];
       changed = true;
     }
   }

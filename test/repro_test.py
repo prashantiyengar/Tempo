@@ -1,3 +1,4 @@
+from noask import NOASK
 import asyncio, sys, subprocess, time, re
 sys.path.insert(0, 'test')
 from playwright.async_api import async_playwright
@@ -12,7 +13,7 @@ def init(iso): return """
 """ % iso
 async def device(b, g, errs, iso):
     ctx = await b.new_context(viewport={'width':1440,'height':900}, timezone_id='Europe/Berlin')
-    await ctx.add_init_script(init(iso))
+    await ctx.add_init_script(init(iso)); await ctx.add_init_script(NOASK)
     await ctx.route(re.compile(r'https://(www|openidconnect|oauth2)\.googleapis\.com/.*'), g.handle)
     page = await ctx.new_page(); page.on('pageerror', lambda e: errs.append(str(e)))
     await page.goto('http://localhost:8768/app.html'); await page.wait_for_selector('.tg-col'); await page.wait_for_timeout(1500)

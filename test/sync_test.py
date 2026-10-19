@@ -1,3 +1,4 @@
+from noask import NOASK
 import asyncio, sys, json, subprocess, time
 sys.path.insert(0, 'test')
 from playwright.async_api import async_playwright
@@ -11,7 +12,7 @@ async def main():
     async with async_playwright() as p:
         b = await p.chromium.launch()
         ctx = await b.new_context(viewport={'width':1440,'height':900}, timezone_id='Europe/Berlin')
-        await ctx.add_init_script("""
+        await ctx.add_init_script(NOASK); await ctx.add_init_script("""
           const FIX = Date.parse('2026-10-19T06:00:00Z'); const _Date = Date; const off = FIX - _Date.now();
           class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+off);} else super(...a);} static now(){ return _Date.now()+off; } }
           globalThis.Date = D;

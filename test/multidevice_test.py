@@ -1,4 +1,5 @@
 # Device A creates tasks and syncs; device B (fresh storage, same Google account) must see them.
+from noask import NOASK
 import asyncio, sys, subprocess, time, re
 sys.path.insert(0, 'test')
 from playwright.async_api import async_playwright
@@ -13,7 +14,7 @@ INIT = """
 """
 async def device(b, g, errs):
     ctx = await b.new_context(viewport={'width':1440,'height':900}, timezone_id='Europe/Berlin', accept_downloads=True)
-    await ctx.add_init_script(INIT)
+    await ctx.add_init_script(INIT); await ctx.add_init_script(NOASK)
     await ctx.route(re.compile(r'https://(www|openidconnect|oauth2)\.googleapis\.com/.*'), g.handle)
     page = await ctx.new_page()
     page.on('pageerror', lambda e: errs.append(str(e)))

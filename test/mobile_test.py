@@ -1,5 +1,6 @@
 # Phone tests for the web app: layout, touch gestures (tap, long-press drag, swipe), Google sign-in redirect,
 # silent renewal, install manifest and offline use. Uses Chromium's touch emulation via CDP.
+from noask import NOASK
 import asyncio, sys, subprocess, time, re, json, os, urllib.parse
 sys.path.insert(0, 'test')
 from playwright.async_api import async_playwright
@@ -35,7 +36,7 @@ async def main():
         b = await p.chromium.launch()
         dev = p.devices['Pixel 7']
         ctx = await b.new_context(**dev, timezone_id='Europe/Berlin', locale='en-US')
-        await ctx.add_init_script(FREEZE)
+        await ctx.add_init_script(FREEZE); await ctx.add_init_script(NOASK)
         g = MockGoogle()
         auth_requests = []
         async def google_auth(route):
@@ -170,7 +171,7 @@ async def main():
         await ctx.set_offline(False)
 
         # iPhone layout snapshot
-        ctx2 = await b.new_context(**p.devices['iPhone 13'], timezone_id='Europe/Berlin'); await ctx2.add_init_script(FREEZE)
+        ctx2 = await b.new_context(**p.devices['iPhone 13'], timezone_id='Europe/Berlin'); await ctx2.add_init_script(FREEZE); await ctx2.add_init_script(NOASK)
         pg2 = await ctx2.new_page(); pg2.on('pageerror', lambda e: errs.append('iphone: ' + str(e)))
         await pg2.goto(BASE + '?view=3day'); await pg2.wait_for_selector('.tg-col'); await pg2.wait_for_timeout(600)
         await pg2.screenshot(path=f'{OUT}/m11-iphone-3day.png')

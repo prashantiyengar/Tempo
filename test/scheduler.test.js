@@ -175,3 +175,19 @@ console.log('new tests passed');
   assert.ok(!S.sessions(S.rescheduleAll([t], meetings, s2, now).tasks[0]).some((c) => c.minutes < 15), 'no tiny leftover session');
   console.log('smart allocation:', ss.join(', '));
 }
+
+// 13. Named period "After hours" with per-day rules (Mon, Wed, Thu evenings only)
+{
+  const s2 = { ...S.DEFAULT_SETTINGS, tz, periods: [{ id: 'ah', name: 'After hours', rules: [{ days: [1, 3, 4], start: '18:00', end: '21:00' }] }] };
+  const t = { id: 'p', title: 'Side project', kind: 'generic', rank: 3, totalMinutes: 360, periodId: 'ah', deadline: T.atTime('2026-10-31', '23:00', tz), created: 1 };
+  const { tasks } = S.rescheduleAll([t], [], s2, now);
+  const ss = S.sessions(tasks[0]);
+  for (const c of ss) {
+    const wd = T.weekday(T.dayKey(c.start, tz)); const m0 = T.minutesOfDay(c.start, tz), m1 = T.minutesOfDay(c.end, tz);
+    assert.ok([1, 3, 4].includes(wd) && m0 >= 18 * 60 && m1 <= 21 * 60, 'outside after-hours: ' + T.toDTInput(c.start, tz));
+  }
+  // falls back to the snapshot on a device that doesn't have the period
+  const { tasks: t2 } = S.rescheduleAll([{ ...t, periodRules: s2.periods[0].rules }], [], { ...s2, periods: [] }, now);
+  assert.equal(S.sessions(t2[0])[0].start, ss[0].start);
+  console.log('periods:', ss.map((c) => T.toDTInput(c.start, tz).slice(5)).join(', '));
+}

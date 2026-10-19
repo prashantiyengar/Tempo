@@ -2,9 +2,9 @@
 import * as T from './tz.js';
 import * as S from './scheduler.js';
 import * as G from './gcal.js';
-import { parseRRule, buildRRule, describe, WD } from './rrule.js';
+import { parseRRule, buildRRule, describe, WD, expand } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
-import { $, $$, esc, modal, TASK_COLORS, setHTML } from './ui.js';
+import { $, $$, esc, modal, TASK_COLORS, setHTML, choose } from './ui.js';
 import * as C from './categories.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -167,7 +167,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         const id = c ? G.nearestColorId(c.color) : '';
         const r = dlg.querySelector(`input[name=colorId][value="${id}"]`); if (r) r.checked = true;
       },
-      onCreate: async (name, color) => { const c = C.newCategory(s, name, color); await ctx.saveSettings(); return c; },
+      onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; },
     });
     const remBox = $('.rem-rows', dlg);
     const addRem = (o = { method: 'popup', minutes: s.defaultReminder }) => {
@@ -237,7 +237,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
 
     $('.del', dlg)?.addEventListener('click', () => close({ action: 'delete' }));
 
-    f.addEventListener('submit', (e) => {
+    f.addEventListener('submit', async (e) => {
       e.preventDefault();
       const ad = f.allDay.checked;
       const zone = T.isValidTz(f.tz.value.trim()) ? f.tz.value.trim() : s.tz;
@@ -261,9 +261,29 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         body.start = { dateTime: new Date(a).toISOString(), timeZone: zone };
         body.end = { dateTime: new Date(b).toISOString(), timeZone: zone };
       }
-      const recNow = buildRec();
+      let recNow = buildRec();
       const recChanged = JSON.stringify(recNow) !== JSON.stringify((rec || []).filter((l) => l.startsWith('RRULE:')));
       if (isNew || recChanged) body.recurrence = recNow;
+      if (recChanged && recNow.length) {
+        const allDay0 = !!body.start.date;
+        const st0 = allDay0 ? T.dayStart(body.start.date, zone) : Date.parse(body.start.dateTime);
+        const spanEnd = s.maxSpanDays ? st0 + s.maxSpanDays * T.DAY : Infinity;
+        const ext = recurrenceExtent(recNow, st0, allDay0, body.start.date, zone);
+        const tooFar = ext.end > spanEnd, tooMany = !!s.sessionMax && ext.n > s.sessionMax;
+        if (tooFar || tooMany) {
+          // Over a limit: offer to end the series at the last occurrence that's within the limits.
+          const within = recurrenceExtent(recNow, st0, allDay0, body.start.date, zone, spanEnd).list.slice(0, s.sessionMax || Infinity);
+          const last = within[within.length - 1];
+          const why = [tooFar ? `extend more than ${s.maxSpanDays} days ahead` : '', tooMany ? `happen ${ext.n === Infinity ? 'endlessly' : ext.n + ' times'} (the limit is ${s.sessionMax})` : ''].filter(Boolean).join(' and ');
+          const ok = await choose(tooFar ? 'Repeating event too far ahead' : 'Too many occurrences', `This repeating event would ${why}. ${limitHint}`,
+            last == null ? [] : [{ value: true, label: `End it on ${T.format(typeof last === 'string' ? T.dayStart(last, zone) : last, zone, { day: 'numeric', month: 'short', year: 'numeric' })} (${within.length} time${within.length === 1 ? '' : 's'})`, desc: 'Keeps the series within your limits.' }],
+            { cancel: 'Go back' });
+          if (!ok) return;
+          const u = typeof last === 'string' ? last.replace(/-/g, '') : new Date(last).toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+          recNow = recNow.map((l) => (l.startsWith('RRULE:') ? l.replace(/;(COUNT|UNTIL)=[^;]*/g, '') + ';UNTIL=' + u : l));
+          body.recurrence = recNow;
+        } else if (!(await checkCount('occurrences', ext.n, s))) return;
+      }
       const targetCal = f.calId.value || calId;
       const g = targetCal !== LOCAL_CAL;
       const overrides = $$('.rem-row', dlg).map((r) => {
@@ -283,6 +303,45 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     });
   }, { cls: 'wide' });
 }
+
+// ---------- Creation limits (Settings → Scheduling → Limits) ----------
+const limitHint = 'You can change this limit in Settings → Scheduling → Limits.';
+async function checkCount(kind, n, s) {
+  if (s.sessionMax && n > s.sessionMax) {
+    await choose(`Too many ${kind}`, `This would create ${n} ${kind}, more than the limit of ${s.sessionMax}. ${kind === 'sessions' ? 'Use longer sessions, a later start or a shorter task.' : 'End the series sooner.'} ${limitHint}`, [], { cancel: 'OK' });
+    return false;
+  }
+  if (s.sessionWarn && n > s.sessionWarn) {
+    return !!(await choose(`Create ${n} ${kind}?`, `That's more than ${s.sessionWarn}. ${limitHint}`, [{ value: true, label: `Yes, create ${n} ${kind}` }], { cancel: 'Go back' }));
+  }
+  return true;
+}
+async function checkSpan(what, endMs, s, now = Date.now()) {
+  if (!s.maxSpanDays || endMs <= now + s.maxSpanDays * T.DAY) return true;
+  await choose(`${what} too far ahead`, `${what === 'Deadline' ? 'The deadline' : 'This repeating event'} would extend more than ${s.maxSpanDays} days ahead. ${what === 'Deadline' ? 'Choose an earlier deadline.' : 'Set an end date or a number of times.'} ${limitHint}`, [], { cancel: 'OK' });
+  return false;
+}
+// How many times a repeating event occurs and when it ends (Infinity if it never ends). With `upTo`, also lists
+// the occurrences that start before that time.
+export function recurrenceExtent(recLines, startMs, allDay, startKey, tz, upTo) {
+  const r = parseRRule(recLines);
+  if (!r) return { n: 1, end: startMs, list: [allDay ? startKey : startMs] };
+  const list = upTo != null ? expand({ rule: r, startMs, startKey, allDay, tz }, -Infinity, upTo + 1, tz) : [];
+  if (!r.count && !r.until) return { n: Infinity, end: Infinity, list };
+  const occ = expand({ rule: r, startMs, startKey, allDay, tz }, -Infinity, Infinity, tz);
+  const last = occ.length ? occ[occ.length - 1] : startMs;
+  return { n: occ.length, end: typeof last === 'string' ? T.dayStart(last, tz) : last, list };
+}
+
+const DAYN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+export function describeDays(days) {
+  const d = [...(days || [])].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7));
+  if (d.length === 7) return 'every day';
+  if (d.join() === '1,2,3,4,5') return 'Mon–Fri';
+  if (d.join() === '6,0') return 'weekends';
+  return d.map((x) => DAYN[x]).join(', ');
+}
+export const describeRules = (rules) => (rules || []).map((r) => `${describeDays(r.days)} ${r.start}–${r.end}`).join('; ');
 
 // "End of work day / end of work week / within two weeks", using day bounds (working days + end time).
 export function deadlinePreset(kind, bounds, tz, now = Date.now()) {
@@ -373,15 +432,17 @@ export function taskDialog(ctx, task = null, preset = {}) {
       </fieldset>
 
       <fieldset class="box">
-        <legend>Day bounds</legend>
-        <div class="row">
-          <label class="chk"><input type="radio" name="bmode" value="default" ${!t.bounds ? 'checked' : ''}> Use default (${s.bounds.start}–${s.bounds.end})</label>
+        <legend>When to schedule</legend>
+        <div class="when-opts">
+          <label class="chk"><input type="radio" name="bmode" value="default" ${!t.bounds && !t.periodId ? 'checked' : ''}> Work hours <span class="muted small">(${s.bounds.start}–${s.bounds.end}, ${describeDays(s.bounds.days)})</span></label>
+          ${(s.periods || []).map((p) => `<label class="chk"><input type="radio" name="bmode" value="period:${esc(p.id)}" ${!t.bounds && t.periodId === p.id ? 'checked' : ''}> ${esc(p.name)} <span class="muted small">(${esc(describeRules(p.rules))})</span></label>`).join('')}
           <label class="chk"><input type="radio" name="bmode" value="custom" ${t.bounds ? 'checked' : ''}> Custom for this task</label>
         </div>
         <div class="row custom-bounds">
           <input type="time" name="bStart" value="${b.start}" step="900"> <span class="muted">to</span> <input type="time" name="bEnd" value="${b.end}" step="900">
           ${weekdayToggles('bdays', b.days)}
         </div>
+        <p class="muted small" style="margin:0">Add or change periods such as “After hours” in Settings → Scheduling.</p>
         <label class="chk"><input type="checkbox" name="ignoreBounds" ${t.ignoreBounds ? 'checked' : ''}> Ignore day bounds — also use time after my official day (${s.overflowBounds.start}–${s.overflowBounds.end}, any day)</label>
       </fieldset>
 
@@ -405,7 +466,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
     C.categoryPicker($('.cat-host', dlg), {
       settings: s, selected: cat?.id,
       onChange: (c) => { cat = c; showColor(); update(); },
-      onCreate: async (name, color) => { const c = C.newCategory(s, name, color); await ctx.saveSettings(); return c; },
+      onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; },
     });
     showColor();
     // Deadline shortcuts, based on the task's own day bounds if set, otherwise the default ones
@@ -434,6 +495,11 @@ export function taskDialog(ctx, task = null, preset = {}) {
         breakMinutes: num(f.break.value), wiggleMinutes: num(f.wiggle.value), reminderMinutes: num(f.reminder.value), emailReminderMinutes: num(f.emailReminder.value),
         color: f.color.value || t.color,
         bounds: custom ? { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: $$('input[name=bdays]:checked', dlg).map((c) => +c.value) } : null,
+        ...(() => {
+          const pid = f.bmode.value.startsWith('period:') ? f.bmode.value.slice(7) : null;
+          const per = pid && (s.periods || []).find((x) => x.id === pid);
+          return per ? { periodId: per.id, periodName: per.name, periodRules: per.rules } : { periodId: null, periodName: null, periodRules: null };
+        })(),
         ignoreBounds: f.ignoreBounds.checked,
         notes: f.notes.value,
         calendarId: f.calendarId ? f.calendarId.value : t.calendarId,
@@ -479,10 +545,15 @@ export function taskDialog(ctx, task = null, preset = {}) {
     update();
 
     $('.del', dlg)?.addEventListener('click', () => close({ delete: true }));
-    f.addEventListener('submit', (e) => {
+    f.addEventListener('submit', async (e) => {
       e.preventDefault();
       const nt = readWithCat();
       if (!nt.deadline) return;
+      if (!(await checkSpan('Deadline', nt.deadline, s))) return;
+      const others = st.tasks.filter((x) => x.id !== nt.id);
+      const mine = S.rescheduleAll([...others, nt], ctx.lastBusy || [], s, Date.now()).tasks.find((x) => x.id === nt.id);
+      const n = S.sessions(mine).filter((c) => c.kind !== 'done').length;
+      if (!(await checkCount('sessions', n, s))) return;
       close({ task: nt });
     });
   }, { cls: 'wide' });
@@ -524,6 +595,7 @@ export function settingsDialog(ctx) {
   const agendaCal = (st.gmeta.calendars || []).find((c) => c.id === (s.taskCalendarId || '')) || (st.gmeta.calendars || []).find((c) => c.primary);
   const agendaOn = !!agendaCal?.notificationSettings?.notifications?.some((n) => n.type === 'agenda' && n.method === 'email');
   let cats = (s.categories || []).map((c) => ({ ...c }));
+  let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
   const html = `
   <form class="settings-form">
     <header class="dlg-head"><h2>Settings</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
@@ -545,6 +617,11 @@ export function settingsDialog(ctx) {
           <div class="row"><input type="time" name="bStart" value="${s.bounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="bEnd" value="${s.bounds.end}" step="900"></div>
           ${weekdayToggles('bdays', s.bounds.days)}
         </fieldset>
+        <fieldset class="box"><legend>Time periods</legend>
+          <p class="muted small" style="margin:0">Extra windows a task can be scheduled in instead of the work hours above, e.g. “After hours” on Mon, Wed and Thu evenings plus weekends. Each period can have several rules.</p>
+          <div class="periods-list"></div>
+          <button type="button" class="btn small add-period">+ Add period</button>
+        </fieldset>
         <fieldset class="box"><legend>When a task ignores day bounds, use</legend>
           <div class="row"><input type="time" name="oStart" value="${s.overflowBounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="oEnd" value="${s.overflowBounds.end}" step="900"></div>
           ${weekdayToggles('odays', s.overflowBounds.days)}
@@ -555,6 +632,13 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Break between sessions (min)</span><input type="number" name="breakMinutes" min="0" step="5" value="${s.breakMinutes}"></label>
           <label class="field"><span>Wiggle room (min) — also use free slots this much shorter than a session</span><input type="number" name="wiggleMinutes" min="0" step="5" value="${s.wiggleMinutes ?? 15}"></label>
         </div>
+        <fieldset class="box"><legend>Limits</legend>
+          <div class="grid3">
+            <label class="field"><span>Ask before creating more than … sessions / repeats</span><input type="number" name="sessionWarn" min="0" value="${s.sessionWarn ?? 20}"></label>
+            <label class="field"><span>Never create more than … sessions / repeats</span><input type="number" name="sessionMax" min="0" value="${s.sessionMax ?? 50}"></label>
+            <label class="field"><span>Furthest ahead a task or repeating event may run (days, 0 = no limit)</span><input type="number" name="maxSpanDays" min="0" value="${s.maxSpanDays ?? 365}"></label>
+          </div>
+        </fieldset>
         <label class="chk"><input type="checkbox" name="assumePastDone" ${s.assumePastDone ? 'checked' : ''}> Assume past sessions were done (mark them undone to reschedule)</label>
         <label class="chk"><input type="checkbox" name="allDayBlocks" ${s.allDayBlocks ? 'checked' : ''}> All-day events block task time</label>
         <fieldset class="box"><legend>Calendars that count as busy</legend>
@@ -603,7 +687,8 @@ export function settingsDialog(ctx) {
         </fieldset>
       </section>
       <section data-pane="5" hidden>
-        <p class="muted small">Give tasks a category to color-code them and to group time in Analysis. You can also add categories directly in the task dialog.</p>
+        <p class="muted small">Give tasks a category to color-code them and to group time in Analysis. A category's icon is added to its sessions' titles (also in Google Calendar). You can also add categories directly in the task dialog.</p>
+        <label class="chk"><input type="checkbox" name="askCategory" ${s.askCategory !== false ? 'checked' : ''}> When I create a task without a category, ask me for one</label>
         <div class="cats-list"></div>
         <button type="button" class="btn small add-cat">+ Add category</button>
       </section>
@@ -633,21 +718,58 @@ export function settingsDialog(ctx) {
     $('.create-cal', dlg)?.addEventListener('click', () => close({ action: 'createCal', settings: collect() }));
     $('.cleanup', dlg)?.addEventListener('click', () => close({ action: 'cleanup', settings: collect() }));
     $('.test-notif', dlg).onclick = () => ctx.testNotification();
+    const drawPeriods = () => {
+      setHTML($('.periods-list', dlg), periods.map((p, i) => `<div class="period" data-i="${i}">
+        <div class="row"><input class="per-name" value="${esc(p.name)}" maxlength="30" aria-label="Period name"><span class="grow"></span><button type="button" class="btn small ghost danger per-del">Delete period</button></div>
+        ${p.rules.map((r, j) => `<div class="row per-rule" data-j="${j}">
+          <input type="time" class="r-start" value="${r.start}" step="900"> <span class="muted">to</span> <input type="time" class="r-end" value="${r.end}" step="900">
+          <div class="wd-toggles">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label class="wd"><input type="checkbox" class="r-day" value="${d}" ${r.days.includes(d) ? 'checked' : ''}><span>${DAYN[d].slice(0, 2)}</span></label>`).join('')}</div>
+          <button type="button" class="icon-btn r-del" title="Remove rule" aria-label="Remove rule">✕</button></div>`).join('')}
+        <button type="button" class="link per-add-rule">+ Add rule</button></div>`).join('') || '<p class="muted small">No periods.</p>');
+      $$('.period', dlg).forEach((el2) => {
+        const p = periods[+el2.dataset.i];
+        $('.per-name', el2).oninput = (e) => { p.name = e.target.value; };
+        $('.per-del', el2).onclick = () => { periods.splice(+el2.dataset.i, 1); drawPeriods(); };
+        $('.per-add-rule', el2).onclick = () => { p.rules.push({ days: [6, 0], start: '10:00', end: '18:00' }); drawPeriods(); };
+        $$('.per-rule', el2).forEach((rw) => {
+          const r = p.rules[+rw.dataset.j];
+          $('.r-start', rw).onchange = (e) => { r.start = e.target.value || r.start; };
+          $('.r-end', rw).onchange = (e) => { r.end = e.target.value || r.end; };
+          $$('.r-day', rw).forEach((c) => (c.onchange = () => { r.days = $$('.r-day:checked', rw).map((x) => +x.value); }));
+          $('.r-del', rw).onclick = () => { p.rules.splice(+rw.dataset.j, 1); drawPeriods(); };
+        });
+      });
+    };
+    drawPeriods();
+    $('.add-period', dlg).onclick = () => { periods.push({ id: 'p-' + Math.random().toString(36).slice(2, 8), name: 'New period', rules: [{ days: [1, 2, 3, 4, 5], start: s.bounds.end, end: '21:00' }] }); drawPeriods(); };
     const drawCats = () => {
       setHTML($('.cats-list', dlg), cats.map((c, i) => `<div class="cat-row" data-i="${i}">
         <span class="sw-dot big" style="background:${esc(c.color)}"></span>
+        <details class="ic-pick"><summary class="cat-icbtn" title="Icon" aria-label="Choose icon">${esc(c.icon || '＋')}</summary>
+          <div class="icon-grid"><input class="cat-icin" placeholder="Type or paste" maxlength="8" value="${esc(c.icon || '')}">${C.CAT_ICONS.map((ic) => `<button type="button" class="ic-btn" data-ic="${ic}">${ic}</button>`).join('')}<button type="button" class="ic-btn none" data-ic="">No icon</button></div></details>
         <input class="cat-nm" value="${esc(c.name)}" maxlength="30" aria-label="Category name">
         <div class="swatches">${C.CAT_COLORS.map((col) => `<label class="sw"><input type="radio" name="cc${i}" value="${col}" ${col === c.color ? 'checked' : ''}><i style="background:${col}"></i></label>`).join('')}</div>
         <button type="button" class="icon-btn cat-del" title="Delete category" aria-label="Delete category">✕</button></div>`).join('') || '<p class="muted small">No categories yet.</p>');
       $$('.cat-row', dlg).forEach((row) => {
         const i = +row.dataset.i;
         $('.cat-nm', row).oninput = (e) => { cats[i].name = e.target.value; };
+        const pick = $('.ic-pick', row);
+        pick.ontoggle = () => {
+          if (!pick.open) return;
+          $$('.ic-pick[open]', dlg).forEach((o) => { if (o !== pick) o.open = false; });
+          const r = $('.cat-icbtn', row).getBoundingClientRect(), grid = $('.icon-grid', pick);
+          grid.style.left = Math.max(8, Math.min(innerWidth - 276, r.left)) + 'px';
+          grid.style.top = (r.bottom + 268 > innerHeight ? Math.max(8, r.top - 268) : r.bottom + 4) + 'px';
+        };
+        const setIc = (v) => { cats[i].icon = C.cleanIcon(v); $('.cat-icbtn', row).textContent = cats[i].icon || '＋'; };
+        $('.cat-icin', row).oninput = (e) => setIc(e.target.value);
+        $$('.ic-btn', row).forEach((b) => (b.onclick = () => { setIc(b.dataset.ic); $('.cat-icin', row).value = cats[i].icon; $('.ic-pick', row).open = false; }));
         $$('input[type=radio]', row).forEach((r) => (r.onchange = () => { cats[i].color = r.value; $('.sw-dot', row).style.background = r.value; }));
         $('.cat-del', row).onclick = () => { cats.splice(i, 1); drawCats(); };
       });
     };
     drawCats();
-    $('.add-cat', dlg).onclick = () => { cats.push({ id: 'cat-' + Math.random().toString(36).slice(2, 8), name: 'New category', color: C.CAT_COLORS[cats.length % C.CAT_COLORS.length] }); drawCats(); $$('.cat-nm', dlg).at(-1).select(); };
+    $('.add-cat', dlg).onclick = () => { cats.push({ id: 'cat-' + Math.random().toString(36).slice(2, 8), name: 'New category', color: C.CAT_COLORS[cats.length % C.CAT_COLORS.length], icon: '' }); drawCats(); $$('.cat-nm', dlg).at(-1).select(); };
     $('.export-json', dlg).onclick = () => ctx.exportJson();
     $('.import-json', dlg).onchange = (e) => { const file = e.target.files[0]; if (file) close({ action: 'import', file }); };
 
@@ -665,6 +787,7 @@ export function settingsDialog(ctx) {
         chunkMinutes: Math.max(5, +f.chunkMinutes.value || 60), minChunkMinutes: f.minChunkMinutes.value ? Math.max(5, +f.minChunkMinutes.value) : null,
         breakMinutes: Math.max(0, +f.breakMinutes.value || 0),
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
+        sessionWarn: Math.max(0, +f.sessionWarn.value || 0), sessionMax: Math.max(0, +f.sessionMax.value || 0), maxSpanDays: Math.max(0, +f.maxSpanDays.value || 0),
         assumePastDone: f.assumePastDone.checked, allDayBlocks: f.allDayBlocks.checked,
         busyCalendars: busy.length === allCals.length ? null : busy,
         syncTasksToGoogle: f.syncTasksToGoogle.checked, taskCalendarId: f.taskCalendarId.value || null,
@@ -672,6 +795,8 @@ export function settingsDialog(ctx) {
         taskReminderMinutes: +f.taskReminderMinutes.value, defaultReminder: Math.max(0, +f.defaultReminder.value || 0),
         taskEmailReminderMinutes: f.taskEmailReminderMinutes ? (f.taskEmailReminderMinutes.value === '' ? null : Math.max(0, +f.taskEmailReminderMinutes.value)) : s.taskEmailReminderMinutes,
         categories: cats.map((c) => ({ ...c, name: c.name.trim() || 'Untitled' })),
+        askCategory: f.askCategory.checked,
+        periods: periods.map((p) => ({ ...p, name: p.name.trim() || 'Untitled period', rules: p.rules.filter((r) => r.days.length && r.start && r.end) })),
         _agendaEmail: f.agendaEmail ? { want: f.agendaEmail.checked, was: agendaOn, calId: agendaCal?.id } : null,
       };
     }

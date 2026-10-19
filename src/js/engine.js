@@ -20,6 +20,14 @@ export async function loadState() {
     o.settingsVersion = 2;
     await set({ settings: o });
   }
+  // Version 3: categories get icons (the built-in ones get their default emoji).
+  if (raw.settings && raw.settings.settingsVersion < 3) {
+    const o = raw.settings;
+    const defIcon = Object.fromEntries(S.DEFAULT_SETTINGS.categories.map((c) => [c.id, c.icon]));
+    if (Array.isArray(o.categories)) o.categories = o.categories.map((c) => (c.icon == null && defIcon[c.id] ? { ...c, icon: defIcon[c.id] } : c));
+    o.settingsVersion = 3;
+    await set({ settings: o });
+  }
   const settings = { ...S.DEFAULT_SETTINGS, ...(raw.settings || {}) };
   if (!Array.isArray(settings.categories)) settings.categories = S.DEFAULT_SETTINGS.categories;
   settings.bounds = { ...S.DEFAULT_SETTINGS.bounds, ...(settings.bounds || {}) };
@@ -208,7 +216,7 @@ export function chunkBody(task, sess, state) {
 // ---------- Task definitions stored on Google (so any browser / a fresh install can rebuild the task list) ----------
 const DEF_FIELDS = ['id', 'title', 'kind', 'rank', 'totalMinutes', 'reading', 'deadline', 'earliestStart', 'chunkMinutes', 'minChunkMinutes',
   'maxPerDayMinutes', 'breakMinutes', 'wiggleMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notes', 'created', 'rev', 'calendarId',
-  'categoryId', 'categoryName', 'categoryColor'];
+  'categoryId', 'categoryName', 'categoryColor', 'categoryIcon', 'periodId', 'periodName', 'periodRules'];
 const PART = 900; // Google allows 1024 chars per extended-property value
 
 export function encodeDef(task) {
@@ -239,7 +247,7 @@ const evEnd = (ev) => Date.parse(ev.end?.dateTime || ev.end?.date);
 // Sessions created by older versions carry no definition: rebuild a sensible task from the event titles.
 function legacyDef(taskId, events) {
   const first = events[0];
-  const clean = (s) => (s || '').replace(/^✓\s*/, '').replace(/,\s*task \d+\/\d+\s*$/, '');
+  const clean = (s) => (s || '').replace(/^✓\s*/, '').replace(/^\p{Extended_Pictographic}[\uFE0F\u200D\p{Extended_Pictographic}]*\s*/u, '').replace(/,\s*task \d+\/\d+\s*$/, '');
   const pages = events.map((e) => clean(e.summary).match(/^(.*) page (\d+)-(\d+)$/)).filter(Boolean);
   const minutes = events.reduce((a, e) => a + (evEnd(e) - evStart(e)) / T.MIN, 0);
   const def = {

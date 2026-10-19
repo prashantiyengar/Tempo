@@ -462,3 +462,20 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
   .wz-steps button span { display: none; }
   .wz-steps button { min-width: 0; }
 }
+
+/* Category icons */
+.cat-ic { margin-right: 4px; }
+.cat-new .row { display: flex; gap: 6px; align-items: center; }
+.cat-new .cat-icon { width: 3.2em; text-align: center; font-size: 1.1em; flex: none; }
+.cat-new .cat-name { flex: 1; min-width: 0; }
+.icon-grid { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+.ic-btn { width: 34px; height: 34px; border: 1px solid var(--line2); border-radius: 8px; background: transparent; font-size: 18px; cursor: pointer; line-height: 1; padding: 0; }
+.ic-btn:hover { background: var(--off); }
+.ic-btn.none { width: auto; padding: 0 10px; font-size: 12px; }
+.ic-pick { position: relative; flex: none; }
+.ic-pick > summary { list-style: none; cursor: pointer; width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid var(--line2); border-radius: 8px; font-size: 18px; }
+.ic-pick > summary::-webkit-details-marker { display: none; }
+.ic-pick[open] .icon-grid { position: fixed; z-index: 30; width: 260px; box-sizing: border-box; padding: 8px; background: var(--panel); border: 1px solid var(--line2); border-radius: 10px; box-shadow: var(--shadow); }
+.ic-pick .cat-icin { width: 100%; margin-bottom: 4px; }
+.ask-cat .actions { display: flex; align-items: center; }
+.ask-cat .actions .grow { flex: 1; }

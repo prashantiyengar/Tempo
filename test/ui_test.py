@@ -1,3 +1,5 @@
+import sys; sys.path.insert(0, 'test')
+from noask import NOASK
 import asyncio, sys, json, subprocess, time, os
 from playwright.async_api import async_playwright
 OUT = sys.argv[1]
@@ -8,7 +10,7 @@ async def main():
         b = await p.chromium.launch()
         ctx = await b.new_context(viewport={'width':1440,'height':900}, timezone_id='Europe/Berlin', accept_downloads=True)
         # Freeze time at Monday 2026-10-19 08:00 Berlin
-        await ctx.add_init_script("""
+        await ctx.add_init_script(NOASK); await ctx.add_init_script("""
           const FIX = Date.parse('2026-10-19T06:00:00Z'); const _Date = Date; const off = FIX - _Date.now();
           class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+off);} else super(...a);} static now(){ return _Date.now()+off; } }
           globalThis.Date = D;
@@ -50,6 +52,9 @@ async def main():
         await page.click('dialog .wd:has(input[value="4"])')
         await page.screenshot(path=f'{OUT}/04-event-dialog.png')
         await page.click('dialog button[type=submit]')
+        await page.wait_for_selector('dialog.narrow .choice-btn')  # never-ending: over the 1-year limit -> end it at the limit
+        print('limit offer:', await page.text_content('dialog.narrow .choice-btn strong'))
+        await page.click('dialog.narrow .choice-btn')
         await page.wait_for_timeout(500)
 
         # Reading task: Pride and Prejudice 200 pages from p.47 at 20 pages/hour
@@ -101,6 +106,9 @@ async def main():
         await page.wait_for_timeout(300)
         await page.screenshot(path=f'{OUT}/10-task-dialog-warning.png')
         await page.click('dialog button[type=submit]')
+        await page.wait_for_timeout(500)
+        if await page.query_selector('dialog.narrow .choice-btn'):  # more than 20 sessions: confirm
+            print('limit warning:', await page.text_content('dialog.narrow h2')); await page.click('dialog.narrow .choice-btn')
         await page.wait_for_selector('dialog .problem', timeout=5000)
         await page.screenshot(path=f'{OUT}/11-problem.png')
         await page.click('dialog .choice-btn[data-a=deadline]')

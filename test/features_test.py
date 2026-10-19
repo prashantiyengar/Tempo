@@ -1,5 +1,6 @@
 # Tests for: settings upgrade (5-min breaks / 15-min min session), categories, email reminders, daily agenda email,
 # deleting a done session (reschedule or not + replacement), auto-refresh, and the reconnect permission prompt.
+from noask import NOASK
 import asyncio, sys, subprocess, time, re, json, urllib.parse
 sys.path.insert(0, 'test')
 from playwright.async_api import async_playwright
@@ -26,7 +27,7 @@ async def main():
     async with async_playwright() as p:
         b = await p.chromium.launch()
         ctx = await b.new_context(viewport={'width': 1440, 'height': 900}, timezone_id='Europe/Berlin')
-        await ctx.add_init_script(INIT)
+        await ctx.add_init_script(INIT); await ctx.add_init_script(NOASK)
         await ctx.route(re.compile(r'https://accounts\.google\.com/o/oauth2/v2/auth.*'), google_auth)
         await ctx.route(re.compile(r'https://(www|openidconnect|oauth2)\.googleapis\.com/.*'), g.handle)
         page = await ctx.new_page(); page.on('pageerror', lambda e: errs.append(str(e)))
@@ -43,7 +44,7 @@ async def main():
         await page.screenshot(path=f'{OUT}/f1-category-dialog.png')
         await page.click('dialog button[type=submit]'); await page.wait_for_timeout(2500)
         t = await page.evaluate("window.__tempo.app.state.tasks.find(t => t.title === 'Guitar practice')")
-        ev = [e for e in g.task_events() if e['summary'].startswith('Guitar')]
+        ev = [e for e in g.task_events() if 'Guitar' in e['summary']]
         print('   task category:', t['categoryName'], t['color'], '| google colorId', ev[0].get('colorId'), '| def carries category:', 'Music' in ''.join(v for k, v in ev[0]['extendedProperties']['private'].items() if k.startswith('tdef_')))
         print('   sessions (break check):', [ (e['start']['dateTime'][11:16], e['end']['dateTime'][11:16]) for e in sorted(ev, key=lambda e: e['start']['dateTime'])][:3])
 
@@ -59,7 +60,7 @@ async def main():
         await page.screenshot(path=f'{OUT}/f3-email-settings.png')
         await page.click('dialog .tabs button[data-tab="5"]'); await page.screenshot(path=f'{OUT}/f4-categories-tab.png')
         await page.click('dialog button[type=submit]'); await page.wait_for_timeout(3000)
-        ev = [e for e in g.task_events() if e['summary'].startswith('Guitar')]
+        ev = [e for e in g.task_events() if 'Guitar' in e['summary']]
         print('4. session reminders on Google:', ev[0]['reminders'])
         print('5. agenda email on primary:', g.cals['primary'].get('notificationSettings'))
 

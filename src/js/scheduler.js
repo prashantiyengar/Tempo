@@ -24,7 +24,18 @@ export const DEFAULT_SETTINGS = {
   chunkMinutes: 60,
   minChunkMinutes: 15,     // shorter sessions are only used when full-length ones can't meet the deadline
   breakMinutes: 5,
-  wiggleMinutes: 15,       // smart allocation: also use free slots up to this much shorter than a session
+  wiggleMinutes: 15,
+  // Named time periods besides the day bounds; each is a list of rules { days, start, end }.
+  periods: [
+    { id: 'after-hours', name: 'After hours', rules: [
+      { days: [1, 2, 3, 4, 5], start: '17:30', end: '22:00' },
+      { days: [0, 6], start: '10:00', end: '20:00' },
+    ] },
+  ],
+  sessionWarn: 20,         // ask before creating a task with more sessions than this
+  sessionMax: 50,          // never create more sessions (or repeating-event occurrences) than this
+  maxSpanDays: 365,        // tasks and repeating events may not extend further than this (0 = no limit)
+  askCategory: true,       // ask once for a category when a new task has none       // smart allocation: also use free slots up to this much shorter than a session
   snapMinutes: 15,
   weekView: 'calendar',  // 'calendar' (Mon–Sun) or 'rolling' (today + 6 days)
   allDayBlocks: false,
@@ -32,12 +43,12 @@ export const DEFAULT_SETTINGS = {
   taskReminderMinutes: 5,
   taskEmailReminderMinutes: null, // null = no email reminder for task sessions; a number = minutes before
   categories: [
-    { id: 'work', name: 'Work', color: '#039be5' },
-    { id: 'personal', name: 'Personal', color: '#33b679' },
-    { id: 'leisure', name: 'Leisure', color: '#f6bf26' },
-    { id: 'study', name: 'Study', color: '#8e24aa' },
+    { id: 'work', name: 'Work', color: '#039be5', icon: '💼' },
+    { id: 'personal', name: 'Personal', color: '#33b679', icon: '🏠' },
+    { id: 'leisure', name: 'Leisure', color: '#f6bf26', icon: '🎉' },
+    { id: 'study', name: 'Study', color: '#8e24aa', icon: '📚' },
   ],
-  settingsVersion: 2,
+  settingsVersion: 3,
   notifyTasks: true,
   notifyLocal: true,
   notifyGoogle: false,
@@ -72,8 +83,16 @@ export function params(task, s) {
     wiggle: Math.max(0, Math.min(chunk - 5, task.wiggleMinutes != null && task.wiggleMinutes !== '' ? +task.wiggleMinutes : (s.wiggleMinutes ?? 15))),
     maxPerDay: +task.maxPerDayMinutes || null,
     breakMin: task.breakMinutes != null && task.breakMinutes !== '' ? +task.breakMinutes : s.breakMinutes,
-    bounds: task.ignoreBounds ? s.overflowBounds : (task.bounds || s.bounds),
+    bounds: task.ignoreBounds ? s.overflowBounds : (task.bounds || periodRules(task, s) || s.bounds),
   };
+}
+
+// A task can be scheduled in a named period (e.g. "After hours"): its rules, or a snapshot carried by the task.
+export function periodRules(task, s) {
+  if (!task.periodId) return null;
+  const p = (s.periods || []).find((x) => x.id === task.periodId);
+  const rules = p?.rules || task.periodRules;
+  return rules?.length ? rules : null;
 }
 
 const dur = (c) => Math.round((c.end - c.start) / T.MIN);
@@ -93,6 +112,7 @@ export function merge(list) {
 }
 
 export function windows(from, to, bounds, tz) {
+  if (Array.isArray(bounds)) return merge(bounds.flatMap((b) => windows(from, to, b, tz)));
   const out = [];
   if (to <= from) return out;
   const days = new Set(bounds.days?.length ? bounds.days : [0, 1, 2, 3, 4, 5, 6]);
@@ -264,16 +284,17 @@ export function sessions(task) {
     const mins = dur(c);
     if (!takesTime(c)) { cum += mins; continue; }
     idx++;
+    const icon = task.categoryIcon ? `${task.categoryIcon} ` : '';
     let label;
     if (task.kind === 'reading') {
       const r = task.reading;
       const base = r.labels === 'relative' ? 1 : (+r.startPage || 1);
       const a = base + Math.round((cum / total) * r.pages);
       const b = base - 1 + Math.min(r.pages, Math.round(((cum + mins) / total) * r.pages));
-      label = `${task.title} page ${a}-${Math.max(a, b)}, task ${idx}/${N}`;
+      label = `${icon}${task.title} page ${a}-${Math.max(a, b)}, task ${idx}/${N}`;
       c.pages = [a, Math.max(a, b)];
     } else {
-      label = `${task.title}, task ${idx}/${N}`;
+      label = `${icon}${task.title}, task ${idx}/${N}`;
     }
     cum += mins;
     out.push({ ...c, index: idx, count: N, minutes: mins, label, taskId: task.id });

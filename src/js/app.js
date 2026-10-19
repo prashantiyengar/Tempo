@@ -91,12 +91,15 @@ function calColor(calId) {
 function eventItem(ev) {
   const iv = E.interval(ev, tz());
   const me = ev.attendees?.find((a) => a.self);
-  return {
+  const item = {
     key: `${ev._calId}|${ev.id}`, kind: 'event', title: ev.summary || '(No title)', ...iv,
     color: ev.colorId ? G.EVENT_COLORS[ev.colorId] : calColor(ev._calId), ev,
     editable: EV.canEdit(ev, st()), declined: me?.responseStatus === 'declined', tentative: me?.responseStatus === 'tentative',
     catId: C.eventCategoryId(ev, st().eventCats),
   };
+  const icon = C.catById(set(), item.catId)?.icon;
+  if (icon && !item.title.startsWith(icon)) item.title = `${icon} ${item.title}`;
+  return item;
 }
 
 function chunkItems(from, to) {
@@ -366,7 +369,7 @@ function renderSidebar() {
     return `<button class="task-row ${complete ? 'complete' : ''}" data-task="${t.id}" style="--c:${t.color}">
       <span class="rank" title="Rank ${t.rank}">${t.rank}</span>
       <span class="tr-main">
-        <span class="tr-title">${t.kind === 'reading' ? '📖 ' : ''}${esc(t.title)}${warn ? ' <span class="warn-ic" title="Not enough time before the deadline">⚠</span>' : ''}</span>
+        <span class="tr-title">${t.categoryIcon ? esc(t.categoryIcon) + ' ' : (t.kind === 'reading' ? '📖 ' : '')}${esc(t.title)}${warn ? ' <span class="warn-ic" title="Not enough time before the deadline">⚠</span>' : ''}</span>
         <span class="tr-meta">${t.categoryId ? `<span class="tr-cat">${esc(C.catById(set(), t.categoryId)?.name || t.categoryName || '')}</span> · ` : ''}${complete ? 'Done ✓' : `${doneN}/${ss.length} · due ${esc(T.format(t.deadline, tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}`}${next && !complete ? ` · next ${esc(T.format(next.start, tz(), { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: set().h12 }))}` : ''}</span>
         <span class="bar"><i style="width:${p.pct}%"></i></span>
       </span></button>`;
@@ -700,7 +703,7 @@ function quickCreate(rect, sel, onClose) {
     C.categoryPicker($('.qc-cat', p), {
       settings: set(), selected: null,
       onChange: (c) => { qcCat = c; },
-      onCreate: async (name, color) => { const c = C.newCategory(set(), name, color); await E.persist(st(), ['settings']); return c; },
+      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
     });
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -769,7 +772,7 @@ function openItem(it, rect) {
         <button class="icon-btn x" title="Close">✕</button>
       </div>
       <div class="pop-title"><i style="--c:${it.color}"></i><h3>${esc(it.title)}</h3></div>
-      <div class="pop-row small"><button class="cat-chip on pop-evcat" ${it.catId ? `style="--c:${esc(C.catById(set(), it.catId)?.color || it.color)}"` : ''}>${it.catId ? `<i></i>${esc(C.catById(set(), it.catId)?.name || 'Category')}` : '+ Category'} ▾</button></div>
+      <div class="pop-row small"><button class="cat-chip on pop-evcat" ${it.catId ? `style="--c:${esc(C.catById(set(), it.catId)?.color || it.color)}"` : ''}>${it.catId ? `<i></i>${esc(C.catLabel(C.catById(set(), it.catId)) || 'Category')}` : '+ Category'} ▾</button></div>
       ${ev.extendedProperties?.private?.tempoTask ? '<div class="pop-row warnbox small">This is a Tempo task session that isn’t loaded in this browser yet. <button class="link load-tasks">Load tasks from Google</button></div>' : ''}
       <div class="pop-row">${esc(fmtWhen(it))}${evTz ? `<div class="muted small">Event time zone: ${esc(evTz)}</div>` : ''}${ev.recurrence?.length ? `<div class="muted small">${esc(describe(ev.recurrence))}</div>` : ev.recurringEventId ? '<div class="muted small">↻ Repeating event</div>' : ''}</div>
       ${ev.location ? `<div class="pop-row">📍 ${esc(ev.location)}</div>` : ''}
@@ -805,7 +808,7 @@ function openChunk(it, rect) {
       <div class="pop-tools"><button class="icon-btn x" title="Close">✕</button></div>
       <div class="pop-title"><i style="--c:${task.color}"></i><h3>${esc(sess.label)}</h3></div>
       <div class="pop-row">${badge} ${esc(fmtWhen(it))}</div>
-      <div class="pop-row small"><button class="cat-chip on pop-cat" ${task.categoryId ? `style="--c:${esc(task.color)}"` : ''}>${task.categoryId ? `<i></i>${esc(C.catById(s, task.categoryId)?.name || task.categoryName || 'Category')}` : '+ Category'} ▾</button></div>
+      <div class="pop-row small"><button class="cat-chip on pop-cat" ${task.categoryId ? `style="--c:${esc(task.color)}"` : ''}>${task.categoryId ? `<i></i>${esc(C.catLabel(C.catById(s, task.categoryId)) || task.categoryName || 'Category')}` : '+ Category'} ▾</button></div>
       <div class="pop-row small">Part of <b>${esc(task.title)}</b> · rank ${task.rank} · due ${esc(T.format(task.deadline, z, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 }))}</div>
       <div class="pop-row"><div class="bar"><i style="width:${p.pct}%;background:${task.color}"></i></div><div class="muted small">${T.fmtDur(p.done)} of ${T.fmtDur(p.total)} done</div></div>
       <div class="pop-row small">${!E.connected(st()) ? '<span class="muted">Only in this browser (Google not connected)</span>' : sess.gid ? '<span class="g-ok">✓ On Google Calendar</span>' : '<span class="g-bad">Not on Google Calendar yet</span> <button class="link sync-now">Sync now</button>'}</div>
@@ -838,6 +841,40 @@ function openChunk(it, rect) {
   });
 }
 
+// Tasks loaded from Google may use a time period this browser doesn't have yet: add it.
+function adoptPeriodsFromTasks() {
+  let changed = false;
+  for (const t of st().tasks) {
+    if (t.periodId && t.periodRules?.length && !(set().periods || []).some((p) => p.id === t.periodId)) {
+      set().periods = [...(set().periods || []), { id: t.periodId, name: t.periodName || 'Period', rules: t.periodRules }];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// A new task has no category: ask once, quickly (Skip keeps it uncategorised; "Don't ask again" turns this off).
+async function askCategoryOnce(task) {
+  let picked = null;
+  const r = await modal(`<div class="choice ask-cat"><h2>Which category is “${esc(task.title)}”?</h2>
+    <p class="muted small">Tap one, or add a new one. Categories color-code tasks and group your time in Analysis.</p>
+    <div class="cat-host" style="margin:10px 0 4px"></div>
+    <div class="actions"><button type="button" class="btn ghost link never">Don't ask again</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Skip</button></div></div>`, (dlg, close) => {
+    C.categoryPicker($('.cat-host', dlg), {
+      settings: set(), selected: null, allowNone: false,
+      onChange: (c) => { picked = c; close('ok'); },
+      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
+    });
+    $('.never', dlg).onclick = () => close('never');
+  }, { cls: 'narrow' });
+  if (r === 'never') {
+    set().askCategory = false;
+    await E.persist(st(), ['settings']);
+    toast('Won’t ask again. Turn it back on in Settings → Categories.');
+  }
+  return r === 'ok' && picked ? C.applyCategory(task, picked) : task;
+}
+
 // Quick classify: pick (or create) a category for a task.
 async function pickCategory(task) {
   let picked;
@@ -846,7 +883,7 @@ async function pickCategory(task) {
     C.categoryPicker($('.cat-host', dlg), {
       settings: set(), selected: task.categoryId,
       onChange: (c) => { picked = c; close('ok'); },
-      onCreate: async (name, color) => { const c = C.newCategory(set(), name, color); await E.persist(st(), ['settings']); return c; },
+      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
     });
   }, { cls: 'narrow' });
   if (r !== 'ok') return;
@@ -867,7 +904,7 @@ async function pickEventCategory(it) {
     C.categoryPicker($('.cat-host', dlg), {
       settings: set(), selected: it.catId,
       onChange: (c) => { picked = c; chosen = true; close(); },
-      onCreate: async (name, color) => { const c = C.newCategory(set(), name, color); await E.persist(st(), ['settings']); return c; },
+      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
     });
   }, { cls: 'narrow' });
   if (!chosen) return;
@@ -958,8 +995,9 @@ async function saveTasks() { await E.persist(st(), ['tasks', 'orphanGids', 'acks
 async function newTask(preset = {}) {
   const r = await D.taskDialog(ctx, null, preset);
   if (!r?.task) return;
-  const t = { ...r.task };
+  let t = { ...r.task };
   if (preset.title && !t.title) t.title = preset.title;
+  if (!t.categoryId && set().askCategory !== false) t = await askCategoryOnce(t);
   t.rev = Date.now();
   st().tasks.push(t);
   await saveTasks();
@@ -1016,7 +1054,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     try {
       const r = await E.pullTasks(st());
       app.lastPull = { at: Date.now(), ...r };
-      if (r.adoptedCalendar || C.adoptCategoriesFromTasks(set(), st().tasks)) await E.persist(st(), ['settings']);
+      if (r.adoptedCalendar | C.adoptCategoriesFromTasks(set(), st().tasks) | adoptPeriodsFromTasks()) await E.persist(st(), ['settings']);
       if (r.imported.length || r.updated.length || r.removed.length) {
         await E.persist(st(), ['tasks', 'orphanGids']);
         const parts = [];
@@ -1215,7 +1253,17 @@ async function openSettings() {
     st().settings = r.settings;
     await E.persist(st(), ['settings']);
     const ref = C.refreshTaskCategories(st().settings, st().tasks);
-    if (ref.changed.length) { st().tasks = ref.tasks; await saveTasks(); }
+    if (ref.changed.length) st().tasks = ref.tasks;
+    // keep each task's copy of its period's rules current (it syncs to other devices); deleted period -> work hours
+    let perChanged = !!ref.changed.length;
+    st().tasks = st().tasks.map((t) => {
+      if (!t.periodId) return t;
+      const per = (st().settings.periods || []).find((x) => x.id === t.periodId);
+      if (!per) { perChanged = true; return { ...t, periodId: null, periodName: null, periodRules: null, rev: Date.now() }; }
+      if (JSON.stringify(per.rules) !== JSON.stringify(t.periodRules) || per.name !== t.periodName) { perChanged = true; return { ...t, periodName: per.name, periodRules: per.rules, rev: Date.now() }; }
+      return t;
+    });
+    if (perChanged) await saveTasks();
     if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     app.miniCursor = T.dayKey(Date.now(), tz());
   }

@@ -23,6 +23,10 @@ export const SCOPES = {
 export function scopeWindows(scope, from, to, s) {
   const tz = s.tz;
   if (scope === 'full') return [{ start: from, end: to }];
+  if (scope.startsWith('period:')) {
+    const p = (s.periods || []).find((x) => x.id === scope.slice(7));
+    return p ? S.windows(from, to, p.rules, tz) : [];
+  }
   const inB = S.windows(from, to, s.bounds, tz);
   if (scope === 'bounds') return inB;
   const ext = S.merge([...S.windows(from, to, s.overflowBounds, tz), ...inB]);
@@ -82,7 +86,7 @@ export function groupOf(it, by, ctx) {
   if (by === 'category') {
     const id = it.kind === 'chunk' ? it.task.categoryId : it.catId;
     const c = (s.categories || []).find((x) => x.id === id);
-    if (c) return { key: 'cat:' + c.id, label: c.name, color: c.color };
+    if (c) return { key: 'cat:' + c.id, label: `${c.icon ? c.icon + ' ' : ''}${c.name}`, color: c.color };
     return it.kind === 'chunk' ? { key: 'cat:none-t', label: 'Uncategorized tasks', color: '#c0c4cc' } : { key: 'cat:none-e', label: 'Uncategorized events', color: '#9aa0aa' };
   }
   if (by === 'type') return it.kind === 'chunk' ? { key: 'tasks', label: 'Task sessions', color: '#8a5cf6' } : { key: 'events', label: 'Calendar events', color: '#5b7c99' };
@@ -150,7 +154,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
   // ---- stat tiles
   const tiles = `
     <div class="an-tiles">
-      <div class="tile"><span class="t-l">Hours in scope</span><span class="t-v">${fmtH(totals.available)}</span><span class="t-s">${esc(SCOPES[opts.scope].toLowerCase())}</span></div>
+      <div class="tile"><span class="t-l">Hours in scope</span><span class="t-v">${fmtH(totals.available)}</span><span class="t-s">${esc((SCOPES[opts.scope] || (settings.periods || []).find((p) => 'period:' + p.id === opts.scope)?.name || '').toLowerCase())}</span></div>
       <div class="tile"><span class="t-l">Occupied</span><span class="t-v">${fmtH(occupied)}</span><span class="t-s">${pct(occupied, totals.available)}% of scope</span></div>
       <div class="tile"><span class="t-l">Free</span><span class="t-v">${fmtH(totals.free)}</span><span class="t-s">${pct(totals.free, totals.available)}% of scope</span></div>
       <div class="tile"><span class="t-l">Busiest day</span><span class="t-v">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? esc(T.format(T.dayStart(b[0], tz), tz, { weekday: 'short', day: 'numeric', month: 'short' })) : '—'; })()}</span><span class="t-s">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free, days[k].available]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? `${fmtH(b[1])} of ${fmtH(b[2])} occupied` : 'nothing scheduled'; })()}</span></div>
@@ -227,7 +231,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
         <label class="field"><span>Period</span><select data-o="period">
           ${[['next7', 'Next 7 days'], ['next30', 'Next 30 days'], ['week', 'This week'], ['nextweek', 'Next week'], ['month', 'This month'], ['nextmonth', 'Next month'], ['custom', 'Custom…']].map(([v, l]) => `<option value="${v}" ${opts.period === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         ${opts.period === 'custom' ? `<label class="field"><span>From</span><input type="date" data-o="from" value="${opts.from || ''}"></label><label class="field"><span>To</span><input type="date" data-o="to" value="${opts.to || ''}"></label>` : ''}
-        <label class="field"><span>Hours</span><select data-o="scope">${Object.entries(SCOPES).map(([v, l]) => `<option value="${v}" ${opts.scope === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Hours</span><select data-o="scope">${[...Object.entries(SCOPES), ...(settings.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${opts.scope === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
         <label class="field"><span>Group by</span><select data-o="by">${[['category', 'Category'], ['color', 'Color'], ['source', 'Task or calendar'], ['type', 'Events vs tasks']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <span class="grow"></span>
         <button class="btn small ghost" data-o="csv">Download CSV</button>
@@ -241,6 +245,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
 }
 
 function scopeNote(scope, s) {
+  if (scope.startsWith('period:')) { const p = (s.periods || []).find((x) => 'period:' + x.id === scope); return p ? p.name + ': ' + p.rules.map((r) => `${r.start}–${r.end}`).join(', ') : ''; }
   const dn = (days) => (days.length === 7 ? 'every day' : days.length === 5 && [1, 2, 3, 4, 5].every((d) => days.includes(d)) ? 'Mon–Fri' : `${days.length} days/week`);
   if (scope === 'bounds') return `day bounds ${s.bounds.start}–${s.bounds.end}, ${dn(s.bounds.days)}`;
   if (scope === 'outside') return `extended hours ${s.overflowBounds.start}–${s.overflowBounds.end} minus day bounds`;
