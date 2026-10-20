@@ -610,11 +610,33 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .hold span { font-size: 10.5px; color: var(--ok); padding: 2px 5px; display: block; }
 .chip-btn.dur-add.minus, .chip-btn.st-add.minus { color: var(--ink2); border-style: dashed; }
 .since-last { font-weight: 600; }
-/* Drag-to-create / tap-to-create: editable From and To with shortcuts */
+/* Drag-to-create / tap-to-create: editable From and To with compact −/+ buttons */
 .qc-times { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 6px; }
-.qc-t label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink2); }
-.qc-t label span { width: 34px; }
-.qc-t input[type=time] { padding: 5px 6px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; }
-.qc-t .qc-dur { margin: 4px 0 0 42px; }
+.qc-t { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.qc-l { width: 36px; font-size: 12.5px; color: var(--ink2); }
+.qc-t input[type=time] { padding: 4px 6px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; width: 8.6em; }
 .qc-times .since-last { align-self: flex-start; }
-@media (max-width: 760px) { .qc-t .qc-dur .chip-btn { padding: 5px 9px; font-size: 13px; } .qc-t input[type=time] { font-size: 16px; } }
+.nudges { display: inline-flex; gap: 4px; flex-wrap: nowrap; }
+.nudge { display: inline-flex; border: 1px solid var(--line2); border-radius: 8px; overflow: hidden; background: var(--panel); }
+.nudge button { border: 0; background: none; padding: 3px 6px; font-size: 12px; color: var(--ink); cursor: pointer; min-width: 30px; font-variant-numeric: tabular-nums; }
+.nudge button + button { border-left: 1px solid var(--line); }
+.nudge button.minus { color: var(--ink2); }
+.nudge button:hover { background: var(--off); }
+.nudge button:active { background: color-mix(in srgb, var(--accent) 15%, var(--panel)); }
+.now-btn { border: 1px solid var(--line2); background: var(--panel); border-radius: 8px; padding: 3px 8px; font-size: 12px; cursor: pointer; color: var(--accent); font-weight: 600; }
+@media (max-width: 760px) {
+  .qc-t { gap: 5px; }
+  .qc-t .nudges { width: 100%; padding-left: 41px; box-sizing: border-box; }
+  .nudge button { padding: 6px 0; min-width: 0; flex: 1; font-size: 13px; }
+  .nudges .nudge { flex: 1; }
+  .qc-t input[type=time] { font-size: 16px; }
+}
+@media (max-width: 760px) {
+  .popover { max-height: 88dvh; }
+  /* Save stays reachable on small phones */
+  .popover .qc-actions { position: sticky; bottom: calc(-16px - env(safe-area-inset-bottom)); background: var(--panel); padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); z-index: 2; box-shadow: 0 -6px 12px -8px rgba(0,0,0,.15); }
+}
+/* AI console */
+.ai-console textarea { width: 100%; box-sizing: border-box; font-size: 12.5px; }
+.ai-out { max-height: 320px; overflow: auto; background: var(--off); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; margin: 8px 0 0; }
+.ai-out:empty { display: none; }

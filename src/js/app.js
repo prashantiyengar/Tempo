@@ -14,6 +14,7 @@ import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
 import { $, $$, esc, el, toast as uiToast, choose, popover, closePopover, download, modal, setHTML, setQuickTz } from './ui.js';
 import * as RV from './review.js';
 import { parseTask } from './parse.js';
+import { createApi, AI_PROMPT } from './api.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -725,14 +726,13 @@ function quickCreate(rect, sel, onClose) {
   const def = ctx.defaultCalendar();
   const durMin = Math.round((sel.end - sel.start) / T.MIN);
   popover(rect, `
-    <form class="qc">
+    <form class="qc" novalidate>
       <input name="title" placeholder="Add title" autofocus autocomplete="off">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
       ${sel.allDay ? '' : (() => {
-        const chips = (cls) => [[-60, '−1h'], [-30, '−30m'], [-10, '−10m'], [-5, '−5m'], [5, '+5m'], [15, '+15m'], [30, '+30m'], [60, '+1h']].map(([m, l]) => `<button type="button" class="chip-btn ${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`).join('');
         return `<div class="qc-times">
-          <div class="qc-t"><label><span>From</span><input type="time" name="qs" step="300"></label><div class="qc-dur">${chips('st-add')}</div></div>
-          <div class="qc-t"><label><span>To</span><input type="time" name="qe" step="300"></label><div class="qc-dur">${chips('dur-add')}</div></div>
+          <div class="qc-t"><span class="qc-l">From</span><input type="time" name="qs" step="60"><button type="button" class="now-btn st-now" title="Start now">Now</button>${nudges('st-add')}</div>
+          <div class="qc-t"><span class="qc-l">To</span><input type="time" name="qe" step="60"><button type="button" class="now-btn en-now" title="End now">Now</button>${nudges('dur-add')}</div>
           <button type="button" class="chip-btn since-last" title="From the end of your last event (up to 12 h ago) until now">⤒ Since last event</button>
         </div>`;
       })()}
@@ -759,6 +759,8 @@ function quickCreate(rect, sel, onClose) {
       f.title.focus();
     };
     $$('.dur-add', p).forEach((b) => (b.onclick = () => { sel.end = Math.max(sel.start + 5 * T.MIN, sel.end + +b.dataset.add * T.MIN); redraw(); }));
+    $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start; sel.start = nowMin(); sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); });
+    $('.en-now', p)?.addEventListener('click', () => { sel.end = Math.max(sel.start + 5 * T.MIN, nowMin()); redraw(); });
     // From: move the start (the end stays, unless the event would get shorter than 5 minutes)
     $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; redraw(); }));
     // typed times: same day as the start; an end before the start means the next day
@@ -788,6 +790,13 @@ function quickCreate(rect, sel, onClose) {
     $('.as-reading', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'reading', title, earliestStart: sel.allDay ? null : sel.start }); };
   });
 }
+
+// Compact −/+ time buttons: two joined groups, e.g. [−1h|−30|−10|−5] [+5|+15|+30|+1h]
+function nudges(cls) {
+  const b = (m, l) => `<button type="button" class="${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}" title="${m < 0 ? '' : '+'}${m} min">${l}</button>`;
+  return `<span class="nudges"><span class="nudge">${b(-60, '−1h')}${b(-30, '−30')}${b(-10, '−10')}${b(-5, '−5')}</span><span class="nudge">${b(5, '+5')}${b(15, '+15')}${b(30, '+30')}${b(60, '+1h')}</span></span>`;
+}
+
 
 function selBody(sel, title, calId) {
   const z = tz();
@@ -1422,7 +1431,7 @@ async function itemsToday() {
   const k = T.dayKey(Date.now(), tz());
   return collectItems([k]);
 }
-async function finishedEarly(it0) {
+async function finishedEarly(it0, choice = null) {
   let it = it0;
   if (!it) {
     const now = Date.now();
@@ -1451,7 +1460,7 @@ async function finishedEarly(it0) {
   } catch (err) { handleError(err); return; }
   const freeMin = Math.round((origEnd - end) / T.MIN);
   const until = T.fmtTime(origEnd, tz(), set().h12);
-  const v = await choose(`Finished ${T.fmtDur(freeMin)} early`, `“${it.title}” now ends at ${T.fmtTime(end, tz(), set().h12)}. What should happen until ${until}?`, [
+  const v = choice || await choose(`Finished ${T.fmtDur(freeMin)} early`, `“${it.title}” now ends at ${T.fmtTime(end, tz(), set().h12)}. What should happen until ${until}?`, [
     { value: 'fill', label: 'Move tasks up', desc: 'Pull your next task sessions into this time.' },
     { value: 'free', label: 'Leave it free', desc: `Nothing gets scheduled until ${until}.` },
   ], { cancel: 'Decide later' });
@@ -1462,6 +1471,7 @@ async function finishedEarly(it0) {
     toast(`Kept free until ${until}`);
   }
   await cycle();
+  return { finished: it.title, endedAt: T.toDTInput(end, tz()).replace('T', ' '), freedMinutes: freeMin, then: v || 'nothing' };
 }
 // Pull upcoming sessions (most important first) into [start, end).
 async function fillGap(start, end) {
@@ -1499,6 +1509,64 @@ async function fillSinceLast() {
   const r = await lastEventEnd();
   newEvent({ start: r.start, end: r.end, title: '' });
   setTimeout(() => toast(r.note, { noUndo: true }), 300);
+}
+
+// ======================================================================================
+// Command interface for AI assistants and automation (window.tempo, AI console)
+// ======================================================================================
+async function freeSlots(from, to, minMin, within) {
+  const s = set(), z = tz();
+  const { busy } = await E.busyIntervals(st(), from, to);
+  const sess = st().tasks.filter((t) => !t.archived).flatMap((t) => S.sessions(t).filter((c) => c.kind !== 'waived').map((c) => ({ start: c.start, end: c.end })));
+  const wins = /any|all/i.test(within) ? [{ start: from, end: to }] : S.windows(from, to, s.bounds, z);
+  return S.subtract(wins, S.merge([...busy, ...sess])).map((w) => ({ start: Math.max(w.start, Date.now()), end: w.end })).filter((w) => w.end - w.start >= minMin * T.MIN);
+}
+async function finishedEarlyApi(a) {
+  const now = Date.now();
+  const items = (await itemsToday()).filter((x) => !x.allDay && x.start <= now && x.end > now && (x.kind === 'chunk' ? x.status !== 'done' || x.sess.auto : x.editable && A.isOccupying(x, set())));
+  let it = null;
+  if (a.item) it = items.find((x) => x.key === a.item || x.sess?.id === a.item || x.key === `c|${a.item}` || (x.title || '').toLowerCase().includes(String(a.item).toLowerCase()));
+  else if (items.length === 1) it = items[0];
+  if (!it) { const e = new Error(items.length ? `Several things are running: ${items.map((x) => x.title).join(', ')} — give "item".` : 'Nothing is running right now.'); e.api = true; throw e; }
+  const then = /move|fill|up/i.test(a.then || '') ? 'fill' : /free|keep/i.test(a.then || '') ? 'free' : 'later';
+  return finishedEarly(it, then);
+}
+let api = null;
+function setupApi() {
+  api = createApi({
+    st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi,
+    afterEventChange, defaultCalendar: () => ctx.defaultCalendar(), lastBusy: () => app.lastBusy, toast: (m) => toast(m),
+  });
+  window.tempo = api;
+  if (new URLSearchParams(location.search).get('ai') === '1') setTimeout(openAiConsole, 600);
+}
+async function openAiConsole() {
+  const example = JSON.stringify([{ cmd: 'today' }, { cmd: 'listTasks' }], null, 1);
+  await modal(`<div class="ai-console"><header class="dlg-head"><h2>AI &amp; automation</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+    <div class="dlg-body">
+      <p class="small">An AI assistant that works in your browser (e.g. <b>Claude in Chrome</b>, included in your Claude subscription) can control Tempo through a command interface — no API key, no extra cost. Copy the instructions below into your chat with it, or paste commands here yourself.</p>
+      <div class="row"><button type="button" class="btn small copy-prompt">Copy instructions for your AI</button><button type="button" class="btn small ghost show-help">Show all commands</button></div>
+      <label class="field"><span>Commands (JSON — one object or a list)</span><textarea id="ai-input" class="mono" rows="7" spellcheck="false">${esc(example)}</textarea></label>
+      <div class="row"><button type="button" class="btn primary run" id="ai-run">Run</button><button type="button" class="btn dry" id="ai-dry">Preview (dry run)</button><span class="grow"></span><span class="muted small ai-status"></span></div>
+      <pre id="ai-output" class="ai-out" aria-live="polite"></pre>
+    </div></div>`, (dlg) => {
+    const out = $('#ai-output', dlg), status = $('.ai-status', dlg);
+    const go = async (dryRun) => {
+      let cmds;
+      try { cmds = JSON.parse($('#ai-input', dlg).value); } catch (e) { out.textContent = JSON.stringify({ error: 'Not valid JSON: ' + e.message }, null, 2); return; }
+      status.textContent = 'Running…';
+      const r = await api.run(cmds, { dryRun });
+      out.textContent = JSON.stringify(r, null, 2);
+      status.textContent = dryRun ? 'Preview only — nothing changed' : 'Done';
+    };
+    $('#ai-run', dlg).onclick = () => go(false);
+    $('#ai-dry', dlg).onclick = () => go(true);
+    $('.show-help', dlg).onclick = () => { out.textContent = JSON.stringify(api.help(), null, 2); };
+    $('.copy-prompt', dlg).onclick = async () => {
+      const text = `${AI_PROMPT}\nThe app is open at ${location.origin + location.pathname}.`;
+      try { await navigator.clipboard.writeText(text); status.textContent = 'Copied'; } catch { out.textContent = text; status.textContent = 'Copy this text:'; }
+    };
+  }, { cls: 'wide' });
 }
 
 // ======================================================================================
@@ -2022,6 +2090,7 @@ function bindToolbar() {
     { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
     { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
     { ic: '★', label: 'Weekly review', run: openReview },
+    { ic: '✦', label: 'AI & automation', run: openAiConsole },
     '-', 'Export',
     { ic: 'W', label: 'This week as PDF', run: () => exportView('week', 'pdf').catch(handleError) },
     { ic: 'W', label: 'This week as image (PNG)', run: () => exportView('week', 'png').catch(handleError) },
@@ -2033,6 +2102,8 @@ function bindToolbar() {
   $('#btn-now').onclick = () => sheetMenu([
     { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
     { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
+    '-',
+    { ic: '✦', label: 'AI & automation…', run: openAiConsole },
   ]);
   $('#btn-review').onclick = openReview;
   setupQuickAdd();
@@ -2116,6 +2187,7 @@ async function init() {
   }
   window.__tempo = { app, cycle, render, S, T, E, checkGoogle: async () => { app.gCursors ||= {}; if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); return true; } return false; } }; // handy for debugging from the console
   markBaseline();
+  setupApi();
   loadTimer();
   await cycle({ pull: true });
   maybeOfferReview();

@@ -71,15 +71,16 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       </div>
       <div class="row dt">
         <input type="date" name="sDate" value="${sKey}" required>
-        <input type="time" name="sTime" value="${sTime}" step="300" class="timed">
+        <input type="time" name="sTime" value="${sTime}" step="60" class="timed">
         <span class="muted">to</span>
-        <input type="time" name="eTime" value="${eTime}" step="300" class="timed">
+        <input type="time" name="eTime" value="${eTime}" step="60" class="timed">
         <input type="date" name="eDate" value="${eKey}" required data-quick="off">
       </div>
       <div class="row timed dur-row">
         <span class="muted small">Length <b class="dur-now"></b></span>
-        ${[[-60, '−1 hour'], [-30, '−30 min'], [-10, '−10 min'], [-5, '−5 min']].map(([m, l]) => `<button type="button" class="chip-btn dur-add minus" data-add="${m}">${l}</button>`).join('')}
-        ${[[5, '+5 min'], [15, '+15 min'], [30, '+30 min'], [60, '+1 hour']].map(([m, l]) => `<button type="button" class="chip-btn dur-add" data-add="${m}">${l}</button>`).join('')}
+        ${nudgesHTML('dur-add')}
+        <button type="button" class="now-btn st-now" title="Start now (keeps the length)">Start now</button>
+        <button type="button" class="now-btn en-now" title="End now">End now</button>
         ${ctx.lastEventEnd ? '<button type="button" class="chip-btn since-last" title="Start when your last event ended (up to 12 hours ago, also yesterday) and end now">⤒ Since last event</button>' : ''}
       </div>
       <div class="row timed">
@@ -237,6 +238,12 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     const endMs = () => T.atTime(f.eDate.value, f.eTime.value || '00:00', zoneOf());
     const startMs = () => T.atTime(f.sDate.value, f.sTime.value || '00:00', zoneOf());
     const showDur = () => { const m = Math.round((endMs() - startMs()) / T.MIN); const d = $('.dur-now', dlg); if (d) d.textContent = m > 0 ? T.fmtDur(m) : '—'; };
+    $('.st-now', dlg)?.addEventListener('click', () => {
+      const d = endMs() - startMs(), n = Math.floor(Date.now() / T.MIN) * T.MIN;
+      const a = T.toDTInput(n, zoneOf()); f.sDate.value = a.slice(0, 10); f.sTime.value = a.slice(11, 16);
+      setEnd(n + Math.max(5 * T.MIN, d)); f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur();
+    });
+    $('.en-now', dlg)?.addEventListener('click', () => { setEnd(Math.max(startMs() + 5 * T.MIN, Math.floor(Date.now() / T.MIN) * T.MIN)); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); });
     const setEnd = (ms) => { const dt = T.toDTInput(ms, zoneOf()); f.eDate.value = dt.slice(0, 10); f.eTime.value = dt.slice(11, 16); };
     $('.since-last', dlg)?.addEventListener('click', async () => {
       const r = await ctx.lastEventEnd();
@@ -343,6 +350,11 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
 }
 
 export const TASK_COLORS_PUBLIC = TASK_COLORS;
+// compact −/+ time buttons (same as the quick-create box)
+const nudgesHTML = (cls) => {
+  const b = (m, l) => `<button type="button" class="${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`;
+  return `<span class="nudges"><span class="nudge">${b(-60, '−1h')}${b(-30, '−30')}${b(-10, '−10')}${b(-5, '−5')}</span><span class="nudge">${b(5, '+5')}${b(15, '+15')}${b(30, '+30')}${b(60, '+1h')}</span></span>`;
+};
 // Limits check for a task created outside the dialog (quick add).
 export async function checkTaskLimits(ctx, nt) {
   const s = ctx.state.settings;
