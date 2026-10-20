@@ -81,7 +81,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         ${nudgesHTML('dur-add')}
         <button type="button" class="now-btn st-now" title="Start now (keeps the length)">Start now</button>
         <button type="button" class="now-btn en-now" title="End now">End now</button>
-        ${ctx.lastEventEnd ? '<button type="button" class="chip-btn since-last" title="Start when your last event ended (up to 12 hours ago, also yesterday) and end now">⤒ Since last event</button>' : ''}
+        ${ctx.lastEventEnd ? '<button type="button" class="chip-btn since-last" title="Start when the previous event ended (looks back up to 12 hours, also into the day before)">⤒ Since last event</button>' : ''}
       </div>
       <div class="row timed">
         <label class="field grow"><span>Time zone</span>
@@ -246,10 +246,14 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     $('.en-now', dlg)?.addEventListener('click', () => { setEnd(Math.max(startMs() + 5 * T.MIN, Math.floor(Date.now() / T.MIN) * T.MIN)); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); });
     const setEnd = (ms) => { const dt = T.toDTInput(ms, zoneOf()); f.eDate.value = dt.slice(0, 10); f.eTime.value = dt.slice(11, 16); };
     $('.since-last', dlg)?.addEventListener('click', async () => {
-      const r = await ctx.lastEventEnd();
+      // look back from the start shown in the dialog (or from now, if you're creating something happening now)
+      const ref = startMs(), nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;
+      const r = await ctx.lastEventEnd({ ref: nowish ? null : ref, exclude: ev ? `${ev._calId}|${ev.id}` : null });
+      if (!r.found && !nowish) { setHTML($('.since-note', dlg) || $('.dur-row', dlg).appendChild(Object.assign(document.createElement('span'), { className: 'muted small since-note' })), 'No earlier event in the 12 hours before.'); return; }
+      const keepEnd = endMs();
       const dt = T.toDTInput(r.start, zoneOf());
       f.sDate.value = dt.slice(0, 10); f.sTime.value = dt.slice(11, 16);
-      setEnd(r.end);
+      setEnd(nowish ? Math.max(r.end, r.start + 5 * T.MIN) : Math.max(keepEnd, r.start + 5 * T.MIN));
       f.sTime.dispatchEvent(new Event('change', { bubbles: true }));
       showDur();
       setHTML($('.since-note', dlg) || $('.dur-row', dlg).appendChild(Object.assign(document.createElement('span'), { className: 'muted small since-note' })), esc(r.note));
@@ -745,6 +749,7 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Hour height (px)</span><input type="number" name="hourHeight" min="28" max="120" value="${s.hourHeight}"></label>
           <label class="field"><span>Drag snapping (min)</span><select name="snapMinutes">${[5, 10, 15, 30, 60].map((v) => `<option ${v === s.snapMinutes ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
           <label class="field"><span>Default event length (min)</span><input type="number" name="defaultEventMinutes" min="5" step="5" value="${s.defaultEventMinutes}"></label>
+          <label class="field"><span>“Since last event” starts this many minutes after it (0–15)</span><input type="number" name="sinceLastBuffer" min="0" max="15" step="1" value="${s.sinceLastBuffer || 0}"></label>
         </div>
       </section>
       <section data-pane="1" hidden>
@@ -1021,6 +1026,7 @@ export function settingsDialog(ctx) {
         chunkMinutes: Math.max(5, +f.chunkMinutes.value || 60), minChunkMinutes: f.minChunkMinutes.value ? Math.max(5, +f.minChunkMinutes.value) : null,
         breakMinutes: Math.max(0, +f.breakMinutes.value || 0),
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
+        sinceLastBuffer: Math.max(0, Math.min(15, Math.round(+f.sinceLastBuffer.value || 0))),
         dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),
         travelMinutes: Math.max(0, +f.travelMinutes.value || 0), repeatHorizonDays: Math.max(7, +f.repeatHorizonDays.value || 28),
         pomodoro: { work: Math.max(5, +f.pomoWork.value || 25), rest: Math.max(1, +f.pomoRest.value || 5) }, learnSpeed: f.learnSpeed.checked,

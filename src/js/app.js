@@ -30,7 +30,7 @@ const set = () => app.state.settings;
 const ctx = {
   get state() { return app.state; },
   externalChanged() { AC.invalidateExternal(); render(); cycle(); },
-  lastEventEnd: () => lastEventEnd(),
+  lastEventEnd: (o) => lastEventEnd(o),
   get lastBusy() { return app.lastBusy; },
   // New events go to the calendar chosen for task sessions (Settings → Google Calendar), else the primary one.
   defaultCalendar() {
@@ -742,6 +742,8 @@ function quickCreate(rect, sel, onClose) {
       <div class="qc-cat"></div>
       <div class="qc-actions">
         <button type="button" class="btn small ghost more">More options</button>
+        <span class="grow"></span>
+        <button type="button" class="btn small ghost qc-cancel">Cancel</button>
         <button type="submit" class="btn small primary">Save</button>
       </div>
       <div class="qc-alt">
@@ -774,7 +776,16 @@ function quickCreate(rect, sel, onClose) {
       sel.start = st0; sel.end = en; redraw();
     };
     if (f.qs) { f.qs.addEventListener('change', fromInputs); f.qe.addEventListener('change', fromInputs); f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
-    $('.since-last', p)?.addEventListener('click', async () => { const r = await lastEventEnd(); sel.start = r.start; sel.end = r.end; $('.ghost-sel')?.remove(); redraw(); toast(r.note, { noUndo: true }); });
+    $('.since-last', p)?.addEventListener('click', async () => {
+      const ref = sel.start, nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;
+      const r = await lastEventEnd({ ref: nowish ? null : ref });
+      if (!r.found && !nowish) { toast('No earlier event in the 12 hours before this slot.', { noUndo: true }); return; }
+      sel.start = r.start;
+      if (nowish) sel.end = Math.max(r.end, sel.start + 5 * T.MIN);
+      else if (sel.end <= sel.start) sel.end = sel.start + 5 * T.MIN;
+      $('.ghost-sel')?.remove(); redraw(); toast(r.note, { noUndo: true });
+    });
+    $('.qc-cancel', p)?.addEventListener('click', () => { close(); onClose?.(); });
     let qcCat = null;
     C.categoryPicker($('.qc-cat', p), {
       settings: set(), selected: null,
@@ -1498,14 +1509,18 @@ async function fillGap(start, end) {
 // The end of your last event (today or yesterday, at most 12 hours ago) — e.g. at 6:00 you can record that you
 // slept since 22:00 the evening before.
 const LOOKBACK = 12 * T.HOUR;
-async function lastEventEnd() {
-  const now = nowMin(), z = tz(), today = T.dayKey(now, z);
-  const items = (await collectItems([T.addDays(today, -1), today])).filter((x) => !x.allDay && x.end <= now && x.end > now - LOOKBACK && A.isOccupying(x, set()));
-  if (!items.length) return { start: now - LOOKBACK, end: now, found: false, note: 'No event in the last 12 hours — starting 12 hours ago; adjust the start as needed.' };
+// `ref` = the time to look back from (the start of the slot you're creating; default: now). The new start is that
+// event's end plus the buffer from Settings (0–15 min).
+async function lastEventEnd({ ref = null, exclude = null } = {}) {
+  const now = nowMin(), z = tz();
+  const at = ref ?? now, day = T.dayKey(at, z);
+  const buf = Math.max(0, Math.min(15, +set().sinceLastBuffer || 0)) * T.MIN;
+  const items = (await collectItems([T.addDays(day, -1), day])).filter((x) => !x.allDay && x.key !== exclude && x.end <= at && x.end > at - LOOKBACK && A.isOccupying(x, set()));
+  if (!items.length) return { start: at - LOOKBACK, end: now, found: false, note: 'No event in the 12 hours before — starting 12 hours earlier; adjust the start as needed.' };
   const last = items.reduce((a, b) => (b.end > a.end ? b : a));
-  const start = Math.min(last.end, now - 5 * T.MIN);
-  const when = T.dayKey(start, z) === today ? T.fmtTime(start, z, set().h12) : `yesterday ${T.fmtTime(start, z, set().h12)}`;
-  return { start, end: now, found: true, note: `Since “${last.title}” ended (${when})` };
+  const start = Math.min(last.end + buf, at - 5 * T.MIN);
+  const when = T.dayKey(last.end, z) === day ? T.fmtTime(last.end, z, set().h12) : `${T.dayKey(last.end, z) === T.addDays(day, -1) ? 'the day before' : T.format(last.end, z, { weekday: 'short' })} ${T.fmtTime(last.end, z, set().h12)}`;
+  return { start, end: now, found: true, note: `From “${last.title}” (ended ${when})${buf ? ` + ${buf / T.MIN} min` : ''}` };
 }
 async function fillSinceLast() {
   const r = await lastEventEnd();

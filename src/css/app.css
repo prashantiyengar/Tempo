@@ -217,7 +217,7 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .qc input[name=title] { font-size: 17px; border: 0; border-bottom: 2px solid var(--accent); padding: 4px 2px 6px; background: transparent; outline: none; }
 .qc-when { font-size: 13px; color: var(--ink2); }
 .qc select { padding: 5px 8px; border: 1px solid var(--line2); border-radius: 7px; background: var(--panel); }
-.qc-actions { display: flex; justify-content: space-between; }
+.qc-actions { display: flex; align-items: center; gap: 6px; }
 .qc-alt { border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: 13px; }
 
 /* ---------- dialogs ---------- */
