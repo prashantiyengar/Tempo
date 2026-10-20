@@ -202,7 +202,7 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .m-more:hover { background: var(--off); }
 
 /* ---------- popovers ---------- */
-.popover { position: fixed; z-index: 50; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow); width: 340px; max-width: calc(100vw - 16px); padding: 12px 14px 14px; animation: pop .12s ease-out; }
+.popover { position: fixed; z-index: 50; max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; overscroll-behavior: contain; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: var(--shadow); width: 340px; max-width: calc(100vw - 16px); padding: 12px 14px 14px; animation: pop .12s ease-out; }
 @keyframes pop { from { opacity: 0; transform: translateY(4px); } }
 .pop-tools { display: flex; justify-content: flex-end; gap: 2px; margin: -4px -6px 2px 0; }
 .pop-tools .icon-btn { font-size: 15px; width: 30px; height: 30px; }
@@ -229,7 +229,11 @@ dialog form { display: flex; flex-direction: column; max-height: calc(100vh - 32
 .dlg-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px 6px 20px; }
 .dlg-head h2 { margin: 0; font-size: 18px; flex: 1; }
 .dlg-head .icon-btn { margin-left: auto; }
-.dlg-body { padding: 6px 20px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.dlg-body { padding: 6px 20px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; min-height: 0; flex: 1 1 auto; overscroll-behavior: contain; }
+/* Only the body scrolls; the title and tab bar stay put (sticky as a fallback where the whole dialog scrolls, e.g. iOS with the keyboard open). */
+dialog form > .dlg-head, dialog form > .tabs { flex: none; }
+.settings-form > .dlg-head { position: sticky; top: 0; z-index: 4; background: var(--panel); }
+.settings-form > .tabs { position: sticky; top: var(--sf-head, 48px); z-index: 4; background: var(--panel); }
 .title-input { font-size: 20px; border: 0; border-bottom: 2px solid var(--line2); padding: 6px 2px; background: transparent; outline: none; flex: 1; min-width: 0; }
 .title-input:focus { border-bottom-color: var(--accent); }
 .actions { display: flex; gap: 8px; align-items: center; padding: 12px 20px; border-top: 1px solid var(--line); }

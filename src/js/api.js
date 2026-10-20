@@ -95,7 +95,7 @@ export function createApi(h) {
   const sessOut = (t, c) => ({ id: c.id, task: t.title, taskId: t.id, index: c.index, of: c.count, label: c.label, start: fmt(c.start), end: fmt(c.end), minutes: c.minutes, status: c.partial ? 'partly done' : c.kind });
   const evOut = (it) => ({ id: it.key, title: it.title, start: it.allDay ? it.startKey : fmt(it.start), end: it.allDay ? T.addDays(it.endKey, -1) : fmt(it.end), allDay: !!it.allDay,
     calendar: it.ev?._calName || (h.st().gmeta.calendars || []).find((c) => c.id === it.ev?._calId)?.summary || (it.ev?._calId === E.LOCAL_CAL ? 'Local' : it.ev?._calId),
-    location: it.ev?.location || undefined, editable: !!it.editable, repeating: !!it.ev?.recurringEventId, category: C.catById(h.set(), it.catId)?.name || undefined });
+    location: it.ev?.location || undefined, editable: !!it.editable, repeating: !!it.ev?.recurringEventId, category: C.catById(h.set(), it.catId)?.name || undefined, done: it.evDone || undefined });
 
   async function eventItems(from, to) {
     const days = [];
@@ -230,6 +230,10 @@ export function createApi(h) {
     markUndone: { params: 'session | task + index', about: 'Mark a done session undone (its work is re-planned).', write: true, run: async (a) => {
       const { task, sess } = findSession(a.session, a.task, a.index);
       h.replaceTask(sess.kind === 'pinned' ? S.unpinSession(task, sess.id) : S.markUndone(task, sess.id)); await h.saveTasks('AI: mark undone'); await h.cycle(); return { undone: sess.label };
+    } },
+    markEventDone: { params: 'event (id or title), done? (default true; false = undone)', about: 'Tick an ordinary calendar event off as done, or mark it undone again.', write: true, run: async (a) => {
+      const it = await findEvent(a.event); const done = a.done !== false && a.done !== 'false';
+      await h.setEventDone(it, done, { quiet: true }); return { [done ? 'done' : 'undone']: it.title };
     } },
     markPartial: { params: 'session | task + index, pages (reading) | percent, rest? ("add time" | "fit in")', about: 'Record a partly done session; the rest is re-planned.', write: true, run: async (a) => {
       const { task, sess } = findSession(a.session, a.task, a.index);

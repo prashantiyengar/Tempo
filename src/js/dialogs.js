@@ -871,9 +871,12 @@ export function settingsDialog(ctx) {
 
   return modal(html, (dlg, close) => {
     const f = $('form', dlg);
+    const headH = () => dlg.style.setProperty('--sf-head', ($('.dlg-head', dlg)?.offsetHeight || 48) + 'px');
+    headH(); requestAnimationFrame(headH);
     $$('.tabs button', dlg).forEach((b) => b.addEventListener('click', () => {
       $$('.tabs button', dlg).forEach((x) => x.classList.toggle('on', x === b));
       $$('[data-pane]', dlg).forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab));
+      const body = $('.dlg-body', dlg); if (body) body.scrollTop = 0;
     }));
     const saveClientId = async () => { const v = f.clientId.value.trim(); if (v !== (st.auth?.clientId || '')) await ctx.saveAuth({ clientId: v }); };
     $('.copy-redir', dlg).onclick = () => navigator.clipboard?.writeText(redirect);

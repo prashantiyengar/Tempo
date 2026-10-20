@@ -7,7 +7,7 @@ import { externalEvents } from './accounts.js';
 import { expand } from './rrule.js';
 import { get, set } from './storage.js';
 
-const KEYS = ['settings', 'tasks', 'localEvents', 'gmeta', 'orphanGids', 'acks', 'reminderQueue', 'syncInfo', 'installId', 'tombstones', 'eventCats'];
+const KEYS = ['settings', 'tasks', 'localEvents', 'gmeta', 'orphanGids', 'acks', 'reminderQueue', 'syncInfo', 'installId', 'tombstones', 'eventCats', 'eventDone'];
 export const LOCAL_CAL = 'local';
 
 export async function loadState() {
@@ -47,6 +47,7 @@ export async function loadState() {
     installId: raw.installId,
     tombstones: raw.tombstones || [],
     eventCats: raw.eventCats || {},
+    eventDone: raw.eventDone || {},
   };
 }
 

@@ -75,16 +75,25 @@ export function popover(anchorRect, html, setup) {
   closePopover();
   const p = el(`<div class="popover" role="dialog">${html}</div>`);
   document.body.appendChild(p);
-  const r = p.getBoundingClientRect();
-  const vw = innerWidth, vh = innerHeight;
-  let left = anchorRect.right + 8;
-  if (left + r.width > vw - 8) left = anchorRect.left - r.width - 8;
-  if (left < 8) left = Math.max(8, Math.min(vw - r.width - 8, anchorRect.left));
-  let top = Math.min(Math.max(8, anchorRect.top), vh - r.height - 8);
-  p.style.left = left + 'px';
-  p.style.top = Math.max(8, top) + 'px';
   setup?.(p, closePopover);
   addDateShortcuts(p);
+  // Place it after its contents are built, and again whenever it grows (More options, notes, a toast row…),
+  // so the whole popup always stays on screen. If it is taller than the window it scrolls inside.
+  const place = () => {
+    if (!p.isConnected) return;
+    const vw = innerWidth, vh = innerHeight;
+    const r = p.getBoundingClientRect();
+    let left = anchorRect.right + 8;
+    if (left + r.width > vw - 8) left = anchorRect.left - r.width - 8;
+    if (left < 8) left = Math.max(8, Math.min(vw - r.width - 8, anchorRect.left));
+    const top = Math.max(8, Math.min(anchorRect.top, vh - r.height - 8));
+    p.style.left = left + 'px';
+    p.style.top = top + 'px';
+  };
+  place();
+  if (typeof ResizeObserver === 'function') { const ro = new ResizeObserver(place); ro.observe(p); p._ro = ro; }
+  p._place = place; addEventListener('resize', place);
+  p._unplace = () => removeEventListener('resize', place);
   setTimeout(() => {
     document.addEventListener('mousedown', outside, true);
     document.addEventListener('keydown', escKey, true);
@@ -94,7 +103,7 @@ export function popover(anchorRect, html, setup) {
 function outside(e) { const p = $('.popover'); if (p && !p.contains(e.target) && !e.target.closest('dialog')) closePopover(); }
 function escKey(e) { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) closePopover(); }
 export function closePopover() {
-  $$('.popover').forEach((p) => p.remove());
+  $$('.popover').forEach((p) => { p._ro?.disconnect(); p._unplace?.(); p.remove(); });
   $$('.ghost-sel').forEach((g) => g.remove());
   document.removeEventListener('mousedown', outside, true);
   document.removeEventListener('keydown', escKey, true);

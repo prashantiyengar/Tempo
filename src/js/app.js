@@ -114,9 +114,38 @@ function eventItem(ev) {
     editable: EV.canEdit(ev, st()), declined: me?.responseStatus === 'declined', tentative: me?.responseStatus === 'tentative',
     catId: C.eventCategoryId(ev, st().eventCats),
   };
+  item.evDone = eventIsDone(ev);
   const icon = C.catById(set(), item.catId)?.icon;
   if (icon && !item.title.startsWith(icon)) item.title = `${icon} ${item.title}`;
   return item;
+}
+
+// Events can be ticked off too. Editable events keep the mark in Google (extendedProperties.private.tempoDone),
+// read-only ones on this device.
+function eventIsDone(ev) {
+  const p = ev?.extendedProperties?.private?.tempoDone;
+  if (p === '1') return true;
+  if (p === '0') return false;
+  return !!st().eventDone?.[`${ev._calId}|${ev.id}`];
+}
+async function setEventDone(it, done, { quiet = false } = {}) {
+  const ev = it.ev;
+  if (!it.editable) {
+    const k = `${ev._calId}|${ev.id}`; st().eventDone = st().eventDone || {};
+    if (done) st().eventDone[k] = Date.now(); else delete st().eventDone[k];
+    await E.persist(st(), ['eventDone']);
+    pushUndo(`mark “${it.title}” ${done ? 'done' : 'undone'}`, async () => {
+      if (done) delete st().eventDone[k]; else st().eventDone[k] = Date.now();
+      await E.persist(st(), ['eventDone']); render();
+    });
+    render();
+  } else {
+    const priv = { ...(ev.extendedProperties?.private || {}), tempoDone: done ? '1' : '0' };
+    await EV.updateEvent(st(), ev, { extendedProperties: { ...(ev.extendedProperties || {}), private: priv } }, 'this');
+    undoableEventChange(`mark “${it.title}” ${done ? 'done' : 'undone'}`, ev, 'this');
+    await afterEventChange();
+  }
+  if (!quiet) toast(done ? `“${it.title}” marked done` : `“${it.title}” marked undone`);
 }
 
 function chunkItems(from, to) {
@@ -216,7 +245,7 @@ function segMinutes(it, k) {
 }
 
 function itemClasses(it) {
-  return ['ev', it.kind === 'chunk' ? 'chunk' : '', it.status === 'done' ? 'done' : '', it.sess?.partial ? 'partial' : '', it.sess?.late && it.status === 'planned' && !it.overdue ? 'late' : '', it.task?.repeat ? 'rep' : '', it.status === 'pinned' ? 'pinned' : '',
+  return ['ev', it.kind === 'chunk' ? 'chunk' : '', it.status === 'done' || it.evDone ? 'done' : '', it.sess?.partial ? 'partial' : '', it.sess?.late && it.status === 'planned' && !it.overdue ? 'late' : '', it.task?.repeat ? 'rep' : '', it.status === 'pinned' ? 'pinned' : '',
     it.overdue ? 'overdue' : '', !it.editable ? 'ro' : '', it.declined ? 'declined' : '', it.tentative ? 'tentative' : ''].filter(Boolean).join(' ');
 }
 
@@ -286,7 +315,7 @@ function renderTimeGrid(days, items) {
       const short = h < 36;
       const timeStr = `${T.fmtTime(it.start, z, s.h12)} – ${T.fmtTime(it.end, z, s.h12)}`;
       const node = el(`<div class="${itemClasses(it)} ${short ? 'short' : ''}" data-key="${esc(it.key)}" style="top:${top}px;height:${h}px;left:calc(${left}% + 1px);width:calc(${width}% - ${g.cols > 1 ? 3 : 6}px);--c:${it.color}">
-        <div class="ev-t">${it.sess?.partial ? '<span class="tick" title="Partly done">◐</span>' : it.status === 'done' ? '<span class="tick">✓</span>' : ''}${it.status === 'pinned' ? '<span class="pin" title="Pinned">📌</span>' : ''}${esc(it.title)}</div>
+        <div class="ev-t">${it.sess?.partial ? '<span class="tick" title="Partly done">◐</span>' : it.status === 'done' || it.evDone ? '<span class="tick">✓</span>' : ''}${it.status === 'pinned' ? '<span class="pin" title="Pinned">📌</span>' : ''}${esc(it.title)}</div>
         <div class="ev-time">${short ? '' : esc(timeStr)}${it.ev?.recurringEventId ? ' <span class="rep" title="Repeats">↻</span>' : ''}</div>
         ${it.editable && g.endsHere ? '<div class="ev-resize"></div>' : ''}
       </div>`);
@@ -346,7 +375,7 @@ function renderMonth({ days, monthKey }, items) {
       <div class="m-items">
         ${shown.map((it) => it.allDay
           ? `<div class="chip allday ${!it.editable ? 'ro' : ''}" data-key="${esc(it.key)}" style="--c:${it.color}">${esc(it.title)}</div>`
-          : `<div class="chip ${it.kind === 'chunk' ? 'chunk' : ''} ${it.status === 'done' ? 'done' : ''} ${!it.editable ? 'ro' : ''}" data-key="${esc(it.key)}" style="--c:${it.color}"><i></i><span class="ct">${esc(T.fmtTime(it.start, z, set().h12))}</span> ${esc(it.title)}</div>`).join('')}
+          : `<div class="chip ${it.kind === 'chunk' ? 'chunk' : ''} ${it.status === 'done' || it.evDone ? 'done' : ''} ${!it.editable ? 'ro' : ''}" data-key="${esc(it.key)}" style="--c:${it.color}"><i></i><span class="ct">${esc(T.fmtTime(it.start, z, set().h12))}</span> ${esc(it.title)}</div>`).join('')}
         ${list.length > max ? `<button class="m-more" data-goto="${k}">+${list.length - shown.length} more</button>` : ''}
       </div></div>`);
     grid.appendChild(cell);
@@ -866,7 +895,7 @@ function openItem(it, rect) {
         ${ev.htmlLink ? `<a class="icon-btn" href="${esc(ev.htmlLink)}" target="_blank" rel="noopener" title="Open in ${ev._ext === 'outlook' ? 'Outlook' : 'Google Calendar'}">↗</a>` : ''}
         <button class="icon-btn x" title="Close">✕</button>
       </div>
-      <div class="pop-title"><i style="--c:${it.color}"></i><h3>${esc(it.title)}</h3></div>
+      <div class="pop-title"><i style="--c:${it.color}"></i><h3>${esc(it.title)}</h3>${it.evDone ? '<span class="pill ok">Done</span>' : ''}</div>
       <div class="pop-row small"><button class="cat-chip on pop-evcat" ${it.catId ? `style="--c:${esc(C.catById(set(), it.catId)?.color || it.color)}"` : ''}>${it.catId ? `<i></i>${esc(C.catLabel(C.catById(set(), it.catId)) || 'Category')}` : '+ Category'} ▾</button></div>
       ${ev.extendedProperties?.private?.tempoTask ? '<div class="pop-row warnbox small">This is a Tempo task session that isn’t loaded in this browser yet. <button class="link load-tasks">Load tasks from Google</button></div>' : ''}
       <div class="pop-row">${esc(fmtWhen(it))}${evTz ? `<div class="muted small">Event time zone: ${esc(evTz)}</div>` : ''}${ev.recurrence?.length ? `<div class="muted small">${esc(describe(ev.recurrence))}</div>` : ev.recurringEventId ? '<div class="muted small">↻ Repeating event</div>' : ''}</div>
@@ -875,12 +904,15 @@ function openItem(it, rect) {
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
-      ${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<div class="pop-row"><button class="btn small fin-early">⏹ Finished early</button></div>' : ''}
+      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}</div>
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
     $('.x', p).onclick = close;
     $('.load-tasks', p)?.addEventListener('click', () => { close(); refreshFromServer(); });
     $('.fin-early', p)?.addEventListener('click', () => { close(); finishedEarly(it); });
+    const toggle = (done) => async () => { close(); try { await setEventDone(it, done); } catch (err) { handleError(err); } };
+    $('.ev-done', p)?.addEventListener('click', toggle(true));
+    $('.ev-undone', p)?.addEventListener('click', toggle(false));
     $('.pop-evcat', p).onclick = () => { close(); pickEventCategory(it); };
     $('.edit', p)?.addEventListener('click', () => { close(); editEvent(it); });
     $('.del', p)?.addEventListener('click', async () => {
@@ -1551,7 +1583,7 @@ async function finishedEarlyApi(a) {
 let api = null;
 function setupApi() {
   api = createApi({
-    st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi,
+    st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi, setEventDone,
     afterEventChange, defaultCalendar: () => ctx.defaultCalendar(), lastBusy: () => app.lastBusy, toast: (m) => toast(m),
   });
   window.tempo = api;
