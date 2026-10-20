@@ -170,6 +170,7 @@ async function render() {
   view.replaceChildren();
   if (app.view === 'month') view.appendChild(renderMonth(r, items));
   else view.appendChild(renderTimeGrid(r.days, items));
+  slideIn();
   const sc = $('.tg-scroll', view);
   if (sc) {
     if (scrollTop != null && app.scrolled) sc.scrollTop = scrollTop;
@@ -549,7 +550,8 @@ function touchDown(e, where) {
     cleanup(true);
     if (active) return;
     const dx = lx - x0, dy = ly - y0, dt = Date.now() - t0;
-    if (Math.abs(dx) > 60 && Math.abs(dx) > 1.6 * Math.abs(dy) && dt < 800) return nav(dx < 0 ? 1 : -1);
+    if (Math.abs(dx) > 40 && Math.abs(dx) > 1.3 * Math.abs(dy)) return; // a side swipe: handled by setupSwipe
+    void dt;
     if (ev.type === 'pointercancel' || Math.hypot(dx, dy) > 10) return; // it was a scroll
     // Tap
     if (evEl) { const it = app.items.get(evEl.dataset.key); if (it) openItem(it, evEl.getBoundingClientRect()); return; }
@@ -1999,8 +2001,34 @@ async function renderPage(kind, cursorKey, scale = 2) {
   return { canvas: X.renderWeek({ days: r.days, items, settings: set(), scale, title: `Week of ${T.format(a, z, { day: 'numeric', month: 'long' })} – ${T.format(b, z, { day: 'numeric', month: 'long', year: 'numeric' })}`, summary: pageSummary(r.days, items) }), key: r.days[0] };
 }
 
+// Custom dates and hours → pages of up to 7 days
+async function exportCustom() {
+  const r = await D.customExportDialog(ctx, { cursor: app.cursor });
+  if (!r) return;
+  const prev = { ...app.status }, z = tz();
+  try {
+    const all = Array.from({ length: r.n }, (_, i) => T.addDays(r.from, i));
+    const pages = [];
+    for (let i = 0; i < all.length; i += r.perPage) {
+      setStatus(`Rendering page ${pages.length + 1}/${r.pages}…`, 'busy');
+      const days = all.slice(i, i + r.perPage);
+      const items = await collectItems(days);
+      const a = T.dayStart(days[0], z), b = T.dayStart(days[days.length - 1], z);
+      const title = `${T.format(a, z, { weekday: 'short', day: 'numeric', month: 'short' })}${days.length > 1 ? ` – ${T.format(b, z, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}` : `, ${T.parseKey(days[0]).y}`}${r.label ? ` · ${r.label}` : ''}`;
+      const sum = r.summary ? pageSummary(days, items, r.hours ? { rules: r.hours.rules, label: r.hours.label } : null) : null;
+      pages.push(X.renderWeek({ days, items, settings: set(), scale: r.scale, title, summary: sum, hours: r.hours }));
+    }
+    const prog = (n, N) => setStatus(`Encoding ${n}/${N}…`, 'busy');
+    const blob = r.fmt === 'pdf' ? await X.canvasesToPdf(pages, prog) : r.fmt === 'tiff' ? await X.canvasesToTiff(pages, prog, r.scale === 1 ? 100 : 200) : await X.canvasToBlob(pages[0], 'image/png');
+    const name = `tempo-${r.from}-to-${r.to}${r.label ? '-' + r.label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') : ''}.${r.fmt === 'tiff' ? 'tif' : r.fmt}`;
+    await download(blob, name);
+    toast(`Exported ${pages.length} page${pages.length > 1 ? 's' : ''} → ${name}`);
+  } catch (err) { handleError(err); }
+  setStatus(prev.text, prev.kind);
+}
+
 // The breakdown of time used for one printed page (same hours and grouping as the Analysis view).
-function pageSummary(days, items) {
+function pageSummary(days, items, hours = null) {
   const s = set(), z = tz(), o = app.anOpts || { scope: 'bounds', by: 'category' };
   const from = T.dayStart(days[0], z), to = T.dayStart(T.addDays(days[days.length - 1], 1), z);
   const actx = { settings: s, gmeta: st().gmeta, calColor };
@@ -2010,11 +2038,12 @@ function pageSummary(days, items) {
     groups[g.key] ||= g;
     return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.kind === 'chunk' ? it.task.title : (it.title || ''), kind: it.kind, uid: it.key };
   });
-  const data = A.compute(occ, A.scopeWindows(o.scope, from, to, s), z);
-  const scopeName = A.SCOPES[o.scope] || (s.periods || []).find((p) => 'period:' + p.id === o.scope)?.name || '';
+  const wins = hours ? S.windows(from, to, hours.rules, z) : A.scopeWindows(o.scope, from, to, s);
+  const data = A.compute(occ, wins, z);
+  const scopeName = hours ? hours.label : (A.SCOPES[o.scope] || (s.periods || []).find((p) => 'period:' + p.id === o.scope)?.name || '');
   let busiest = null;
   for (const [k, d] of Object.entries(data.days)) { const used = d.available - d.free - (d.gaps || 0); if (used > 0 && (!busiest || used > busiest.m)) busiest = { k, m: used, of: d.available }; }
-  const chunks = items.filter((it) => it.kind === 'chunk' && it.start >= from && it.start < to);
+  const chunks = items.filter((it) => it.kind === 'chunk' && it.start >= from && it.start < to && (!hours || wins.some((w) => it.start < w.end && it.end > w.start)));
   return {
     scope: scopeName.toLowerCase(), available: data.totals.available, free: data.totals.free, gaps: data.totals.gaps || 0,
     groups: Object.entries(data.totals.groups).map(([k, m]) => ({ label: groups[k]?.label || k, color: groups[k]?.color || '#9aa0aa', m })).sort((a, b) => b.m - a.m),
@@ -2057,6 +2086,52 @@ async function exportMulti() {
 // ======================================================================================
 // Boot
 // ======================================================================================
+// Side swipe on phones: the view follows your finger; let go past a third of the screen (or flick) to go to the
+// previous / next day, 3 days, week or month.
+function setupSwipe() {
+  const view = $('#view');
+  let sx = 0, sy = 0, st0 = 0, tracking = false, horiz = null, el2 = null;
+  const reset = () => { if (el2) { el2.style.transition = 'transform .18s ease-out, opacity .18s'; el2.style.transform = ''; el2.style.opacity = ''; } el2 = null; horiz = null; };
+  view.addEventListener('touchstart', (e) => {
+    tracking = false;
+    if (e.touches.length !== 1 || app.view === 'analysis' || app.touchLock || document.querySelector('dialog[open], .popover')) return;
+    if (e.target.closest('input, textarea, select')) return;
+    const t = e.touches[0];
+    sx = t.clientX; sy = t.clientY; st0 = Date.now(); tracking = true; horiz = null;
+    el2 = view.firstElementChild;
+  }, { passive: true });
+  view.addEventListener('touchmove', (e) => {
+    if (!tracking) return;
+    if (app.touchLock) { tracking = false; reset(); return; } // a long-press drag took over
+    const t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+    if (horiz === null && Math.hypot(dx, dy) > 12) horiz = Math.abs(dx) > 1.3 * Math.abs(dy);
+    if (horiz && el2) { el2.style.transition = 'none'; el2.style.transform = `translateX(${dx}px)`; el2.style.opacity = String(1 - Math.min(0.4, Math.abs(dx) / innerWidth)); }
+  }, { passive: true });
+  const end = (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const t = e.changedTouches[0], dx = t.clientX - sx, dt = Math.max(1, Date.now() - st0);
+    if (horiz && !app.touchLock && e.type === 'touchend' && (Math.abs(dx) > innerWidth * 0.3 || (Math.abs(dx) > 45 && Math.abs(dx) / dt > 0.45))) {
+      const dir = dx < 0 ? 1 : -1, node = el2;
+      node.style.transition = 'transform .15s ease-in, opacity .15s';
+      node.style.transform = `translateX(${dir > 0 ? -innerWidth : innerWidth}px)`; node.style.opacity = '0';
+      el2 = null; horiz = null;
+      app.swipeIn = dir;
+      setTimeout(() => nav(dir), 140);
+    } else reset();
+  };
+  view.addEventListener('touchend', end);
+  view.addEventListener('touchcancel', end);
+}
+// After a swipe, the new day/week slides in from the side it came from.
+function slideIn() {
+  const dir = app.swipeIn; app.swipeIn = 0;
+  const node = $('#view')?.firstElementChild;
+  if (!dir || !node) return;
+  node.style.transition = 'none'; node.style.transform = `translateX(${dir > 0 ? 60 : -60}px)`; node.style.opacity = '0.4';
+  requestAnimationFrame(() => requestAnimationFrame(() => { node.style.transition = 'transform .2s ease-out, opacity .2s'; node.style.transform = ''; node.style.opacity = ''; }));
+}
+
 function nav(dir) {
   if (app.view === 'day') app.cursor = T.addDays(app.cursor, dir);
   else if (app.view === '3day') app.cursor = T.addDays(app.cursor, 3 * dir);
@@ -2096,6 +2171,7 @@ function bindToolbar() {
     { ic: 'W', label: 'This week as image (PNG)', run: () => exportView('week', 'png').catch(handleError) },
     { ic: 'M', label: 'This month as PDF', run: () => exportView('month', 'pdf').catch(handleError) },
     { ic: '⧉', label: 'Several weeks or months…', run: exportMulti },
+    { ic: '◷', label: 'Custom dates and hours…', run: exportCustom },
   ]);
   $('#btn-settings').onclick = openSettings;
   $('#btn-undo').onclick = undo;
@@ -2124,6 +2200,7 @@ function bindToolbar() {
   document.addEventListener('click', () => (menu.hidden = true));
   $$('#export-menu button[data-kind]').forEach((b) => (b.onclick = () => { menu.hidden = true; exportView(b.dataset.kind, b.dataset.fmt).catch(handleError); }));
   $('#export-multi').onclick = () => { menu.hidden = true; exportMulti(); };
+  $('#export-custom').onclick = () => { menu.hidden = true; exportCustom(); };
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest('input, textarea, select, [contenteditable]') && !document.querySelector('dialog[open]')) { e.preventDefault(); undo(); return; }
     if (e.target.closest('input, textarea, select, [contenteditable]') || document.querySelector('dialog[open]') || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -2188,6 +2265,7 @@ async function init() {
   window.__tempo = { app, cycle, render, S, T, E, checkGoogle: async () => { app.gCursors ||= {}; if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); return true; } return false; } }; // handy for debugging from the console
   markBaseline();
   setupApi();
+  setupSwipe();
   loadTimer();
   await cycle({ pull: true });
   maybeOfferReview();

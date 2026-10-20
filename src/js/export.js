@@ -66,7 +66,9 @@ export function layoutColumns(items) {
   return out;
 }
 
-export function renderWeek({ days, items, settings, title, scale = 2, summary = null }) {
+// `hours` (optional) limits the page to certain hours: { rules: [{ days, start, end }], label } — e.g. work hours,
+// "After hours", or 09:00–17:00. Without it, the page shows the whole working day plus anything scheduled around it.
+export function renderWeek({ days, items, settings, title, scale = 2, summary = null, hours = null }) {
   const tz = settings.tz;
   const W = 1600, gutter = 64, headH = 100, colW = (W - gutter - 24) / days.length;
   const allDay = items.filter((i) => i.allDay);
@@ -81,6 +83,15 @@ export function renderWeek({ days, items, settings, title, scale = 2, summary = 
     h1 = Math.max(h1, endK !== k ? 24 : Math.ceil(T.minutesOfDay(it.end, tz) / 60));
   }
   h0 = Math.max(0, h0); h1 = Math.min(24, h1);
+  // per-day open intervals (minutes) — shaded outside
+  const toM = (hhmm) => T.parseHHMM(hhmm);
+  const rulesFor = (k) => (hours ? hours.rules : [settings.bounds]).filter((r) => (r.days?.length ? r.days : [0, 1, 2, 3, 4, 5, 6]).includes(T.weekday(k)))
+    .map((r) => { const a = toM(r.start); let b = toM(r.end); if (b <= a) b = 1440; return [a, b]; });
+  if (hours) {
+    const all = days.flatMap(rulesFor);
+    const lo = all.length ? Math.min(...all.map((x) => x[0])) : 9 * 60, hi = all.length ? Math.max(...all.map((x) => x[1])) : 17 * 60;
+    h0 = Math.floor(lo / 60); h1 = Math.ceil(hi / 60);
+  }
   const hourH = Math.max(34, Math.min(60, 1500 / (h1 - h0)));
   // all-day rows
   const rows = [];
@@ -120,15 +131,18 @@ export function renderWeek({ days, items, settings, title, scale = 2, summary = 
     ctx.fillText(T.format(T.dayStart(k, tz), tz, { weekday: 'short' }).toUpperCase(), x + 10, 62);
     ctx.fillStyle = isToday ? C.today : C.ink; ctx.font = `600 20px ${FONT}`;
     ctx.fillText(String(T.parseKey(k).d), x + 10 + ctx.measureText('WWW').width + 4, 57);
-    const b = settings.bounds;
+    void wd;
     const y0 = top, y1 = top + (h1 - h0) * hourH;
     ctx.fillStyle = C.shade;
-    if (!b.days.includes(wd)) ctx.fillRect(x, y0, colW, y1 - y0);
-    else {
-      const bs = Math.max(h0, T.parseHHMM(b.start) / 60), be = Math.min(h1, T.parseHHMM(b.end) / 60);
-      if (bs > h0) ctx.fillRect(x, y0, colW, (bs - h0) * hourH);
-      if (be < h1) ctx.fillRect(x, y0 + (be - h0) * hourH, colW, (h1 - be) * hourH);
+    // shade everything outside the open intervals of this day
+    const open = rulesFor(k).sort((p, q) => p[0] - q[0]);
+    let cur = h0 * 60;
+    for (const [a, b2] of [...open, [h1 * 60, h1 * 60]]) {
+      const s0 = Math.max(cur, h0 * 60), s1 = Math.min(a, h1 * 60);
+      if (s1 > s0) ctx.fillRect(x, y0 + (s0 / 60 - h0) * hourH, colW, ((s1 - s0) / 60) * hourH);
+      cur = Math.max(cur, b2);
     }
+    if (!y1) ctx.fillRect(x, y0, colW, 0);
   });
   // hour lines
   ctx.font = `11px ${FONT}`;
@@ -155,7 +169,8 @@ export function renderWeek({ days, items, settings, title, scale = 2, summary = 
     ctx.fillStyle = textOn(p.it.color); ctx.font = `600 12px ${FONT}`;
     ellipsis(ctx, p.it.title, x + 7, y + 5, w - 12);
   }
-  // timed blocks
+  // timed blocks (clipped to the hours shown)
+  ctx.save(); ctx.beginPath(); ctx.rect(0, top, W, (h1 - h0) * hourH); ctx.clip();
   days.forEach((k, i) => {
     const ds = T.dayStart(k, tz), de = T.dayStart(T.addDays(k, 1), tz);
     const segs = timed.filter((it) => it.end > ds && it.start < de).map((it) => ({
@@ -185,6 +200,7 @@ export function renderWeek({ days, items, settings, title, scale = 2, summary = 
       ctx.restore();
     }
   });
+  ctx.restore();
   if (summary) drawSummary(ctx, summary, 24, gridBottom + 18, W - 48);
   return cv;
 }

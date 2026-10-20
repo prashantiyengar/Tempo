@@ -1196,6 +1196,78 @@ export function exportDialog(ctx, { cursor, weekStart }) {
   }, { cls: 'narrow' });
 }
 
+// Export a custom date range limited to certain hours (work hours, a period like "After hours", or any times).
+export function customExportDialog(ctx, { cursor }) {
+  const s = ctx.state.settings, tz = s.tz;
+  const today = T.dayKey(Date.now(), tz);
+  const periods = s.periods || [];
+  return modal(`
+    <form class="export-form custom-export">
+      <header class="dlg-head"><h2>Export dates and hours</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+      <div class="dlg-body">
+        <div class="grid2">
+          <label class="field"><span>From</span><input type="date" name="from" value="${cursor || today}"></label>
+          <label class="field"><span>To</span><input type="date" name="to" value="${T.addDays(cursor || today, 4)}"></label>
+        </div>
+        <div class="dl-presets"><button type="button" class="chip-btn" data-r="next5">Next 5 days</button><button type="button" class="chip-btn" data-r="week">This work week</button><button type="button" class="chip-btn" data-r="next7">Next 7 days</button><button type="button" class="chip-btn" data-r="nextweek">Next week</button></div>
+        <label class="field"><span>Hours</span><select name="hours">
+          <option value="bounds">Work hours (${s.bounds.start}–${s.bounds.end})</option>
+          ${periods.map((p) => `<option value="period:${esc(p.id)}">${esc(p.name)} (${esc(describeRules(p.rules))})</option>`).join('')}
+          <option value="full">Whole day (00:00–24:00)</option>
+          <option value="auto">Work day plus anything scheduled around it</option>
+          <option value="custom">Custom hours…</option></select></label>
+        <div class="row custom-hours"><input type="time" name="hStart" value="09:00" step="900"> <span class="muted">to</span> <input type="time" name="hEnd" value="17:00" step="900"></div>
+        <div class="grid2">
+          <label class="field"><span>Days per page</span><select name="perPage">${[7, 6, 5, 4, 3, 2, 1].map((n) => `<option value="${n}">${n}</option>`).join('')}</select></label>
+          <div class="field"><span>Format</span>
+            <div class="seg"><label><input type="radio" name="fmt" value="pdf" checked><span>PDF</span></label><label><input type="radio" name="fmt" value="png"><span>PNG</span></label><label><input type="radio" name="fmt" value="tiff"><span>TIFF</span></label></div></div>
+          <label class="field"><span>Quality</span><select name="scale"><option value="2">High (sharp when printed)</option><option value="1">Standard (smaller file)</option></select></label>
+          <label class="chk" style="align-self:end"><input type="checkbox" name="summary" checked> Time breakdown on each page</label>
+        </div>
+        <p class="summary muted"></p>
+      </div>
+      <footer class="actions"><span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Export</button></footer>
+    </form>`, (dlg, close) => {
+    const f = $('form', dlg);
+    const ws = s.weekStart ?? 1, wdays = s.bounds.days?.length ? s.bounds.days : [1, 2, 3, 4, 5];
+    $$('[data-r]', dlg).forEach((b) => (b.onclick = () => {
+      const r = b.dataset.r;
+      let a = today, z = T.addDays(today, 4);
+      if (r === 'next7') z = T.addDays(today, 6);
+      if (r === 'week' || r === 'nextweek') {
+        const w0 = T.addDays(T.startOfWeek(today, ws), r === 'nextweek' ? 7 : 0);
+        const offs = wdays.map((d) => (d - ws + 7) % 7).sort((x, y) => x - y);
+        a = T.addDays(w0, offs[0]); z = T.addDays(w0, offs[offs.length - 1]);
+      }
+      f.from.value = a; f.to.value = z; upd();
+    }));
+    const read = () => {
+      let from = f.from.value || today, to = f.to.value || from;
+      if (to < from) [from, to] = [to, from];
+      const n = T.daysBetween(from, to) + 1;
+      const v = f.hours.value;
+      let hours = null, label = '';
+      if (v === 'bounds') { hours = { rules: [s.bounds], label: 'Work hours' }; }
+      else if (v.startsWith('period:')) { const p = periods.find((x) => 'period:' + x.id === v); hours = { rules: p.rules, label: p.name }; }
+      else if (v === 'full') hours = { rules: [{ days: [0, 1, 2, 3, 4, 5, 6], start: '00:00', end: '24:00' }], label: 'Whole day' };
+      else if (v === 'custom') hours = { rules: [{ days: [0, 1, 2, 3, 4, 5, 6], start: f.hStart.value || '09:00', end: f.hEnd.value || '17:00' }], label: `${f.hStart.value}–${f.hEnd.value}` };
+      label = hours?.label || '';
+      const per = Math.max(1, Math.min(7, +f.perPage.value || 7));
+      return { from, to, n, hours, label, perPage: per, pages: Math.ceil(n / per), fmt: f.fmt.value, scale: +f.scale.value, summary: f.summary.checked };
+    };
+    const upd = () => {
+      $('.custom-hours', dlg).style.display = f.hours.value === 'custom' ? '' : 'none';
+      const r = read();
+      if (r.fmt === 'png' && r.pages > 1) { f.fmt.value = 'pdf'; }
+      const fmtD = (k) => T.format(T.dayStart(k, tz), tz, { weekday: 'short', day: 'numeric', month: 'short' });
+      $('.summary', dlg).textContent = `${r.n} day${r.n > 1 ? 's' : ''} (${fmtD(r.from)} – ${fmtD(r.to)})${r.label ? ', ' + r.label.toLowerCase() : ''} → ${r.pages} page${r.pages > 1 ? 's' : ''}${r.pages > 1 && f.fmt.value === 'png' ? '' : ''}.${r.n > 62 ? ' (At most 62 days.)' : ''}`;
+    };
+    f.addEventListener('input', upd); f.addEventListener('change', upd);
+    f.perPage.value = '7'; upd();
+    f.addEventListener('submit', (e) => { e.preventDefault(); const r = read(); if (r.n > 62) return; close(r); });
+  }, { cls: 'narrow' });
+}
+
 // ======================================================================================
 // Deleting a session that was already done: reschedule (default) or not, and optionally record what you did instead
 // ======================================================================================
