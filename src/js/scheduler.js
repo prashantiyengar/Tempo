@@ -51,6 +51,14 @@ export const DEFAULT_SETTINGS = {
   assumePastDone: true,
   taskReminderMinutes: 5,
   taskEmailReminderMinutes: null, // null = no email reminder for task sessions; a number = minutes before
+  // Notification profiles (see notify.js); new events and task sessions use these unless you pick another.
+  notifyProfiles: [
+    { id: 'default', name: 'Default', rules: [{ method: 'popup', minutes: 10 }] },
+    { id: 'important', name: 'Important', rules: [{ method: 'popup', minutes: 10 }, { method: 'email', minutes: 240 }, { method: 'email', minutes: 1440 }] },
+  ],
+  eventProfile: 'default',
+  taskProfile: 'default',
+  hoursChange: 'ask',       // when work hours or a period change: 'ask' | 'move' (re-plan sessions to fit) | 'keep'
   categories: [
     { id: 'work', name: 'Work', color: '#039be5', icon: '💼' },
     { id: 'personal', name: 'Personal', color: '#33b679', icon: '🏠' },
@@ -575,6 +583,33 @@ export function pinSession(task, chunkId, start, end) {
     planned: (task.planned || []).filter((x) => x.id !== chunkId),
     frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), { ...c, start, end, status: 'pinned', overdue: undefined, syncHash: null }],
   };
+}
+
+// Hours changed and sessions should follow: a session under way now that was only assumed done goes back into the
+// plan (keeping its id) when it doesn't fit the task's new hours, so it is re-planned from now.
+export function refitOngoing(task, s, now = Date.now()) {
+  const b = params(task, s).bounds;
+  const keep = [], back = [];
+  for (const c of task.frozen || []) {
+    if (c.auto && c.status === 'done' && c.start < now && c.end > now) {
+      const fits = windows(c.start - T.DAY, c.end + T.DAY, b, s.tz).some((w) => w.start <= c.start && w.end >= c.end);
+      if (!fits) { const { status, auto, ...rest } = c; back.push({ ...rest, start: now + T.MIN, end: now + T.MIN + (c.end - c.start), syncHash: null }); continue; }
+    }
+    keep.push(c);
+  }
+  const planned = (task.planned || []).map((c) => {
+    if (!(c.start < now && c.end > now)) return c;
+    if (windows(c.start - T.DAY, c.end + T.DAY, b, s.tz).some((w) => w.start <= c.start && w.end >= c.end)) return c;
+    back.push(null); return { ...c, start: now + T.MIN, end: now + T.MIN + (c.end - c.start), syncHash: null };
+  });
+  return back.length ? { ...task, frozen: keep, planned: [...planned, ...back.filter(Boolean)], rev: Date.now() } : task;
+}
+
+// Hours changed but planned sessions should stay: pin the upcoming ones where they are.
+export function pinUpcoming(task, now = Date.now()) {
+  const up = (task.planned || []).filter((c) => c.start >= now);
+  if (!up.length) return task;
+  return { ...task, planned: (task.planned || []).filter((c) => c.start < now), frozen: [...(task.frozen || []), ...up.map((c) => ({ ...c, status: 'pinned', overdue: undefined }))], rev: Date.now() };
 }
 
 export function unpinSession(task, chunkId) {

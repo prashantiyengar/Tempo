@@ -15,6 +15,7 @@ import { $, $$, esc, el, toast as uiToast, choose, popover, closePopover, downlo
 import * as RV from './review.js';
 import { parseTask } from './parse.js';
 import { createApi, AI_PROMPT } from './api.js';
+import * as N from './notify.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -31,6 +32,7 @@ const ctx = {
   get state() { return app.state; },
   externalChanged() { AC.invalidateExternal(); render(); cycle(); },
   lastEventEnd: (o) => lastEventEnd(o),
+  nextEventStart: (o) => nextEventStart(o),
   get lastBusy() { return app.lastBusy; },
   // New events go to the calendar chosen for task sessions (Settings → Google Calendar), else the primary one.
   defaultCalendar() {
@@ -764,10 +766,11 @@ function quickCreate(rect, sel, onClose) {
         return `<div class="qc-times">
           <div class="qc-t"><span class="qc-l">From</span><input type="time" name="qs" step="60"><button type="button" class="now-btn st-now" title="Start now">Now</button>${nudges('st-add')}</div>
           <div class="qc-t"><span class="qc-l">To</span><input type="time" name="qe" step="60"><button type="button" class="now-btn en-now" title="End now">Now</button>${nudges('dur-add')}</div>
-          <button type="button" class="chip-btn since-last" title="From the end of your last event (up to 12 h ago) until now">⤒ Since last event</button>
+          <div class="qc-fill"><button type="button" class="chip-btn since-last" title="Start when the previous event ended (up to 12 h earlier)">⤒ Since last event</button><button type="button" class="chip-btn till-next" title="End when the next event starts (up to 12 h later)">⤓ Till next event</button></div>
         </div>`;
       })()}
-      <select name="cal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
+      <div class="qc-sels"><select name="cal" aria-label="Calendar">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
+      <select name="np" class="qc-np" aria-label="Notifications" title="Notification profile">${N.profiles(s).map((pr) => `<option value="${esc(pr.id)}" ${pr.id === N.eventDefault(s)?.id ? 'selected' : ''} title="${esc(N.describeProfile(pr))}">🔔 ${esc(pr.name)}</option>`).join('')}</select></div>
       <div class="qc-cat"></div>
       <div class="qc-actions">
         <button type="button" class="btn small ghost more">More options</button>
@@ -821,13 +824,37 @@ function quickCreate(rect, sel, onClose) {
       onChange: (c) => { qcCat = c; },
       onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
     });
+    $('.till-next', p)?.addEventListener('click', async () => {
+      const r = await nextEventStart({ ref: sel.start });
+      if (!r.found) { toast(r.note, { noUndo: true }); return; }
+      sel.end = r.end; $('.ghost-sel')?.remove(); redraw(); toast(r.note, { noUndo: true });
+    });
+    let saving = false;
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const body = { ...selBody(sel, f.title.value.trim() || '(No title)', f.cal.value), ...(qcCat ? C.eventCategoryChanges({}, qcCat) : {}) };
+      if (saving) return;
+      // No title: use the category's name, or ask (picking a category in the prompt uses its name)
+      let title = f.title.value.trim(), cat = qcCat;
+      if (!title) {
+        if (cat) title = cat.name;
+        else {
+          saving = true;
+          const a = await D.askTitle(set(), { what: 'event', onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; } });
+          saving = false;
+          if (!a) { f.title.focus(); return; }
+          title = a.title; cat = a.cat || cat;
+        }
+      }
+      const g = f.cal.value !== E.LOCAL_CAL, prof = N.profileById(set(), f.np.value);
+      const body = { ...selBody(sel, title, f.cal.value), ...(cat ? C.eventCategoryChanges({}, cat) : {}) };
+      if (prof) {
+        body.reminders = { useDefault: false, overrides: N.overrides(prof.rules, { google: g }) };
+        body.extendedProperties = { ...(body.extendedProperties || {}), private: { ...(body.extendedProperties?.private || {}), tempoNotify: prof.id } };
+      }
       close(); onClose?.();
       await saveNewEvent(f.cal.value, body);
     });
-    $('.more', p).onclick = () => { const v = { title: f.title.value, calId: f.cal.value, categoryId: qcCat?.id }; close(); onClose?.(); newEvent({ ...sel, ...v }); };
+    $('.more', p).onclick = () => { const v = { title: f.title.value, calId: f.cal.value, categoryId: qcCat?.id, notifyProfile: f.np.value }; close(); onClose?.(); newEvent({ ...sel, ...v }); };
     $('.as-task', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'generic', title, earliestStart: sel.allDay ? null : sel.start, totalMinutes: sel.allDay ? null : Math.round((sel.end - sel.start) / T.MIN) }); };
     $('.as-reading', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'reading', title, earliestStart: sel.allDay ? null : sel.start }); };
   });
@@ -1554,6 +1581,48 @@ async function lastEventEnd({ ref = null, exclude = null } = {}) {
   const when = T.dayKey(last.end, z) === day ? T.fmtTime(last.end, z, set().h12) : `${T.dayKey(last.end, z) === T.addDays(day, -1) ? 'the day before' : T.format(last.end, z, { weekday: 'short' })} ${T.fmtTime(last.end, z, set().h12)}`;
   return { start, end: now, found: true, note: `From “${last.title}” (ended ${when})${buf ? ` + ${buf / T.MIN} min` : ''}` };
 }
+// "Till next event": the start of the next event after `ref` (looking ahead up to 12 hours), minus the buffer.
+async function nextEventStart({ ref, exclude = null } = {}) {
+  const z = tz(), at = ref ?? nowMin(), day = T.dayKey(at, z);
+  const buf = Math.max(0, Math.min(15, +set().sinceLastBuffer || 0)) * T.MIN;
+  const items = (await collectItems([day, T.addDays(day, 1)])).filter((x) => !x.allDay && x.key !== exclude && x.start > at && x.start <= at + LOOKBACK && A.isOccupying(x, set()));
+  if (!items.length) return { found: false, note: 'No event in the 12 hours after this — set the end yourself.' };
+  const next = items.reduce((a, b) => (b.start < a.start ? b : a));
+  const end = Math.max(next.start - buf, at + 5 * T.MIN);
+  const when = T.dayKey(next.start, z) === day ? T.fmtTime(next.start, z, set().h12) : `${T.format(next.start, z, { weekday: 'short' })} ${T.fmtTime(next.start, z, set().h12)}`;
+  return { found: true, end, note: `Until “${next.title}” (starts ${when})${buf ? ` − ${buf / T.MIN} min` : ''}` };
+}
+// Work hours or a time period changed. Planned sessions are re-planned on every cycle anyway; this decides
+// (setting, or asking) whether they should move: "move" also re-plans a session that is under way right now (assumed
+// done) when it no longer fits the new hours; "keep" pins the affected tasks' upcoming sessions where they are.
+async function hoursChanged(before, after) {
+  const bChanged = JSON.stringify(before.bounds) !== JSON.stringify(after.bounds);
+  const perOld = new Map((before.periods || []).map((p) => [p.id, JSON.stringify(p.rules)]));
+  const perChanged = new Set((after.periods || []).filter((p) => perOld.has(p.id) && perOld.get(p.id) !== JSON.stringify(p.rules)).map((p) => p.id));
+  if (!bChanged && !perChanged.size) return;
+  const now = Date.now();
+  const affected = (t) => !t.archived && !t.ignoreBounds && !t.bounds && (t.periodId ? perChanged.has(t.periodId) : bChanged);
+  const tasks = st().tasks.filter((t) => affected(t) && S.sessions(t).some((c) => c.end > now && c.kind !== 'done' && c.kind !== 'pinned' || (c.kind === 'done' && c.auto && c.end > now)));
+  if (!tasks.length) return;
+  let mode = after.hoursChange || 'ask';
+  if (mode === 'ask') {
+    const what = bChanged ? `work hours (${after.bounds.start}–${after.bounds.end})` : 'time period';
+    mode = await choose('Move planned sessions?', `You changed your ${what}. ${tasks.length} task${tasks.length > 1 ? 's have' : ' has'} sessions planned with the old hours.`, [
+      { value: 'move', label: 'Move them to fit the new hours', desc: 'Upcoming sessions are re-planned, including one that is under way now if it no longer fits.' },
+      { value: 'keep', label: 'Keep them where they are', desc: 'Upcoming sessions stay put (pinned); only new planning uses the new hours.' },
+    ], { cancel: 'Decide later (sessions follow the new hours)' });
+    if (!mode) return;
+  }
+  const ids = new Set(tasks.map((t) => t.id));
+  if (mode === 'move') {
+    st().tasks = st().tasks.map((t) => (ids.has(t.id) ? S.refitOngoing(t, after, now) : t));
+    app.pendingWhy = 'you changed your work hours';
+  } else if (mode === 'keep') {
+    st().tasks = st().tasks.map((t) => (ids.has(t.id) ? S.pinUpcoming(t, now) : t));
+  }
+  await saveTasks(mode === 'move' ? 'move sessions to new hours' : 'keep sessions at old hours');
+  toast(mode === 'move' ? 'Sessions moved to fit the new hours' : 'Planned sessions kept where they were (pinned)');
+}
 async function fillSinceLast() {
   const r = await lastEventEnd();
   newEvent({ start: r.start, end: r.end, title: '' });
@@ -1917,7 +1986,9 @@ async function openSettings() {
       return t;
     });
     if (perChanged) await saveTasks(false);
-    if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
+    if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes || r.settings.taskProfile !== before.taskProfile
+      || JSON.stringify(r.settings.notifyProfiles) !== JSON.stringify(before.notifyProfiles)) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
+    await hoursChanged(before, r.settings);
     app.miniCursor = T.dayKey(Date.now(), tz());
   }
   try {

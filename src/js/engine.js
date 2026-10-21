@@ -5,6 +5,7 @@ import * as S from './scheduler.js';
 import * as G from './gcal.js';
 import { externalEvents } from './accounts.js';
 import { expand } from './rrule.js';
+import * as N from './notify.js';
 import { get, set } from './storage.js';
 
 const KEYS = ['settings', 'tasks', 'localEvents', 'gmeta', 'orphanGids', 'acks', 'reminderQueue', 'syncInfo', 'installId', 'tombstones', 'eventCats', 'eventDone'];
@@ -214,8 +215,7 @@ export async function reschedule(state, now = Date.now()) {
 export function chunkBody(task, sess, state) {
   const tz = state.settings.tz;
   const done = sess.kind === 'done';
-  const rem = task.reminderMinutes != null && task.reminderMinutes !== '' ? +task.reminderMinutes : state.settings.taskReminderMinutes;
-  const emailRem = task.emailReminderMinutes != null && task.emailReminderMinutes !== '' ? +task.emailReminderMinutes : state.settings.taskEmailReminderMinutes;
+  const rules = N.overrides(N.taskRules(task, state.settings));
   return {
     summary: (done ? '✓ ' : '') + sess.label,
     description: [task.notes, 'Scheduled by Tempo Calendar — edit this task in the extension; changes here will be overwritten.'].filter(Boolean).join('\n\n'),
@@ -224,10 +224,7 @@ export function chunkBody(task, sess, state) {
     colorId: G.nearestColorId(task.color || '#4f6bed'),
     transparency: 'opaque',
     status: 'confirmed',
-    reminders: { useDefault: false, overrides: done ? [] : [
-      ...(rem == null || rem < 0 ? [] : [{ method: 'popup', minutes: rem }]),
-      ...(emailRem == null || emailRem < 0 ? [] : [{ method: 'email', minutes: emailRem }]),
-    ] },
+    reminders: { useDefault: false, overrides: done ? [] : rules },
     extendedProperties: { private: { tempoTask: '1', taskId: task.id, chunkId: sess.id, tSeq: String(sess.index), tStatus: sess.kind, tRev: String(task.rev || task.created || 0),
       // partly done: credited work (Google merges private properties on patch, so clear them explicitly otherwise)
       ...(sess.partial ? { tCredit: String(+(+sess.credit).toFixed(2)), tSlot: String(sess.slotMin || ''), tSq: sess.squeeze ? '1' : '' } : { tCredit: '', tSlot: '', tSq: '' }),
@@ -239,7 +236,7 @@ export function chunkBody(task, sess, state) {
 
 // ---------- Task definitions stored on Google (so any browser / a fresh install can rebuild the task list) ----------
 const DEF_FIELDS = ['id', 'title', 'kind', 'rank', 'totalMinutes', 'reading', 'deadline', 'earliestStart', 'chunkMinutes', 'minChunkMinutes',
-  'maxPerDayMinutes', 'breakMinutes', 'wiggleMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notes', 'created', 'rev', 'calendarId',
+  'maxPerDayMinutes', 'breakMinutes', 'wiggleMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notifyProfile', 'notes', 'created', 'rev', 'calendarId',
   'categoryId', 'categoryName', 'categoryColor', 'categoryIcon', 'periodId', 'periodName', 'periodRules',
   'repeat', 'repeatStart', 'marginDays', 'after', 'projectId', 'projectName', 'projectStep', 'speedLog', 'prefer'];
 const PART = 900; // Google allows 1024 chars per extended-property value
@@ -512,7 +509,7 @@ const SHARED_PART = 450;
 export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bounds', 'overflowBounds', 'chunkMinutes', 'minChunkMinutes', 'breakMinutes',
   'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
-  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer'];
+  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange'];
 const normCat = ({ id, name, color, icon, prefer }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}) });
 function sharedOf(s) {
   const o = {};
@@ -635,11 +632,11 @@ export function buildReminderQueue(state, gEvents, local, now) {
   const q = [];
   if (s.notifyTasks) {
     for (const t of state.tasks.filter((x) => !x.archived)) {
-      const rem = t.reminderMinutes != null && t.reminderMinutes !== '' ? +t.reminderMinutes : s.taskReminderMinutes;
-      if (rem == null || rem < 0) continue;
+      const mins = N.taskRules(t, s).filter((r) => r.method === 'popup' && +r.minutes >= 0).map((r) => +r.minutes);
+      if (!mins.length) continue;
       for (const c of S.sessions(t)) {
         if (c.kind === 'done' || c.start > until || c.start < now) continue;
-        q.push({ id: `t:${c.id}:${c.start}`, when: c.start - rem * T.MIN, title: c.label, body: `${T.fmtTime(c.start, tz, s.h12)}–${T.fmtTime(c.end, tz, s.h12)}` });
+        for (const rem of mins) q.push({ id: `t:${c.id}:${c.start}:${rem}`, when: c.start - rem * T.MIN, title: c.label, body: `${T.fmtTime(c.start, tz, s.h12)}–${T.fmtTime(c.end, tz, s.h12)}` });
       }
     }
   }

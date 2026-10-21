@@ -56,7 +56,8 @@ async def main():
 
         # 4/5. Email reminder default + daily agenda via Settings
         await page.click('#btn-settings'); await page.click('dialog .tabs button[data-tab="3"]')
-        await page.fill('dialog [name=taskEmailReminderMinutes]', '30'); await page.check('dialog [name=agendaEmail]')
+        # email 30 min before, added to the Default notification profile (which task sessions use)
+        await page.click('dialog .nprof >> nth=0 >> .np-add'); await page.fill('dialog .nprof >> nth=0 >> .np-rule >> nth=1 >> .np-val', '30'); await page.check('dialog [name=agendaEmail]')
         await page.screenshot(path=f'{OUT}/f3-email-settings.png')
         await page.click('dialog .tabs button[data-tab="5"]'); await page.screenshot(path=f'{OUT}/f4-categories-tab.png')
         await page.click('dialog button[type=submit]'); await page.wait_for_timeout(3000)

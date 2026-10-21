@@ -10,6 +10,7 @@ import * as S from './scheduler.js';
 import * as E from './engine.js';
 import * as EV from './events.js';
 import * as C from './categories.js';
+import * as N from './notify.js';
 import { parseTask, resolveDate } from './parse.js';
 
 export function createApi(h) {
@@ -102,6 +103,9 @@ export function createApi(h) {
     for (let k = T.dayKey(from, tz()); T.dayStart(k, tz()) < to; k = T.addDays(k, 1)) days.push(k);
     return (await h.collectItems(days)).filter((it) => it.kind === 'event' && it.end > from && it.start < to);
   }
+  function profileByName(n) {
+    return N.profiles(h.set()).find((p) => p.id === n || p.name.toLowerCase() === String(n).toLowerCase()) || err(`No notification profile "${n}". Profiles: ${N.profiles(h.set()).map((p) => p.name).join(', ')}.`);
+  }
   async function findEvent(ref) {
     if (!ref) err('Missing "event" (an id from listEvents).');
     const items = await eventItems(Date.now() - 60 * T.DAY, Date.now() + 120 * T.DAY);
@@ -140,6 +144,7 @@ export function createApi(h) {
     if (a.period) { const p = (h.set().periods || []).find((x) => x.name.toLowerCase() === String(a.period).toLowerCase() || x.id === a.period) || err(`No time period "${a.period}".`); Object.assign(draft, { periodId: p.id, periodName: p.name, periodRules: p.rules }); }
     if (a.ignoreBounds) draft.ignoreBounds = true;
     if (a.notes) draft.notes = a.notes;
+    if (a.notify) draft.notifyProfile = /^(none|off|no)$/i.test(a.notify) ? 'none' : profileByName(a.notify).id;
     if (a.project) {
       let p = (h.set().projects || []).find((x) => x.name.toLowerCase() === String(a.project).toLowerCase() || x.id === a.project);
       if (!p) { p = { id: S.newId('p'), name: String(a.project), sequential: a.projectInOrder !== false }; h.set().projects = [...(h.set().projects || []), p]; }
@@ -207,8 +212,9 @@ export function createApi(h) {
       return (await h.freeSlots(from, to, +(a.minMinutes || 15), a.within || 'work hours')).map((s) => ({ start: fmt(s.start), end: fmt(s.end), minutes: Math.round((s.end - s.start) / T.MIN) }));
     } },
     listCalendars: { about: 'Calendars you can add events to.', run: () => (h.st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)).map((c) => ({ id: c.id, name: c.summary, primary: !!c.primary })) },
+    listProfiles: { about: 'Notification profiles (name and reminders) and which ones new events and task sessions use.', run: () => ({ profiles: N.profiles(h.set()).map((p) => ({ name: p.name, reminders: N.describeProfile(p) })), events: N.eventDefault(h.set())?.name, taskSessions: N.taskDefault(h.set())?.name }) },
     listCategories: { about: 'Categories (name, icon, preferred time of day).', run: () => (h.set().categories || []).map((c) => ({ name: c.name, icon: c.icon || '', prefer: c.prefer || null })) },
-    addTask: { params: 'title, hours | pages (+ startPage, pagesPerHour) | repeat {every: "week"|"day", hours, until | weeks, days?}, deadline, rank?, category?, notBefore?, marginDays?, after?, project?, period?, sessionMinutes? — or text: "Read Dune 200 pages by Friday, Study"', about: 'Create a task; Tempo splits it into sessions.', write: true, run: async (a) => {
+    addTask: { params: 'title, hours | pages (+ startPage, pagesPerHour) | repeat {every: "week"|"day", hours, until | weeks, days?}, deadline, rank?, category?, notify? (notification profile name, or "none"), notBefore?, marginDays?, after?, project?, period?, sessionMinutes? — or text: "Read Dune 200 pages by Friday, Study"', about: 'Create a task; Tempo splits it into sessions.', write: true, run: async (a) => {
       const t = taskFromSpec(a);
       h.st().tasks.push({ ...t, rev: Date.now() });
       await h.saveTasks(`AI: add “${t.title}”`);
@@ -250,9 +256,11 @@ export function createApi(h) {
       const s = when(a.start), e = a.end ? when(a.end) : s + (sess.end - sess.start);
       h.replaceTask(S.pinSession(task, sess.id, s, e)); await h.saveTasks('AI: move session'); await h.cycle(); return { moved: sess.label, start: fmt(s), end: fmt(e) };
     } },
-    addEvent: { params: 'title, start, end | minutes, allDay?, calendar?, location?, description?, category?', about: 'Create a calendar event (default calendar: the one for task sessions).', write: true, run: async (a) => {
+    addEvent: { params: 'title, start, end | minutes, allDay?, calendar?, location?, description?, category?, notify? (notification profile name, e.g. "Important")', about: 'Create a calendar event (default calendar: the one for task sessions).', write: true, run: async (a) => {
       const calId = a.calendar ? calByName(a.calendar) : h.defaultCalendar();
-      const body = { reminders: { useDefault: true }, ...eventBody({ ...a, title: a.title ?? err('Missing "title".') }) };
+      const prof = a.notify ? profileByName(a.notify) : N.eventDefault(h.set());
+      const body = { reminders: { useDefault: false, overrides: N.overrides(prof?.rules, { google: calId !== E.LOCAL_CAL }) }, ...eventBody({ ...a, title: a.title ?? err('Missing "title".') }) };
+      body.extendedProperties = { ...(body.extendedProperties || {}), private: { ...(body.extendedProperties?.private || {}), tempoNotify: prof?.id || '' } };
       if (!body.start) err('Give "start" (and "end" or "minutes").');
       const ev = await EV.createEvent(h.st(), calId, body);
       h.pushUndo(`AI: create “${a.title}”`, async () => { await EV.deleteEvent(h.st(), ev, 'this'); await h.afterEventChange(); });
@@ -278,9 +286,12 @@ export function createApi(h) {
     } },
     finishEarly: { params: 'item? (event id/title or session id; default: whatever is running now), then: "move tasks up" | "keep free" | "nothing"', about: 'End what is running now at the current time.', write: true, run: (a) => h.finishedEarlyApi(a) },
     replan: { about: 'Re-plan all tasks now.', write: true, run: async () => { await h.cycle(); return { ok: true }; } },
-    setSettings: { params: 'workHours {start, end, days}, dailyCapMinutes, marginDays, breakMinutes, sessionMinutes, travelMinutes', about: 'Change common settings.', write: true, run: async (a) => {
+    setSettings: { params: 'workHours {start, end, days}, dailyCapMinutes, marginDays, breakMinutes, sessionMinutes, travelMinutes, gapMinutes (since last / till next buffer, 0–15), eventProfile, taskProfile (notification profile names)', about: 'Change common settings.', write: true, run: async (a) => {
       const s = h.set();
       if (a.workHours) s.bounds = { ...s.bounds, ...a.workHours };
+      if (a.gapMinutes != null || a.sinceLastBuffer != null) s.sinceLastBuffer = Math.max(0, Math.min(15, Math.round(+(a.gapMinutes ?? a.sinceLastBuffer) || 0)));
+      if (a.eventProfile) s.eventProfile = profileByName(a.eventProfile).id;
+      if (a.taskProfile) s.taskProfile = profileByName(a.taskProfile).id;
       for (const [k, sk] of [['dailyCapMinutes', 'dailyCapMinutes'], ['marginDays', 'marginDays'], ['breakMinutes', 'breakMinutes'], ['sessionMinutes', 'chunkMinutes'], ['travelMinutes', 'travelMinutes']]) if (a[k] != null) s[sk] = +a[k];
       await E.persist(h.st(), ['settings']); await h.cycle();
       return { workHours: s.bounds, dailyCapMinutes: s.dailyCapMinutes, marginDays: s.marginDays, breakMinutes: s.breakMinutes, sessionMinutes: s.chunkMinutes, travelMinutes: s.travelMinutes };

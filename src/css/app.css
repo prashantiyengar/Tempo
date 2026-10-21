@@ -644,3 +644,17 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .ai-console textarea { width: 100%; box-sizing: border-box; font-size: 12.5px; }
 .ai-out { max-height: 320px; overflow: auto; background: var(--off); border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; margin: 8px 0 0; }
 .ai-out:empty { display: none; }
+/* quick create: calendar + notification profile side by side; since/till buttons */
+.qc-sels { display: flex; gap: 6px; }
+.qc-sels select[name=cal] { flex: 1; min-width: 0; }
+.qc-sels .qc-np { flex: none; max-width: 45%; }
+.qc-fill { display: flex; gap: 6px; flex-wrap: wrap; }
+.nprof { padding: 8px 0 10px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.nprof .row { width: 100%; }
+.nprof .np-rule select, .nprof .np-rule input { width: auto; flex: none; }
+.nprof input.np-val { width: 72px !important; flex: none !important; }
+.nprof .np-name { flex: 0 1 220px; font-weight: 600; }
+.add-nprof { align-self: flex-start; }
+.ask-title .field input { font-size: 16px; }
+@keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+.shake { animation: shake .3s; border-color: var(--bad, #d33) !important; }

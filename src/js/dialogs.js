@@ -7,6 +7,7 @@ import { LOCAL_CAL, interval } from './engine.js';
 import { $, $$, esc, modal, TASK_COLORS, setHTML, choose } from './ui.js';
 import * as C from './categories.js';
 import * as AC from './accounts.js';
+import * as N from './notify.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -24,6 +25,21 @@ function weekdayToggles(name, days) {
 // ======================================================================================
 // Event dialog
 // ======================================================================================
+// Something is being saved without a title: ask for one, or let the user pick a category and use its name.
+// Resolves { title, cat } or null when they go back.
+export function askTitle(settings, { what = 'event', onCreate } = {}) {
+  return modal(`<form class="choice ask-title" novalidate><h2>What should this ${esc(what)} be called?</h2>
+      <label class="field"><input name="t" placeholder="Title" autocomplete="off" autofocus></label>
+      <p class="muted small" style="margin:8px 0 4px">…or pick a category to use its name:</p>
+      <div class="cat-host"></div>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Back</button><button type="submit" class="btn primary">Save</button></div>
+    </form>`, (dlg, close) => {
+    const f = $('form', dlg);
+    C.categoryPicker($('.cat-host', dlg), { settings, selected: null, allowNone: false, onChange: (c) => { if (c) close({ title: c.name, cat: c }); }, onCreate });
+    f.addEventListener('submit', (e) => { e.preventDefault(); const v = f.t.value.trim(); if (!v) { f.t.focus(); f.t.classList.add('shake'); setTimeout(() => f.t.classList.remove('shake'), 400); return; } close({ title: v, cat: null }); });
+  }, { cls: 'narrow' }).then((r) => r || null);
+}
+
 export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   const st = ctx.state, s = st.settings;
   const isNew = !ev;
@@ -82,6 +98,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         <button type="button" class="now-btn st-now" title="Start now (keeps the length)">Start now</button>
         <button type="button" class="now-btn en-now" title="End now">End now</button>
         ${ctx.lastEventEnd ? '<button type="button" class="chip-btn since-last" title="Start when the previous event ended (looks back up to 12 hours, also into the day before)">⤒ Since last event</button>' : ''}
+        ${ctx.nextEventStart ? '<button type="button" class="chip-btn till-next" title="End when the next event starts (looks ahead up to 12 hours)">⤓ Till next event</button>' : ''}
       </div>
       <div class="row timed">
         <label class="field grow"><span>Time zone</span>
@@ -144,7 +161,8 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
 
       <fieldset class="box">
         <legend>Notifications</legend>
-        <label class="chk google-only"><input type="checkbox" name="useDefault" ${rem.useDefault ? 'checked' : ''}> Use calendar's default notifications</label>
+        <label class="field"><span>Profile</span><select name="nprofile">${N.profiles(s).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} — ${esc(N.describeProfile(p))}</option>`).join('')}<option value="">Custom</option></select></label>
+        <label class="chk google-only"><input type="checkbox" name="useDefault" ${rem.useDefault && !isNew ? 'checked' : ''}> Use calendar's default notifications</label>
         <div class="rem-rows"></div>
         <button type="button" class="btn small ghost add-rem">+ Add notification</button>
       </fieldset>
@@ -192,8 +210,29 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       remBox.appendChild(row);
     };
     remRows.forEach(addRem);
-    if (isNew && !isGoogle && !remRows.length) addRem();
-    $('.add-rem', dlg).onclick = () => { f.useDefault.checked = false; sync(); addRem(); };
+    // Notification profile: new events start with your usual profile; picking one fills in its reminders.
+    const readOverrides = (g) => $$('.rem-row', dlg).map((r) => ({ method: g ? $('.rm-method', r).value : 'popup', minutes: N.toMinutes($('.rm-val', r).value, $('.rm-unit', r).value) }));
+    const applyProfile = (id) => {
+      const p = N.profileById(s, id); if (!p) return;
+      const g = (f.calId.value || calId) !== LOCAL_CAL;
+      $$('.rem-row', dlg).forEach((r) => r.remove());
+      N.overrides(p.rules, { google: g }).forEach(addRem);
+      f.useDefault.checked = false;
+    };
+    const matchNow = () => {
+      const g = (f.calId.value || calId) !== LOCAL_CAL;
+      if (g && f.useDefault.checked) return '';
+      const mine = JSON.stringify(N.overrides(readOverrides(g), { google: g }));
+      return N.profiles(s).find((p) => JSON.stringify(N.overrides(p.rules, { google: g })) === mine)?.id || '';
+    };
+    if (isNew) { f.nprofile.value = init.notifyProfile && N.profileById(s, init.notifyProfile) ? init.notifyProfile : N.eventDefault(s)?.id || ''; applyProfile(f.nprofile.value); }
+    else f.nprofile.value = N.matchProfile(s, ev) || '';
+    f.calId?.addEventListener('change', () => { if (f.nprofile.value) applyProfile(f.nprofile.value); });
+    f.nprofile.addEventListener('change', () => { if (f.nprofile.value) applyProfile(f.nprofile.value); sync(); });
+    remBox.addEventListener('change', () => { f.nprofile.value = matchNow(); });
+    remBox.addEventListener('click', (e) => { if (e.target.closest('.rm-del')) setTimeout(() => { f.nprofile.value = matchNow(); }); });
+    f.useDefault.addEventListener('change', () => { f.nprofile.value = matchNow(); });
+    $('.add-rem', dlg).onclick = () => { f.useDefault.checked = false; sync(); addRem(); f.nprofile.value = matchNow(); };
 
     const sync = () => {
       const ad = f.allDay.checked;
@@ -258,6 +297,12 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       showDur();
       setHTML($('.since-note', dlg) || $('.dur-row', dlg).appendChild(Object.assign(document.createElement('span'), { className: 'muted small since-note' })), esc(r.note));
     });
+    $('.till-next', dlg)?.addEventListener('click', async () => {
+      const note = (h) => setHTML($('.since-note', dlg) || $('.dur-row', dlg).appendChild(Object.assign(document.createElement('span'), { className: 'muted small since-note' })), h);
+      const r = await ctx.nextEventStart({ ref: startMs(), exclude: ev ? `${ev._calId}|${ev.id}` : null });
+      if (!r.found) { note(esc(r.note)); return; }
+      setEnd(r.end); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); note(esc(r.note));
+    });
     $$('.dur-add', dlg).forEach((b) => (b.onclick = () => {
       const add = +b.dataset.add;
       // + adds to the end; − shortens, but never below 5 minutes
@@ -288,8 +333,18 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       e.preventDefault();
       const ad = f.allDay.checked;
       const zone = T.isValidTz(f.tz.value.trim()) ? f.tz.value.trim() : s.tz;
+      let title = f.summary.value.trim();
+      if (!title && (isNew || ev?.summary)) {
+        if (evCat) title = evCat.name;
+        else {
+          const a = await askTitle(s, { what: 'event', onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; } });
+          if (!a) { f.summary.focus(); return; }
+          title = a.title; if (a.cat) evCat = a.cat;
+        }
+        f.summary.value = title;
+      }
       const body = {
-        summary: f.summary.value.trim() || '(No title)',
+        summary: title || '(No title)',
         location: f.location.value.trim(),
         description: f.description.value,
         transparency: f.transparency.value,
@@ -340,7 +395,9 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         const u = $('.rm-unit', r).value;
         return { method: g ? $('.rm-method', r).value : 'popup', minutes: v * (u === 'days' ? 1440 : u === 'hours' ? 60 : 1) };
       }).slice(0, 5);
-      body.reminders = g && f.useDefault.checked ? { useDefault: true } : { useDefault: false, overrides };
+      body.reminders = g && f.useDefault.checked ? { useDefault: true } : { useDefault: false, overrides: N.overrides(overrides, { google: g }) };
+      { const base = body.extendedProperties || ev?.extendedProperties || {}; const np = f.nprofile.value;
+        if (np || base.private?.tempoNotify) body.extendedProperties = { ...base, private: { ...(base.private || {}), tempoNotify: np || '' } }; }
       if (g) {
         const emails = f.attendees.value.split(/[,;\s]+/).map((x) => x.trim()).filter((x) => /.+@.+\..+/.test(x));
         const keep = (ev?.attendees || []).filter((a) => a.self || emails.includes(a.email));
@@ -459,8 +516,14 @@ export function taskDialog(ctx, task = null, preset = {}) {
       <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
     </header>
     <div class="dlg-body">
-      <input name="title" class="title-input" placeholder="${t.kind === 'reading' ? 'Book title' : 'Task name'}" value="${esc(t.title)}" autofocus required>
+      <input name="title" class="title-input" placeholder="${t.kind === 'reading' ? 'Book title' : 'Task name'}" value="${esc(t.title)}" autofocus>
       <div class="field"><span>Category</span><div class="cat-host"></div></div>
+      ${(() => { const legacy = !t.notifyProfile && ((t.reminderMinutes ?? '') !== '' || (t.emailReminderMinutes ?? '') !== ''); const cur = legacy ? 'custom' : (t.notifyProfile || '');
+        return `<label class="field notify-field"><span>Notifications</span><select name="notify">
+          <option value="">Usual — ${esc(N.taskDefault(s)?.name || 'Default')} (${esc(N.describeProfile(N.taskDefault(s)))})</option>
+          ${N.profiles(s).map((p) => `<option value="${esc(p.id)}" ${cur === p.id ? 'selected' : ''}>${esc(p.name)} — ${esc(N.describeProfile(p))}</option>`).join('')}
+          <option value="none" ${cur === 'none' ? 'selected' : ''}>No reminders</option>
+          <option value="custom" ${cur === 'custom' ? 'selected' : ''}>Custom minutes…</option></select></label>`; })()}
       ${prog ? `<div class="progress-line"><div class="bar"><i style="width:${prog.pct}%;background:${t.color}"></i></div><span class="muted small">${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)} done</span></div>` : ''}
 
       <div class="grid3 only-generic">
@@ -514,8 +577,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
           <label class="field"><span>Break between (min)</span><input type="number" name="break" min="0" step="5" placeholder="${s.breakMinutes} (default)" value="${t.breakMinutes ?? ''}"></label>
           <label class="field"><span>Wiggle room (min)</span><input type="number" name="wiggle" min="0" step="5" placeholder="${s.wiggleMinutes ?? 15} (default)" value="${t.wiggleMinutes ?? ''}" title="Also use free slots up to this much shorter than the session length"></label>
           ${ctx.taskCalendars().length > 1 ? `<label class="field"><span>Google calendar</span><select name="calendarId">${ctx.taskCalendars().map((c) => `<option value="${esc(c.id)}" ${c.id === (t.calendarId || ctx.defaultTaskCal()) ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select></label>` : ''}
-          <label class="field"><span>Reminder (min before)</span><input type="number" name="reminder" min="-1" placeholder="${s.taskReminderMinutes} (default)" value="${t.reminderMinutes ?? ''}"></label>
-          <label class="field google-only-t"><span>Email reminder (min before)</span><input type="number" name="emailReminder" min="-1" placeholder="${s.taskEmailReminderMinutes != null ? s.taskEmailReminderMinutes + ' (default)' : 'off (default)'}" value="${t.emailReminderMinutes ?? ''}"></label>
+          <label class="field only-custom-notify"><span>Reminder (min before)</span><input type="number" name="reminder" min="-1" placeholder="${s.taskReminderMinutes} (default)" value="${t.reminderMinutes ?? ''}"></label>
+          <label class="field google-only-t only-custom-notify"><span>Email reminder (min before)</span><input type="number" name="emailReminder" min="-1" placeholder="${s.taskEmailReminderMinutes != null ? s.taskEmailReminderMinutes + ' (default)' : 'off (default)'}" value="${t.emailReminderMinutes ?? ''}"></label>
           <div class="field color-field"><span>Color</span><div class="swatches">${TASK_COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${t.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
         </div>
       </fieldset>
@@ -581,7 +644,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
         earliestStart: T.fromDTInput(f.earliest.value, tz),
         rank: Math.max(1, Math.round(+f.rank.value || 3)),
         chunkMinutes: num(f.chunk.value), minChunkMinutes: num(f.minChunk.value), maxPerDayMinutes: num(f.maxDay.value),
-        breakMinutes: num(f.break.value), wiggleMinutes: num(f.wiggle.value), reminderMinutes: num(f.reminder.value), emailReminderMinutes: num(f.emailReminder.value),
+        breakMinutes: num(f.break.value), wiggleMinutes: num(f.wiggle.value), reminderMinutes: f.notify.value === 'custom' ? num(f.reminder.value) : null, emailReminderMinutes: f.notify.value === 'custom' ? num(f.emailReminder.value) : null,
+        notifyProfile: f.notify.value || null,
         color: f.color.value || t.color,
         bounds: custom ? { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: $$('input[name=bdays]:checked', dlg).map((c) => +c.value) } : null,
         ...(() => {
@@ -621,6 +685,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
 
     const update = () => {
       const kind = f.kind.value;
+      const cn = f.notify.value === 'custom';
+      $$('.only-custom-notify', dlg).forEach((e) => { e.style.display = cn && !(e.classList.contains('google-only-t') && !ctx.taskCalendars().length) ? '' : 'none'; if (cn) { const d = e.closest('details'); if (d && !d.open) d.open = true; } });
       $$('.only-generic', dlg).forEach((e) => (e.style.display = kind === 'generic' ? '' : 'none'));
       $$('.only-reading', dlg).forEach((e) => (e.style.display = kind === 'reading' ? '' : 'none'));
       f.title.placeholder = kind === 'reading' ? 'Book title, e.g. Pride and Prejudice' : 'Task name';
@@ -675,6 +741,15 @@ export function taskDialog(ctx, task = null, preset = {}) {
     $('.del', dlg)?.addEventListener('click', () => close({ delete: true }));
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
+      // No name: use the category's, or ask
+      if (!f.title.value.trim()) {
+        if (cat) f.title.value = cat.name;
+        else {
+          const a = await askTitle(s, { what: f.kind.value === 'reading' ? 'reading plan' : 'task', onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; } });
+          if (!a) { f.title.focus(); return; }
+          f.title.value = a.title; if (a.cat) cat = a.cat;
+        }
+      }
       let nt = readWithCat();
       if (!nt.deadline) return;
       if (!(await checkSpan(nt.repeat ? 'Repeating task' : 'Deadline', nt.deadline, s))) return;
@@ -734,6 +809,7 @@ export function settingsDialog(ctx) {
   let cats = (s.categories || []).map((c) => ({ ...c }));
   let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
   let projects = (s.projects || []).map((p) => ({ ...p }));
+  let nprofiles = N.profiles(s).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) }));
   const tp = s.timePrefs || S.DEFAULT_SETTINGS.timePrefs;
   const html = `
   <form class="settings-form">
@@ -756,6 +832,11 @@ export function settingsDialog(ctx) {
         <fieldset class="box"><legend>Default day bounds</legend>
           <div class="row"><input type="time" name="bStart" value="${s.bounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="bEnd" value="${s.bounds.end}" step="900"></div>
           ${weekdayToggles('bdays', s.bounds.days)}
+          <label class="field"><span>When I change these hours or a time period</span><select name="hoursChange">
+            <option value="ask" ${(s.hoursChange || 'ask') === 'ask' ? 'selected' : ''}>Ask me</option>
+            <option value="move" ${s.hoursChange === 'move' ? 'selected' : ''}>Move planned sessions to fit the new hours</option>
+            <option value="keep" ${s.hoursChange === 'keep' ? 'selected' : ''}>Keep planned sessions where they are (only new planning uses the new hours)</option>
+          </select></label>
         </fieldset>
         <fieldset class="box"><legend>Time periods</legend>
           <p class="muted small" style="margin:0">Extra windows a task can be scheduled in instead of the work hours above, e.g. “After hours” on Mon, Wed and Thu evenings plus weekends. Each period can have several rules.</p>
@@ -824,17 +905,23 @@ export function settingsDialog(ctx) {
       </section>
       <section data-pane="3" hidden>
         <label class="chk"><input type="checkbox" name="notifyTasks" ${s.notifyTasks ? 'checked' : ''}> Desktop notifications for task sessions</label>
-        <label class="field"><span>Default task reminder (minutes before, -1 for none)</span><input type="number" name="taskReminderMinutes" min="-1" value="${s.taskReminderMinutes}"></label>
         <label class="chk"><input type="checkbox" name="notifyLocal" ${s.notifyLocal ? 'checked' : ''}> Desktop notifications for local events</label>
         <label class="chk"><input type="checkbox" name="notifyGoogle" ${s.notifyGoogle ? 'checked' : ''}> Desktop notifications for Google events too (Google also notifies on its own)</label>
-        <label class="field"><span>Default reminder for new events (minutes)</span><input type="number" name="defaultReminder" min="0" value="${s.defaultReminder}"></label>
+        <fieldset class="box"><legend>Notification profiles</legend>
+          <p class="muted small" style="margin:0">A profile is a set of reminders. Pick one for each event or task; emails are sent by Google${auth.connected ? ` to ${esc(auth.email || 'your Google address')}` : ' (connect Google Calendar)'}. Up to ${N.MAX_RULES} reminders per profile.</p>
+          <div class="nprof-list"></div>
+          <button type="button" class="btn small add-nprof">+ Add profile</button>
+          <div class="grid2">
+            <label class="field"><span>New events use</span><select name="eventProfile" class="nprof-sel"></select></label>
+            <label class="field"><span>Task sessions use</span><select name="taskProfile" class="nprof-sel"></select></label>
+          </div>
+        </fieldset>
         <button type="button" class="btn small ghost test-notif">Send a test notification</button>
         <fieldset class="box">
           <legend>Email notifications (sent by Google)</legend>
           ${auth.connected ? `
-          <label class="field"><span>Email reminder before each task session (minutes, empty = off)</span><input type="number" name="taskEmailReminderMinutes" min="0" placeholder="off" value="${s.taskEmailReminderMinutes ?? ''}"></label>
           <label class="chk"><input type="checkbox" name="agendaEmail" ${agendaOn ? 'checked' : ''}> Daily agenda email every morning (${esc(agendaCal?.summary || 'primary calendar')})</label>
-          <p class="muted small">Google emails ${esc(auth.email || 'your Google address')}. Events you create in Tempo can also get email reminders: add one under Notifications in the event dialog. A task can override the session reminder in its own settings.</p>`
+          <p class="muted small">Google emails ${esc(auth.email || 'your Google address')}. Use a profile with emails (like Important) to get reminder emails for an event or task.</p>`
           : '<p class="muted small">Connect Google Calendar to get email reminders for task sessions and a daily agenda email.</p>'}
         </fieldset>
       </section>
@@ -911,6 +998,37 @@ export function settingsDialog(ctx) {
       });
     };
     drawPeriods();
+    const drawProfiles = () => {
+      const unitSel = (m) => { const [u, v] = N.unitOf(+m); return [v, `<select class="np-unit">${['minutes', 'hours', 'days'].map((x) => `<option ${x === u ? 'selected' : ''}>${x}</option>`).join('')}</select>`]; };
+      setHTML($('.nprof-list', dlg), nprofiles.map((p, i) => `<div class="nprof" data-i="${i}">
+        <div class="row"><input class="np-name" value="${esc(p.name)}" maxlength="24" aria-label="Profile name"><span class="grow"></span>${nprofiles.length > 1 ? '<button type="button" class="btn small ghost danger np-del">Delete profile</button>' : ''}</div>
+        ${p.rules.map((r, j) => { const [v, us] = unitSel(r.minutes); return `<div class="row np-rule" data-j="${j}">
+          <select class="np-method"><option value="popup">Notification</option><option value="email" ${r.method === 'email' ? 'selected' : ''}>Email</option></select>
+          <input type="number" class="np-val num" min="0" value="${v}"> ${us} <span class="muted">before</span>
+          <button type="button" class="icon-btn np-rdel" title="Remove" aria-label="Remove reminder">✕</button></div>`; }).join('') || '<p class="muted small">No reminders.</p>'}
+        ${p.rules.length < N.MAX_RULES ? '<button type="button" class="link np-add">+ Add reminder</button>' : ''}</div>`).join(''));
+      $$('.nprof', dlg).forEach((el2) => {
+        const p = nprofiles[+el2.dataset.i];
+        $('.np-name', el2).oninput = (e) => { p.name = e.target.value; fillSel(); };
+        $('.np-del', el2)?.addEventListener('click', () => { nprofiles.splice(+el2.dataset.i, 1); drawProfiles(); });
+        $('.np-add', el2)?.addEventListener('click', () => { p.rules.push({ method: 'email', minutes: 30 }); drawProfiles(); });
+        $$('.np-rule', el2).forEach((rw) => {
+          const r = p.rules[+rw.dataset.j];
+          const upd = () => { r.method = $('.np-method', rw).value; r.minutes = N.toMinutes($('.np-val', rw).value, $('.np-unit', rw).value); };
+          $$('select, input', rw).forEach((x) => x.addEventListener('change', upd));
+          $('.np-val', rw).addEventListener('input', upd);
+          $('.np-rdel', rw).onclick = () => { p.rules.splice(+rw.dataset.j, 1); drawProfiles(); };
+        });
+      });
+      fillSel();
+    };
+    const fillSel = () => $$('.nprof-sel', dlg).forEach((sel) => {
+      const cur = sel.value || (sel.name === 'eventProfile' ? s.eventProfile : s.taskProfile);
+      setHTML(sel, nprofiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name || 'Profile')}</option>`).join(''));
+      sel.value = nprofiles.some((p) => p.id === cur) ? cur : nprofiles[0]?.id;
+    });
+    drawProfiles();
+    $('.add-nprof', dlg).onclick = () => { nprofiles.push({ id: N.newProfileId('profile'), name: 'New profile', rules: [{ method: 'popup', minutes: 10 }] }); drawProfiles(); };
     $('.add-period', dlg).onclick = () => { periods.push({ id: 'p-' + Math.random().toString(36).slice(2, 8), name: 'New period', rules: [{ days: [1, 2, 3, 4, 5], start: s.bounds.end, end: '21:00' }] }); drawPeriods(); };
     const drawCats = () => {
       setHTML($('.cats-list', dlg), cats.map((c, i) => `<div class="cat-row" data-i="${i}">
@@ -1041,8 +1159,10 @@ export function settingsDialog(ctx) {
         busyCalendars: busy.length === allCals.length ? null : busy,
         syncTasksToGoogle: f.syncTasksToGoogle.checked, taskCalendarId: f.taskCalendarId.value || null,
         notifyTasks: f.notifyTasks.checked, notifyLocal: f.notifyLocal.checked, notifyGoogle: f.notifyGoogle.checked,
-        taskReminderMinutes: +f.taskReminderMinutes.value, defaultReminder: Math.max(0, +f.defaultReminder.value || 0),
-        taskEmailReminderMinutes: f.taskEmailReminderMinutes ? (f.taskEmailReminderMinutes.value === '' ? null : Math.max(0, +f.taskEmailReminderMinutes.value)) : s.taskEmailReminderMinutes,
+        notifyProfiles: nprofiles.map((p) => ({ id: p.id, name: (p.name || '').trim() || 'Profile', rules: N.overrides(p.rules) })),
+        eventProfile: f.eventProfile.value, taskProfile: f.taskProfile.value,
+        defaultReminder: (() => { const pr = nprofiles.find((p) => p.id === f.eventProfile.value); const m = pr?.rules.find((r) => r.method === 'popup'); return m ? +m.minutes : s.defaultReminder; })(),
+        hoursChange: f.hoursChange.value,
         categories: cats.map((c) => ({ ...c, name: c.name.trim() || 'Untitled' })),
         askCategory: f.askCategory.checked,
         periods: periods.map((p) => ({ ...p, name: p.name.trim() || 'Untitled period', rules: p.rules.filter((r) => r.days.length && r.start && r.end) })),
