@@ -212,6 +212,17 @@ export function createApi(h) {
       return (await h.freeSlots(from, to, +(a.minMinutes || 15), a.within || 'work hours')).map((s) => ({ start: fmt(s.start), end: fmt(s.end), minutes: Math.round((s.end - s.start) / T.MIN) }));
     } },
     listCalendars: { about: 'Calendars you can add events to.', run: () => (h.st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)).map((c) => ({ id: c.id, name: c.summary, primary: !!c.primary })) },
+    listLater: { about: 'Notes in the "Later" list: things to schedule, but not yet.', run: () => (h.set().later || []).map((x) => ({ id: x.id, text: x.text, added: fmt(x.created) })) },
+    addLater: { params: 'text', about: 'Add a note to the "Later" list.', write: true, run: async (a) => {
+      const text = String(a.text || '').trim().slice(0, 300) || err('Missing "text".');
+      const item = { id: S.newId('l'), text, created: Date.now() };
+      h.set().later = [...(h.set().later || []), item]; await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, id: item.id };
+    } },
+    removeLater: { params: 'note (id or text)', about: 'Remove a note from the "Later" list (e.g. after scheduling it).', write: true, run: async (a) => {
+      const list = h.set().later || [];
+      const x = list.find((n) => n.id === a.note) || list.find((n) => n.text.toLowerCase() === String(a.note || '').toLowerCase()) || err(`No note "${a.note}".`);
+      h.set().later = list.filter((n) => n !== x); await E.persist(h.st(), ['settings']); h.render?.(); return { removed: x.text };
+    } },
     listProfiles: { about: 'Notification profiles (name and reminders) and which ones new events and task sessions use.', run: () => ({ profiles: N.profiles(h.set()).map((p) => ({ name: p.name, reminders: N.describeProfile(p) })), events: N.eventDefault(h.set())?.name, taskSessions: N.taskDefault(h.set())?.name }) },
     listCategories: { about: 'Categories (name, icon, preferred time of day).', run: () => (h.set().categories || []).map((c) => ({ name: c.name, icon: c.icon || '', prefer: c.prefer || null })) },
     addTask: { params: 'title, hours | pages (+ startPage, pagesPerHour) | repeat {every: "week"|"day", hours, until | weeks, days?}, deadline, rank?, category?, notify? (notification profile name, or "none"), notBefore?, marginDays?, after?, project?, period?, sessionMinutes? — or text: "Read Dune 200 pages by Friday, Study"', about: 'Create a task; Tempo splits it into sessions.', write: true, run: async (a) => {

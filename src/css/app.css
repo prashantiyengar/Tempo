@@ -658,3 +658,38 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .ask-title .field input { font-size: 16px; }
 @keyframes shake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
 .shake { animation: shake .3s; border-color: var(--bad, #d33) !important; }
+/* analysis: assumed-sleep note */
+.an-note { background: color-mix(in srgb, #7b8db0 12%, var(--panel)); border: 1px solid color-mix(in srgb, #7b8db0 35%, var(--line)); border-radius: 10px; padding: 8px 12px; margin: 0 0 12px; }
+.an-note p { margin: 0; line-height: 1.6; }
+.sl-ctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: 4px; }
+.sl-ctl input[type=time] { padding: 2px 6px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.sl-ctl .chk { margin: 0; }
+/* sidebar: Tasks | Later tabs */
+.side-tabs { display: inline-flex; gap: 2px; }
+.side-tabs button { border: 0; background: none; font: inherit; text-transform: inherit; letter-spacing: inherit; color: var(--ink3, var(--ink2)); padding: 2px 6px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+.side-tabs button.on { color: var(--ink); background: var(--off); }
+.side-tabs b { font-weight: 700; color: var(--accent); margin-left: 2px; }
+.later-list { display: flex; flex-direction: column; gap: 4px; }
+.later-add { display: flex; gap: 6px; margin-bottom: 4px; }
+.later-add input { flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
+.later-row { display: flex; align-items: flex-start; gap: 4px; padding: 6px 6px 6px 8px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+.later-t { flex: 1; min-width: 0; text-align: left; border: 0; background: none; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; padding: 0; overflow-wrap: anywhere; }
+.later-acts { display: inline-flex; gap: 0; flex: none; opacity: .75; }
+.later-row:hover .later-acts { opacity: 1; }
+/* weather in day headers */
+.wx { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--ink2); line-height: 1.1; white-space: nowrap; cursor: default; }
+.wx-i { font-size: 13px; }
+.wx-hi { font-weight: 600; color: var(--ink); }
+.wx-lo { color: var(--muted); }
+.wx-m { position: absolute; top: 5px; right: 6px; font-size: 10.5px; }
+.wx-m .wx-i { font-size: 12px; }
+.m-cell { position: relative; }
+.wx-find-row input { flex: 1; min-width: 0; }
+@media (max-width: 760px) {
+  .wx { font-size: 10px; gap: 1px; flex-direction: column; }
+  .wx-lo { display: none; }
+  .wx-m { top: 3px; right: 2px; font-size: 9px; flex-direction: column; }
+  .wx-m .wx-i { font-size: 11px; }
+}
+.later-list[hidden], .task-list[hidden] { display: none !important; }
+#btn-resched[hidden] { display: none !important; }

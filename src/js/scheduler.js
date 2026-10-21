@@ -58,7 +58,10 @@ export const DEFAULT_SETTINGS = {
   ],
   eventProfile: 'default',
   taskProfile: 'default',
-  hoursChange: 'ask',       // when work hours or a period change: 'ask' | 'move' (re-plan sessions to fit) | 'keep'
+  hoursChange: 'ask',
+  sleepAssume: true,       // Analysis, full 24 hours: count this block as sleep on nights with nothing else in it
+  sleepStart: '23:00',
+  sleepEnd: '07:00',       // when work hours or a period change: 'ask' | 'move' (re-plan sessions to fit) | 'keep'
   categories: [
     { id: 'work', name: 'Work', color: '#039be5', icon: '💼' },
     { id: 'personal', name: 'Personal', color: '#33b679', icon: '🏠' },

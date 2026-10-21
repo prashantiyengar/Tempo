@@ -16,6 +16,7 @@ import * as RV from './review.js';
 import { parseTask } from './parse.js';
 import { createApi, AI_PROMPT } from './api.js';
 import * as N from './notify.js';
+import * as W from './weather.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -193,6 +194,8 @@ async function render() {
   const r = range();
   renderToolbar();
   renderSidebar();
+  // weather: draw with what's cached; fetch in the background when stale and redraw once it arrives
+  W.refresh(set()).then((fresh) => { if (fresh && app.view !== 'analysis') render(); });
   const items = await collectItems(r.days);
   if (seq !== app.renderSeq) return;
   app.items = new Map(items.map((i) => [i.key, i]));
@@ -278,7 +281,7 @@ function renderTimeGrid(days, items) {
     <div class="tg-head">
       <div class="tg-gutter"><span class="tz-label" title="${esc(z)}">${esc(tzAbbr())}</span></div>
       ${days.map((k) => `<div class="tg-dayhead ${k === todayK ? 'today' : ''} ${k < todayK ? 'past' : ''}" data-day="${k}">
-        <span class="wd">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</span><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button></div>`).join('')}
+        <span class="wd">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</span><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}</div>`).join('')}
     </div>
     <div class="tg-allday">
       <div class="tg-gutter small muted">all-day</div>
@@ -373,7 +376,7 @@ function renderMonth({ days, monthKey }, items) {
     const max = 4;
     const shown = list.length > max ? list.slice(0, max - 1) : list;
     const cell = el(`<div class="m-cell ${T.parseKey(k).m !== month ? 'out' : ''} ${k === todayK ? 'today' : ''}" data-day="${k}">
-      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>
+      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK, { month: true })}
       <div class="m-items">
         ${shown.map((it) => it.allDay
           ? `<div class="chip allday ${!it.editable ? 'ro' : ''}" data-key="${esc(it.key)}" style="--c:${it.color}">${esc(it.title)}</div>`
@@ -450,6 +453,60 @@ function renderSidebar() {
   }
   setHTML($('#task-list'), tasks.length ? html.join('') : `<p class="muted small empty">No tasks yet. Type one above, or use + Task — Tempo splits it into sessions around your calendar.</p>`);
   $$('#task-list .task-row').forEach((b) => b.addEventListener('click', () => editTask(st().tasks.find((t) => t.id === b.dataset.task))));
+  renderLater();
+}
+
+// ---------- "Later": things to schedule, but not yet (synced with your other devices like settings) ----------
+const laterList = () => set().later || [];
+async function saveLater(list, label) {
+  const before = laterList();
+  set().later = list;
+  await E.persist(st(), ['settings']);
+  if (label) pushUndo(label, async () => { set().later = before; await E.persist(st(), ['settings']); renderLater(); });
+  renderLater();
+}
+function renderLater() {
+  const box = $('#later-list'); if (!box) return;
+  const tab = app.sideTab || 'tasks';
+  $$('.side-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.st === tab));
+  $('#task-list').hidden = tab !== 'tasks';
+  box.hidden = tab !== 'later';
+  $('#btn-resched').hidden = tab !== 'tasks';
+  const list = laterList();
+  const n = $('#later-n'); if (n) n.textContent = list.length ? String(list.length) : '';
+  const z = tz();
+  setHTML(box, `<form class="later-add"><input name="t" placeholder="Something to schedule later…" maxlength="300" autocomplete="off" aria-label="Add a note"><button class="btn small" type="submit">Add</button></form>
+    ${list.length ? list.map((x) => `<div class="later-row" data-id="${esc(x.id)}">
+      <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="muted small"> · ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span></button>
+      <span class="later-acts"><button type="button" class="icon-btn sm l-task" title="Make it a task (Tempo finds the time)">⧉</button><button type="button" class="icon-btn sm l-event" title="Put it on the calendar as an event">📅</button><button type="button" class="icon-btn sm l-del" title="Remove">✕</button></span>
+    </div>`).join('') : '<p class="muted small empty">Jot down things you need to schedule, but not right away. Turn one into a task or an event when you\'re ready.</p>'}`);
+  $('.later-add', box).onsubmit = async (e) => {
+    e.preventDefault();
+    const v = e.target.t.value.trim(); if (!v) return;
+    await saveLater([...laterList(), { id: S.newId('l'), text: v.slice(0, 300), created: Date.now() }], `add “${v.slice(0, 30)}” to Later`);
+    $('#later-list .later-add input')?.focus();
+  };
+  $$('.later-row', box).forEach((r) => {
+    const item = laterList().find((x) => x.id === r.dataset.id); if (!item) return;
+    const drop = () => saveLater(laterList().filter((x) => x.id !== item.id), `remove “${item.text.slice(0, 30)}” from Later`);
+    $('.l-del', r).onclick = () => { drop(); toast('Removed from Later'); };
+    $('.l-task', r).onclick = async () => { closeDrawer(); const before = st().tasks.length; await newTask({ kind: 'generic', title: item.text }); if (st().tasks.length > before) drop(); };
+    $('.l-event', r).onclick = async () => {
+      closeDrawer();
+      const start = Math.ceil((Date.now() + 15 * T.MIN) / (15 * T.MIN)) * 15 * T.MIN;
+      const n0 = createdEvents;
+      await newEvent({ start, end: start + (set().defaultEventMinutes || 60) * T.MIN, title: item.text });
+      if (createdEvents > n0) drop();
+    };
+    $('.later-t', r).onclick = async () => {
+      const v = await modal(`<form class="choice"><h2>Edit note</h2><textarea name="v" rows="3" maxlength="300" style="width:100%">${esc(item.text)}</textarea>
+        <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
+      (dlg, close) => { $('form', dlg).onsubmit = (e) => { e.preventDefault(); close($('[name=v]', dlg).value.trim()); }; setTimeout(() => $('[name=v]', dlg).focus(), 30); }, { cls: 'narrow' });
+      if (v == null) return;
+      if (!v) return drop();
+      await saveLater(laterList().map((x) => (x.id === item.id ? { ...x, text: v.slice(0, 300) } : x)), 'edit note');
+    };
+  });
 }
 
 function renderMini() {
@@ -876,10 +933,12 @@ function selBody(sel, title, calId) {
   return body;
 }
 
+let createdEvents = 0;
 async function saveNewEvent(calId, body, opts) {
   try {
     setStatus('Saving…');
     const created = await EV.createEvent(st(), calId, body, opts);
+    createdEvents++;
     pushUndo(`create “${body.summary || 'event'}”`, async () => { await EV.deleteEvent(st(), created, 'this'); await afterEventChange(); });
     await afterEventChange();
     toast('Event created');
@@ -1652,7 +1711,7 @@ async function finishedEarlyApi(a) {
 let api = null;
 function setupApi() {
   api = createApi({
-    st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi, setEventDone,
+    st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi, setEventDone, render,
     afterEventChange, defaultCalendar: () => ctx.defaultCalendar(), lastBusy: () => app.lastBusy, toast: (m) => toast(m),
   });
   window.tempo = api;
@@ -1989,6 +2048,7 @@ async function openSettings() {
     if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes || r.settings.taskProfile !== before.taskProfile
       || JSON.stringify(r.settings.notifyProfiles) !== JSON.stringify(before.notifyProfiles)) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     await hoursChanged(before, r.settings);
+    if (JSON.stringify(before.weather || null) !== JSON.stringify(r.settings.weather || null)) W.refresh(r.settings, { force: true }).then((ok) => { if (ok) render(); });
     app.miniCursor = T.dayKey(Date.now(), tz());
   }
   try {
@@ -2046,7 +2106,8 @@ async function renderAnalysisView(seq) {
   const rng = A.periodRange(o.period, s, Date.now(), { from: o.from, to: o.to });
   const days = [];
   for (let k = T.dayKey(rng.from, z); T.dayStart(k, z) < rng.to; k = T.addDays(k, 1)) days.push(k);
-  const items = await collectItems(days);
+  // one extra day before, so a night that starts the evening before the range can see what's in it
+  const items = await collectItems(o.scope === 'full' ? [T.addDays(days[0], -1), ...days] : days);
   if (seq !== app.renderSeq) return;
   const groups = {};
   const actx = { settings: s, gmeta: st().gmeta, calColor };
@@ -2057,12 +2118,22 @@ async function renderAnalysisView(seq) {
     return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.kind === 'chunk' ? it.task.title : (it.title || '(No title)'), kind: it.kind, uid: it.key };
   });
   const wins = A.scopeWindows(o.scope, rng.from, rng.to, s);
+  let sleep = null;
+  if (o.scope === 'full' && s.sleepAssume !== false) {
+    sleep = A.assumedSleep(occ, rng.from, rng.to, s);
+    if (sleep.blocks.length) { occ.push(...A.sleepItems(sleep)); groups[A.SLEEP_GROUP.key] = { ...A.SLEEP_GROUP, contains: new Set(['Sleep (assumed)']) }; }
+  }
   const data = A.compute(occ, wins, z);
   for (const k of days) data.days[k] ||= { available: 0, free: 0, groups: {} };
   app.anLast = { data, groups };
   const root = $('.analysis', view) || view.appendChild(el('<div class="analysis"></div>'));
-  setHTML(root, modeBar + A.renderAnalysis({ data, groups, opts: o, settings: s, rangeInfo: rng }));
+  setHTML(root, modeBar + A.renderAnalysis({ data, groups, opts: o, settings: s, rangeInfo: rng, sleep }));
   bindMode(root);
+  $$('[data-sleep]', root).forEach((c) => (c.onchange = async () => {
+    const k = c.dataset.sleep;
+    if (k === 'on') s.sleepAssume = c.checked; else if (c.value) s[k === 'start' ? 'sleepStart' : 'sleepEnd'] = c.value;
+    await E.persist(st(), ['settings']); render();
+  }));
   $$('[data-o]', root).forEach((c) => {
     if (c.dataset.o === 'csv') { c.onclick = () => { download(new Blob([A.toCsv(data, groups, z)], { type: 'text/csv' }), `tempo-analysis-${T.dayKey(rng.from, z)}.csv`); }; return; }
     c.onchange = () => {
@@ -2157,6 +2228,7 @@ function pageSummary(days, items, hours = null) {
     return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.kind === 'chunk' ? it.task.title : (it.title || ''), kind: it.kind, uid: it.key };
   });
   const wins = hours ? S.windows(from, to, hours.rules, z) : A.scopeWindows(o.scope, from, to, s);
+  if (!hours && o.scope === 'full' && s.sleepAssume !== false) { const sl = A.assumedSleep(occ, from, to, s); occ.push(...A.sleepItems(sl)); groups[A.SLEEP_GROUP.key] = A.SLEEP_GROUP; }
   const data = A.compute(occ, wins, z);
   const scopeName = hours ? hours.label : (A.SCOPES[o.scope] || (s.periods || []).find((p) => 'period:' + p.id === o.scope)?.name || '');
   let busiest = null;
@@ -2265,6 +2337,8 @@ function bindToolbar() {
   $('#btn-next').onclick = () => nav(1);
   $$('#view-seg button, #bottombar button').forEach((b) => (b.onclick = () => { app.view = b.dataset.view; closeDrawer(); render(); }));
   // Phone layout: drawer, add button, overflow menu
+  $$('.side-tabs button').forEach((b) => (b.onclick = () => { app.sideTab = b.dataset.st; try { localStorage.setItem('tempo:sideTab', app.sideTab); } catch {} renderLater(); if (app.sideTab === 'later' && !matchMedia('(pointer: coarse)').matches) $('#later-list .later-add input')?.focus(); }));
+  try { app.sideTab = localStorage.getItem('tempo:sideTab') || 'tasks'; } catch {}
   $('#btn-menu').onclick = () => { $('#side').classList.add('open'); $('#scrim').hidden = false; };
   $('#scrim').onclick = closeDrawer;
   $('#side').addEventListener('click', (e) => { if (e.target.closest('.md, .task-row, #connect-cta, .create .btn')) closeDrawer(); });

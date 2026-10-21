@@ -39,6 +39,8 @@
   "optional_host_permissions": [
     "https://graph.microsoft.com/*",
     "https://*.icloud.com/*",
+    "https://api.open-meteo.com/*",
+    "https://geocoding-api.open-meteo.com/*",
     "https://*/*"
   ]
 }

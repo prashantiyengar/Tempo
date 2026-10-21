@@ -8,6 +8,7 @@ import { $, $$, esc, modal, TASK_COLORS, setHTML, choose } from './ui.js';
 import * as C from './categories.js';
 import * as AC from './accounts.js';
 import * as N from './notify.js';
+import * as W from './weather.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -489,8 +490,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
   const st = ctx.state, s = st.settings, tz = s.tz;
   const now = Date.now();
   const t = task || {
-    id: S.newId('t'), kind: preset.kind || 'generic', title: '', rank: 3,
-    totalMinutes: 600, reading: { pages: 100, startPage: 1, speed: 15, unit: 'pph', labels: 'actual' },
+    id: S.newId('t'), kind: preset.kind || 'generic', title: preset.title || '', rank: 3,
+    totalMinutes: preset.totalMinutes || 600, reading: { pages: 100, startPage: 1, speed: 15, unit: 'pph', labels: 'actual' },
     deadline: preset.deadline || T.atTime(T.addDays(T.dayKey(now, tz), 7), s.bounds.end, tz),
     earliestStart: preset.earliestStart || null,
     chunkMinutes: null, minChunkMinutes: null, maxPerDayMinutes: null, breakMinutes: null,
@@ -809,6 +810,7 @@ export function settingsDialog(ctx) {
   let cats = (s.categories || []).map((c) => ({ ...c }));
   let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
   let projects = (s.projects || []).map((p) => ({ ...p }));
+  let wx = { unit: W.defaultUnit(s.tz), ...(s.weather || {}) };
   let nprofiles = N.profiles(s).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) }));
   const tp = s.timePrefs || S.DEFAULT_SETTINGS.timePrefs;
   const html = `
@@ -826,6 +828,17 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Drag snapping (min)</span><select name="snapMinutes">${[5, 10, 15, 30, 60].map((v) => `<option ${v === s.snapMinutes ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
           <label class="field"><span>Default event length (min)</span><input type="number" name="defaultEventMinutes" min="5" step="5" value="${s.defaultEventMinutes}"></label>
           <label class="field"><span>“Since last event” starts this many minutes after it (0–15)</span><input type="number" name="sinceLastBuffer" min="0" max="15" step="1" value="${s.sinceLastBuffer || 0}"></label>
+          <fieldset class="box"><legend>Analysis (full 24 hours)</legend>
+            <label class="chk"><input type="checkbox" name="sleepAssume" ${s.sleepAssume !== false ? 'checked' : ''}> Count this time as sleep on nights with nothing else in it</label>
+            <div class="row"><input type="time" name="sleepStart" value="${esc(s.sleepStart || '23:00')}" step="900"> <span class="muted">to</span> <input type="time" name="sleepEnd" value="${esc(s.sleepEnd || '07:00')}" step="900"></div>
+          </fieldset>
+          <fieldset class="box wx-box"><legend>Weather</legend>
+            <label class="chk"><input type="checkbox" name="wxOn" ${wx.on ? 'checked' : ''}> Show the forecast at the top of each of the next 14 days</label>
+            <div class="row wx-find-row"><input name="wxPlace" placeholder="City, e.g. Berlin" value="${esc(wx.name || '')}" autocomplete="off"><button type="button" class="btn small wx-find">Find</button><button type="button" class="btn small ghost wx-here">📍 My location</button></div>
+            <div class="wx-results small">${wx.lat != null ? `Forecast for <b>${esc(wx.name || 'your location')}</b>` : '<span class="muted">Choose a place first.</span>'}</div>
+            <label class="field"><span>Temperature in</span><select name="wxUnit"><option value="C" ${wx.unit !== 'F' ? 'selected' : ''}>°C — Celsius</option><option value="F" ${wx.unit === 'F' ? 'selected' : ''}>°F — Fahrenheit</option></select></label>
+            <p class="muted small" style="margin:0">Forecasts from Open-Meteo (free, no account). Only the place's coordinates are sent.</p>
+          </fieldset>
         </div>
       </section>
       <section data-pane="1" hidden>
@@ -1028,6 +1041,31 @@ export function settingsDialog(ctx) {
       sel.value = nprofiles.some((p) => p.id === cur) ? cur : nprofiles[0]?.id;
     });
     drawProfiles();
+    // Weather place: search by name, or use this device's location
+    const wxShow = (h) => setHTML($('.wx-results', dlg), h);
+    const pick = (pl) => { wx = { ...wx, name: pl.name, lat: pl.lat, lon: pl.lon }; f.wxOn.checked = true; f.wxPlace.value = pl.name; wxShow(`Forecast for <b>${esc(pl.name)}</b>`); };
+    const wxFind = async () => {
+      const q = f.wxPlace.value.trim(); if (!q) { f.wxPlace.focus(); return; }
+      await W.askPermission();
+      wxShow('<span class="muted">Searching…</span>');
+      try {
+        const res = await W.geocode(q);
+        if (!res.length) return wxShow(`<span class="muted">No place called “${esc(q)}” found.</span>`);
+        if (res.length === 1) return pick(res[0]);
+        wxShow(`<span class="muted">Which one?</span> ${res.map((r, i) => `<button type="button" class="link wx-pl" data-i="${i}">${esc(r.name)}</button>`).join(' · ')}`);
+        $$('.wx-pl', dlg).forEach((b) => (b.onclick = () => pick(res[+b.dataset.i])));
+      } catch (e) { wxShow(`<span class="muted">${esc(e.message)}</span>`); }
+    };
+    $('.wx-find', dlg).onclick = wxFind;
+    f.wxPlace.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); wxFind(); } });
+    $('.wx-here', dlg).onclick = async () => {
+      if (!navigator.geolocation) return wxShow('<span class="muted">This browser can\'t share its location — search for a city instead.</span>');
+      await W.askPermission();
+      wxShow('<span class="muted">Finding your location…</span>');
+      navigator.geolocation.getCurrentPosition((p) => pick({ name: `My location (${p.coords.latitude.toFixed(2)}, ${p.coords.longitude.toFixed(2)})`, lat: +p.coords.latitude.toFixed(3), lon: +p.coords.longitude.toFixed(3) }),
+        () => wxShow('<span class="muted">Location not available — search for a city instead.</span>'), { timeout: 10000, maximumAge: 3600000 });
+    };
+    f.wxOn.addEventListener('change', () => { if (f.wxOn.checked) { W.askPermission(); if (wx.lat == null) f.wxPlace.focus(); } });
     $('.add-nprof', dlg).onclick = () => { nprofiles.push({ id: N.newProfileId('profile'), name: 'New profile', rules: [{ method: 'popup', minutes: 10 }] }); drawProfiles(); };
     $('.add-period', dlg).onclick = () => { periods.push({ id: 'p-' + Math.random().toString(36).slice(2, 8), name: 'New period', rules: [{ days: [1, 2, 3, 4, 5], start: s.bounds.end, end: '21:00' }] }); drawPeriods(); };
     const drawCats = () => {
@@ -1148,6 +1186,8 @@ export function settingsDialog(ctx) {
         breakMinutes: Math.max(0, +f.breakMinutes.value || 0),
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
         sinceLastBuffer: Math.max(0, Math.min(15, Math.round(+f.sinceLastBuffer.value || 0))),
+        weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
+        sleepAssume: f.sleepAssume.checked, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
         dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),
         travelMinutes: Math.max(0, +f.travelMinutes.value || 0), repeatHorizonDays: Math.max(7, +f.repeatHorizonDays.value || 28),
         pomodoro: { work: Math.max(5, +f.pomoWork.value || 25), rest: Math.max(1, +f.pomoRest.value || 5) }, learnSpeed: f.learnSpeed.checked,

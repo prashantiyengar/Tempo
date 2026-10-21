@@ -92,6 +92,25 @@ export function compute(items, windows, tz) {
   return { days, totals };
 }
 
+// "Full 24 hours": count a nightly block (default 23:00–07:00) as sleep, but only on nights when nothing else
+// (an event or a task session) is in that block — if you logged the night yourself, your entry counts instead.
+export const SLEEP_GROUP = { key: 'sleep', label: '😴 Sleep (assumed)', color: '#7b8db0' };
+export function assumedSleep(occ, from, to, s) {
+  const tz = s.tz, a = s.sleepStart || '23:00', b = s.sleepEnd || '07:00';
+  const blocks = []; let nights = 0, skipped = 0;
+  for (let k = T.addDays(T.dayKey(from, tz), -1); T.dayStart(k, tz) < to; k = T.addDays(k, 1)) {
+    const st = T.atTime(k, a, tz);
+    let en = T.atTime(k, b, tz);
+    if (en <= st) en = T.atTime(T.addDays(k, 1), b, tz);
+    if (en <= from || st >= to) continue;
+    if (occ.some((it) => it.end > st && it.start < en)) { skipped++; continue; }
+    nights++;
+    blocks.push({ start: Math.max(st, from), end: Math.min(en, to) });
+  }
+  return { blocks, nights, skipped, from: a, to: b };
+}
+export const sleepItems = (sl) => sl.blocks.map((x) => ({ start: x.start, end: x.end, group: SLEEP_GROUP.key, prio: 2, title: 'Sleep (assumed)', kind: 'sleep', uid: 'sleep:' + x.start }));
+
 export function groupOf(it, by, ctx) {
   const s = ctx.settings;
   if (by === 'category') {
@@ -147,7 +166,7 @@ const fmtG = (m) => (m < 60 ? `${Math.round(m)} min` : fmtH(m));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 
 // ---------------- rendering ----------------
-export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
+export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep = null }) {
   const tz = settings.tz;
   const { totals, days } = data;
   const occupied = totals.available - totals.free - totals.gaps;
@@ -224,7 +243,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
     }
     const list = Object.entries(merged).sort((a, b) => b[1].m - a[1].m);
     if (!list.length) return '';
-    return `<ul class="an-items">${list.map(([t, r]) => `<li><span class="an-it-k">${r.kind === 'chunk' ? 'Task' : 'Event'}</span><span class="an-it-t">${esc(t)}</span><span class="an-it-n">${r.kind === 'chunk' ? `${r.n} session${r.n === 1 ? '' : 's'}` : r.n > 1 ? `${r.n}×` : ''}</span><span class="an-it-h">${fmtH(r.m)}</span></li>`).join('')}</ul>`;
+    return `<ul class="an-items">${list.map(([t, r]) => `<li><span class="an-it-k">${r.kind === 'chunk' ? 'Task' : r.kind === 'sleep' ? 'Assumed' : 'Event'}</span><span class="an-it-t">${esc(t)}</span><span class="an-it-n">${r.kind === 'chunk' ? `${r.n} session${r.n === 1 ? '' : 's'}` : r.n > 1 ? `${r.n}×` : ''}</span><span class="an-it-h">${fmtH(r.m)}</span></li>`).join('')}</ul>`;
   };
   const rows = shown.map((k) => {
     const m = meta(k);
@@ -251,10 +270,21 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo }) {
       </div>
       <p class="muted small an-sub">${esc(rangeInfo.label)}: ${esc(T.format(rangeInfo.from, tz, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: settings.h12 }))} – ${esc(T.format(rangeInfo.to - 1, tz, { weekday: 'short', day: 'numeric', month: 'short' }))} · ${esc(scopeNote(opts.scope, settings))}${taskMin ? '' : ''}</p>
     </div>
+    ${opts.scope === 'full' ? sleepNote(sleep, settings) : ''}
     ${tiles}
     <section class="an-card"><h3>Where the time goes</h3>${bar}${legend}${gapsNote}</section>
     <section class="an-card"><h3>Per day</h3>${n ? chart : '<p class="muted">No days in range.</p>'}${n ? legend : ''}</section>
     <section class="an-card"><h3>Breakdown</h3>${table}<p class="muted small">Overlapping items are counted once. Events marked “free”, declined invitations${settings.allDayBlocks ? '' : ' and all-day events'} don't count as occupied. Hidden calendars are left out.</p></section>`;
+}
+
+function sleepNote(sl, s) {
+  const on = s.sleepAssume !== false;
+  const ctl = `<span class="sl-ctl"><label class="chk"><input type="checkbox" data-sleep="on" ${on ? 'checked' : ''}> Assume sleep</label>
+    <input type="time" data-sleep="start" value="${esc(s.sleepStart || '23:00')}" step="900" aria-label="Sleep from"> – <input type="time" data-sleep="end" value="${esc(s.sleepEnd || '07:00')}" step="900" aria-label="Sleep until"></span>`;
+  if (!on) return `<div class="an-note sleep-note"><p class="small">😴 Sleep isn't assumed: nights without entries count as free time. ${ctl}</p></div>`;
+  const n = sl?.nights || 0, k = sl?.skipped || 0;
+  return `<div class="an-note sleep-note"><p class="small">😴 <b>Assumption:</b> ${esc(s.sleepStart || '23:00')}–${esc(s.sleepEnd || '07:00')} counts as sleep on ${n} night${n === 1 ? '' : 's'} with nothing else in that time${k ? `; ${k} night${k === 1 ? '' : 's'} with an event or task there ${k === 1 ? 'uses' : 'use'} your entries instead` : ''}.
+    Change the hours or turn this off here (also in Settings → General). ${ctl}</p></div>`;
 }
 
 function scopeNote(scope, s) {

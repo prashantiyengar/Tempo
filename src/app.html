@@ -24,8 +24,9 @@
       </div>
       <div id="mini" class="mini"></div>
       <section class="side-sec">
-        <div class="sec-head"><span>Tasks</span><button class="icon-btn sm" id="btn-resched" title="Re-plan task sessions now">⟲</button></div>
+        <div class="sec-head"><span class="side-tabs" role="tablist"><button type="button" data-st="tasks" class="on" role="tab">Tasks</button><button type="button" data-st="later" role="tab" title="Things to schedule later">Later <b id="later-n"></b></button></span><button class="icon-btn sm" id="btn-resched" title="Re-plan task sessions now">⟲</button></div>
         <div id="task-list" class="task-list"></div>
+        <div id="later-list" class="later-list" hidden></div>
       </section>
       <section class="side-sec">
         <div class="sec-head"><span>Calendars</span></div>
