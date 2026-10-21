@@ -109,7 +109,13 @@ export function assumedSleep(occ, from, to, s) {
   }
   return { blocks, nights, skipped, from: a, to: b };
 }
-export const sleepItems = (sl) => sl.blocks.map((x) => ({ start: x.start, end: x.end, group: SLEEP_GROUP.key, prio: 2, title: 'Sleep (assumed)', kind: 'sleep', uid: 'sleep:' + x.start }));
+// Which group assumed sleep is counted in: the category you picked (when grouping by category), otherwise its own.
+export function sleepGroup(s, by) {
+  const c = s.sleepCategory && (s.categories || []).find((x) => x.id === s.sleepCategory);
+  if (c && by === 'category') return { key: 'cat:' + c.id, label: `${c.icon ? c.icon + ' ' : ''}${c.name}`, color: c.color };
+  return c ? { ...SLEEP_GROUP, color: c.color } : SLEEP_GROUP;
+}
+export const sleepItems = (sl, group = SLEEP_GROUP) => sl.blocks.map((x) => ({ start: x.start, end: x.end, group: group.key, prio: 2, title: 'Sleep (assumed)', kind: 'sleep', uid: 'sleep:' + x.start }));
 
 export function groupOf(it, by, ctx) {
   const s = ctx.settings;
@@ -277,13 +283,18 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
     <section class="an-card"><h3>Breakdown</h3>${table}<p class="muted small">Overlapping items are counted once. Events marked “free”, declined invitations${settings.allDayBlocks ? '' : ' and all-day events'} don't count as occupied. Hidden calendars are left out.</p></section>`;
 }
 
+export function sleepCatOptions(s) {
+  const esc2 = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return `<option value="">😴 Sleep (its own group)</option>${(s.categories || []).map((c) => `<option value="${esc2(c.id)}" ${s.sleepCategory === c.id ? 'selected' : ''}>${esc2((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}`;
+}
 function sleepNote(sl, s) {
   const on = s.sleepAssume !== false;
   const ctl = `<span class="sl-ctl"><label class="chk"><input type="checkbox" data-sleep="on" ${on ? 'checked' : ''}> Assume sleep</label>
-    <input type="time" data-sleep="start" value="${esc(s.sleepStart || '23:00')}" step="900" aria-label="Sleep from"> – <input type="time" data-sleep="end" value="${esc(s.sleepEnd || '07:00')}" step="900" aria-label="Sleep until"></span>`;
+    <input type="time" data-sleep="start" value="${esc(s.sleepStart || '23:00')}" step="900" aria-label="Sleep from"> – <input type="time" data-sleep="end" value="${esc(s.sleepEnd || '07:00')}" step="900" aria-label="Sleep until">
+    <label class="sl-cat">counts as <select data-sleep="cat" aria-label="Category for assumed sleep">${sleepCatOptions(s)}</select></label></span>`;
   if (!on) return `<div class="an-note sleep-note"><p class="small">😴 Sleep isn't assumed: nights without entries count as free time. ${ctl}</p></div>`;
   const n = sl?.nights || 0, k = sl?.skipped || 0;
-  return `<div class="an-note sleep-note"><p class="small">😴 <b>Assumption:</b> ${esc(s.sleepStart || '23:00')}–${esc(s.sleepEnd || '07:00')} counts as sleep on ${n} night${n === 1 ? '' : 's'} with nothing else in that time${k ? `; ${k} night${k === 1 ? '' : 's'} with an event or task there ${k === 1 ? 'uses' : 'use'} your entries instead` : ''}.
+  return `<div class="an-note sleep-note"><p class="small">😴 <b>Assumption:</b> ${esc(s.sleepStart || '23:00')}–${esc(s.sleepEnd || '07:00')} counts as sleep${(() => { const c = s.sleepCategory && (s.categories || []).find((x) => x.id === s.sleepCategory); return c ? ` (category ${esc(c.name)})` : ''; })()} on ${n} night${n === 1 ? '' : 's'} with nothing else in that time${k ? `; ${k} night${k === 1 ? '' : 's'} with an event or task there ${k === 1 ? 'uses' : 'use'} your entries instead` : ''}.
     Change the hours or turn this off here (also in Settings → General). ${ctl}</p></div>`;
 }
 

@@ -8,6 +8,7 @@ import { $, $$, esc, modal, TASK_COLORS, setHTML, choose } from './ui.js';
 import * as C from './categories.js';
 import * as AC from './accounts.js';
 import * as N from './notify.js';
+import * as A from './analysis.js';
 import * as W from './weather.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -831,6 +832,7 @@ export function settingsDialog(ctx) {
           <fieldset class="box"><legend>Analysis (full 24 hours)</legend>
             <label class="chk"><input type="checkbox" name="sleepAssume" ${s.sleepAssume !== false ? 'checked' : ''}> Count this time as sleep on nights with nothing else in it</label>
             <div class="row"><input type="time" name="sleepStart" value="${esc(s.sleepStart || '23:00')}" step="900"> <span class="muted">to</span> <input type="time" name="sleepEnd" value="${esc(s.sleepEnd || '07:00')}" step="900"></div>
+            <label class="field"><span>Counts as category</span><select name="sleepCategory">${A.sleepCatOptions(s)}</select></label>
           </fieldset>
           <fieldset class="box wx-box"><legend>Weather</legend>
             <label class="chk"><input type="checkbox" name="wxOn" ${wx.on ? 'checked' : ''}> Show the forecast at the top of each of the next 14 days</label>
@@ -1187,7 +1189,7 @@ export function settingsDialog(ctx) {
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
         sinceLastBuffer: Math.max(0, Math.min(15, Math.round(+f.sinceLastBuffer.value || 0))),
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
-        sleepAssume: f.sleepAssume.checked, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
+        sleepAssume: f.sleepAssume.checked, sleepCategory: f.sleepCategory.value || null, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
         dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),
         travelMinutes: Math.max(0, +f.travelMinutes.value || 0), repeatHorizonDays: Math.max(7, +f.repeatHorizonDays.value || 28),
         pomodoro: { work: Math.max(5, +f.pomoWork.value || 25), rest: Math.max(1, +f.pomoRest.value || 5) }, learnSpeed: f.learnSpeed.checked,

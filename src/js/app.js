@@ -2121,7 +2121,11 @@ async function renderAnalysisView(seq) {
   let sleep = null;
   if (o.scope === 'full' && s.sleepAssume !== false) {
     sleep = A.assumedSleep(occ, rng.from, rng.to, s);
-    if (sleep.blocks.length) { occ.push(...A.sleepItems(sleep)); groups[A.SLEEP_GROUP.key] = { ...A.SLEEP_GROUP, contains: new Set(['Sleep (assumed)']) }; }
+    if (sleep.blocks.length) {
+      const sg = A.sleepGroup(s, o.by);
+      occ.push(...A.sleepItems(sleep, sg));
+      (groups[sg.key] ||= { ...sg, contains: new Set() }).contains.add('Sleep (assumed)');
+    }
   }
   const data = A.compute(occ, wins, z);
   for (const k of days) data.days[k] ||= { available: 0, free: 0, groups: {} };
@@ -2131,7 +2135,7 @@ async function renderAnalysisView(seq) {
   bindMode(root);
   $$('[data-sleep]', root).forEach((c) => (c.onchange = async () => {
     const k = c.dataset.sleep;
-    if (k === 'on') s.sleepAssume = c.checked; else if (c.value) s[k === 'start' ? 'sleepStart' : 'sleepEnd'] = c.value;
+    if (k === 'on') s.sleepAssume = c.checked; else if (k === 'cat') s.sleepCategory = c.value || null; else if (c.value) s[k === 'start' ? 'sleepStart' : 'sleepEnd'] = c.value;
     await E.persist(st(), ['settings']); render();
   }));
   $$('[data-o]', root).forEach((c) => {
@@ -2228,7 +2232,7 @@ function pageSummary(days, items, hours = null) {
     return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.kind === 'chunk' ? it.task.title : (it.title || ''), kind: it.kind, uid: it.key };
   });
   const wins = hours ? S.windows(from, to, hours.rules, z) : A.scopeWindows(o.scope, from, to, s);
-  if (!hours && o.scope === 'full' && s.sleepAssume !== false) { const sl = A.assumedSleep(occ, from, to, s); occ.push(...A.sleepItems(sl)); groups[A.SLEEP_GROUP.key] = A.SLEEP_GROUP; }
+  if (!hours && o.scope === 'full' && s.sleepAssume !== false) { const sl = A.assumedSleep(occ, from, to, s); const sg = A.sleepGroup(s, o.by); occ.push(...A.sleepItems(sl, sg)); groups[sg.key] ||= sg; }
   const data = A.compute(occ, wins, z);
   const scopeName = hours ? hours.label : (A.SCOPES[o.scope] || (s.periods || []).find((p) => 'period:' + p.id === o.scope)?.name || '');
   let busiest = null;
