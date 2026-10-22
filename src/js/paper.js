@@ -79,11 +79,23 @@ function weatherBox(s, now) {
 }
 
 // use: { groups: [{label, color, m}], occupied, free, available, busiest: {k, m} | null, scope }
-export function renderPaper({ r, s, use, now = Date.now(), signId = null }) {
+export const PERIODS = {
+  week: { label: 'Week', noun: 'week', this: 'this week', de: 'der Woche', ed: 'Wochenausgabe', cur: 'Ausgabe zur Wochenmitte' },
+  fortnight: { label: 'Two weeks', noun: 'fortnight', this: 'these two weeks', de: 'der zwei Wochen', ed: 'Doppelausgabe', cur: 'Laufende Doppelausgabe' },
+  month: { label: 'Month', noun: 'month', this: 'this month', de: 'des Monats', ed: 'Monatsausgabe', cur: 'Ausgabe zur Monatsmitte' },
+  quarter: { label: 'Quarter', noun: 'quarter', this: 'this quarter', de: 'des Quartals', ed: 'Quartalsausgabe', cur: 'Laufende Quartalsausgabe' },
+  year: { label: 'Year', noun: 'year', this: 'this year', de: 'des Jahres', ed: 'Jahresausgabe', cur: 'Laufende Jahresausgabe' },
+};
+
+// extras: { orn: {left, right, top, motto}, joke: {text, source, link}, quote: {text, by} } — picture and online
+// horoscope are filled in afterwards (they load from the network) into .np-pic and .np-horo-live.
+export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [] }) {
   const z = s.tz;
-  const rand = rng(r.reviewWeek);
+  const P = PERIODS[period] || PERIODS.week;
+  const rand = rng(r.reviewWeek + period);
   const de = (ms, o) => new Intl.DateTimeFormat('de-DE', { timeZone: z, ...o }).format(ms);
-  const wkEndK = T.addDays(r.reviewWeek, 6);
+  const wkEndK = T.dayKey(r.weekEnd - 1, z);
+  const nr = period === 'week' || period === 'fortnight' ? isoWeek(r.reviewWeek) : period === 'month' ? +r.reviewWeek.slice(5, 7) : period === 'quarter' ? `Q${Math.floor((+r.reviewWeek.slice(5, 7) - 1) / 3) + 1}` : r.reviewWeek.slice(0, 4);
   const top = use.groups[0], second = use.groups[1];
   const share = top && use.occupied ? Math.round((top.m / use.occupied) * 100) : 0;
   const finished = [...r.completed.map((t) => ({ title: t.title, kind: 'task' })), ...r.doneEvents.map((e) => ({ title: e.title, kind: 'event', when: e.start }))];
@@ -95,10 +107,10 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null }) {
   const many = /[^s]s$/i.test(topName.trim()); // "Uncategorized tasks take…", "Work takes…"
   const v = (one, more) => (many ? more : one);
   const lead = !top
-    ? { kicker: 'Zeitgeschehen', h: pick(rand, ['A quiet week on the calendar', 'Calm before the storm?', 'The week the calendar took a break']), sub: 'Hardly anything was scheduled — the editors suspect a holiday, or an unusually good hiding place.' }
+    ? { kicker: 'Zeitgeschehen', h: pick(rand, [`A quiet ${P.noun} on the calendar`, 'Calm before the storm?', `The ${P.noun} the calendar took a break`]), sub: 'Hardly anything was scheduled — the editors suspect a holiday, or an unusually good hiding place.' }
     : share >= 45
-      ? { kicker: 'Zeitgeschehen', h: pick(rand, [`${topName} ${v('rules', 'rule')} the week`, `All eyes on ${topName}`, `${topName} ${v('takes', 'take')} the lion's share`]), sub: `${share}% of all occupied time went to ${topName} — ${fmtH(top.m)} in total.` }
-      : { kicker: 'Zeitgeschehen', h: second ? pick(rand, [`Neck and neck: ${topName} ${v('edges', 'edge')} out ${second.label}`, `A balanced week, led by ${topName}`]) : `${topName} ${v('leads', 'lead')} the week`, sub: `${fmtH(top.m)} for ${topName}${second ? `, ${fmtH(second.m)} for ${second.label}` : ''}.` };
+      ? { kicker: 'Zeitgeschehen', h: pick(rand, [`${topName} ${v('rules', 'rule')} the ${P.noun}`, `All eyes on ${topName}`, `${topName} ${v('takes', 'take')} the lion's share`]), sub: `${share}% of all occupied time went to ${topName} — ${fmtH(top.m)} in total.` }
+      : { kicker: 'Zeitgeschehen', h: second ? pick(rand, [`Neck and neck: ${topName} ${v('edges', 'edge')} out ${second.label}`, `A balanced ${P.noun}, led by ${topName}`]) : `${topName} ${v('leads', 'lead')} the ${P.noun}`, sub: `${fmtH(top.m)} for ${topName}${second ? `, ${fmtH(second.m)} for ${second.label}` : ''}.` };
   const busyTxt = use.busiest ? ` The busiest day was ${T.format(T.dayStart(use.busiest.k, z), z, { weekday: 'long' })}, with ${fmtH(use.busiest.m)} spoken for.` : '';
   const leadBody = top
     ? `Of ${fmtH(use.available)} ${esc(use.scope)}, ${fmtH(use.occupied)} were occupied and ${fmtH(use.free)} stayed free.${busyTxt} ${use.groups.length > 2 ? `Further down the ranking: ${use.groups.slice(2, 5).map((g) => `${esc(g.label)} (${dur(g.m)})`).join(', ')}.` : ''}`
@@ -108,8 +120,8 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null }) {
   // ---- business section: getting things done
   const comp = r.sum.completion;
   const bizH = !sessions && !finished.length ? 'Production halted — or just not recorded'
-    : comp != null && comp >= 85 ? pick(rand, ['Record output: plans delivered almost to the letter', 'Productivity soars', 'A banner week for getting things done'])
-      : comp != null && comp < 50 ? pick(rand, ['Output slumps as plans slip', 'Turbulent week on the to-do markets', 'Analysts see room for improvement'])
+    : comp != null && comp >= 85 ? pick(rand, ['Record output: plans delivered almost to the letter', 'Productivity soars', `A banner ${P.noun} for getting things done`])
+      : comp != null && comp < 50 ? pick(rand, ['Output slumps as plans slip', `Turbulent ${P.noun} on the to-do markets`, 'Analysts see room for improvement'])
         : pick(rand, ['Solid results, a few slips', 'Steady growth in finished work', 'Mostly on track']);
   const bizBody = `${plural(sessions, 'task session')} done${r.sum.partial ? ` (${r.sum.partial} of them partly)` : ''}${comp != null ? `, ${comp}% of what was planned` : ''}. ${finished.length ? `${plural(finished.length, 'item')} finished for good.` : 'Nothing was finished for good — yet.'} ${r.sum.slipped ? `${plural(r.sum.slipped, 'session')} slipped: ${r.sum.skipped} deleted, ${r.sum.undone} marked undone, ${r.sum.moved} pushed later.` : 'Nothing slipped.'}`;
 
@@ -117,8 +129,13 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null }) {
   const books = r.reading.length
     ? `<h3 class="np-h3">${esc(pick(rand, [`Reader devours ${pagesTotal} pages`, `${pagesTotal} pages later`, `Bookworm alert: ${pagesTotal} pages`]))}</h3>
        <ul class="np-list">${r.reading.map((x) => `<li><i>${esc(x.t.title)}</i> — <b>${x.pages} pages</b>${x.minutes ? ` in ${dur(x.minutes)}` : ''}${x.total ? ` <span class="np-mute">(of ${x.total})</span>` : ''}</li>`).join('')}</ul>`
-    : `<h3 class="np-h3">The library stayed quiet</h3><p class="np-small">No reading sessions this week. Add a reading plan with 📖 and this column fills itself.</p>`;
-  const evRows = r.allEvents.slice(0, 14).map((e) => `<li><span class="np-mute">${esc(T.format(e.allDay ? T.dayStart(e.startKey, z) : e.start, z, { weekday: 'short' }))}${e.allDay ? '' : ' ' + esc(T.fmtTime(e.start, z, s.h12))}</span> ${e.evDone ? '✓ ' : ''}${esc(e.title)}</li>`).join('');
+    : `<h3 class="np-h3">The library stayed quiet</h3><p class="np-small">No reading sessions ${P.this}. Add a reading plan with 📖 and this column fills itself.</p>`;
+  // events grouped by day
+  const MAXEV = period === 'week' ? 30 : 60;
+  const byDay = new Map();
+  for (const e of r.allEvents.slice(0, MAXEV)) { const k = e.allDay ? e.startKey : T.dayKey(e.start, z); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(e); }
+  const evRows = [...byDay.entries()].map(([k, list]) => `<div class="np-day"><div class="np-dayh">${esc(T.format(T.dayStart(k, z), z, period === 'week' ? { weekday: 'long', day: 'numeric' } : { weekday: 'short', day: 'numeric', month: 'short' }))}</div>
+    <ul class="np-list np-plain">${list.map((e) => `<li><span class="np-mute">${e.allDay ? 'all day' : esc(T.fmtTime(e.start, z, s.h12))}</span> ${e.evDone ? '✓ ' : ''}${esc(e.title)}</li>`).join('')}</ul></div>`).join('');
 
   const hz = horoscope(r, s, use, signId);
   const days = Array.from({ length: 7 }, (_, i) => T.addDays(T.dayKey(r.nextFrom, z), i));
@@ -127,8 +144,10 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null }) {
 
   return `<article class="np">
     <header class="np-mast">
-      <div class="np-ears"><span>Nr. ${isoWeek(r.reviewWeek)} · ${r.isCurrent ? 'Ausgabe zur Wochenmitte' : 'Wochenausgabe'}</span><span>Preis: 168 Stunden</span></div>
-      <h1 class="np-title">Der Zeitplan</h1>
+      <div class="np-ears"><span>Nr. ${nr} · ${r.isCurrent ? P.cur : P.ed}</span><span>Preis: ${Math.round((r.weekEnd - r.from) / T.HOUR)} Stunden</span></div>
+      ${extras.orn ? `<div class="np-crown">${extras.orn.top}</div>` : ''}
+      <div class="np-titlerow">${extras.orn ? extras.orn.left : ''}<h1 class="np-title">Der Zeitplan</h1>${extras.orn ? extras.orn.right : ''}</div>
+      ${extras.orn ? `<div class="np-motto"><span>${esc(extras.orn.motto)}</span></div>` : ''}
       <div class="np-tag">Wochenzeitung für Ihre Zeit · ${esc(de(r.from, { day: 'numeric', month: 'long' }))} – ${esc(de(T.dayStart(wkEndK, z), { day: 'numeric', month: 'long', year: 'numeric' }))}</div>
     </header>
     <div class="np-grid">
@@ -148,18 +167,33 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null }) {
         <span class="np-kicker">Horoskop</span>
         <h3 class="np-h3">${hz.sign[2]} ${esc(hz.sign[1])}</h3>
         <p class="np-small">${esc(hz.text)}</p>
+        <div class="np-horo-live"></div>
         <label class="np-sign">Your sign: <select data-np="sign"><option value="">${esc(signOfDate(T.dayKey(now, z))[1])} (season)</option>${SIGNS.map((x) => `<option value="${x[0]}" ${signId === x[0] ? 'selected' : ''}>${x[2]} ${x[1]}</option>`).join('')}</select></label>
       </aside>
       <section class="np-biz">
         <span class="np-kicker">Wirtschaft</span>
         <h3 class="np-h2">${esc(bizH)}</h3>
         <p>${esc(bizBody)}</p>
-        ${finished.length ? `<h4 class="np-h4">Finished this week</h4><ul class="np-list np-check">${finished.slice(0, 12).map((x) => `<li>✓ ${esc(x.title)}${x.kind === 'event' ? ' <span class="np-mute">(event)</span>' : ''}</li>`).join('')}${finished.length > 12 ? `<li class="np-mute">…and ${finished.length - 12} more</li>` : ''}</ul>` : ''}
+        ${finished.length ? `<h4 class="np-h4">Finished ${P.this}</h4><ul class="np-list np-check">${finished.slice(0, 12).map((x) => `<li>✓ ${esc(x.title)}${x.kind === 'event' ? ' <span class="np-mute">(event)</span>' : ''}</li>`).join('')}${finished.length > 12 ? `<li class="np-mute">…and ${finished.length - 12} more</li>` : ''}</ul>` : ''}
       </section>
       <section class="np-feuil">
         <span class="np-kicker">Feuilleton</span>
         ${books}
-        ${s.reviewAllEvents ? `<h4 class="np-h4">Termine der Woche</h4>${evRows ? `<ul class="np-list">${evRows}</ul>` : '<p class="np-small">No events.</p>'}${r.allEvents.length > 14 ? `<p class="np-small np-mute">…and ${r.allEvents.length - 14} more.</p>` : ''}${r.skippedFrequent ? `<p class="np-small np-mute">Left out: ${plural(r.skippedFrequent, 'event')} repeating daily or 3+ times a week.</p>` : ''}` : ''}
+        ${s.reviewAllEvents ? `<h4 class="np-h4">Termine ${P.de}</h4>${evRows ? `<div class="np-days">${evRows}</div>` : '<p class="np-small">No events.</p>'}${r.allEvents.length > MAXEV ? `<p class="np-small np-mute">…and ${r.allEvents.length - MAXEV} more.</p>` : ''}${r.skippedFrequent ? `<p class="np-small np-mute">Left out: ${plural(r.skippedFrequent, 'event')} repeating daily or 3+ times a week.</p>` : ''}` : ''}
+      </section>
+      <section class="np-pic-s">
+        <span class="np-kicker">Aus dem Archiv</span>
+        <div class="np-pic"><p class="np-small np-mute">Fetching a picture from the 19th century…</p></div>
+        <div class="np-pic-tools"><button type="button" class="link np-pic-new">Another picture</button><span ${pics.length ? '' : 'hidden'}> · <button type="button" class="link np-pic-hist">Picture archive (${pics.length})</button></span></div>
+      </section>
+      <section class="np-words">
+        <span class="np-kicker">Gedanke des Tages</span>
+        ${extras.quote ? `<blockquote class="np-quote">“${esc(extras.quote.text)}”<cite>— ${esc(extras.quote.by)}</cite></blockquote>` : ''}
+        <button type="button" class="link np-quote-new">Another thought</button>
+        <hr>
+        <span class="np-kicker">Zum Schmunzeln</span>
+        ${extras.joke ? `<p class="np-joke">${esc(extras.joke.text)}</p>${extras.joke.link ? `<p class="np-small np-mute">From <a href="${esc(extras.joke.link)}" target="_blank" rel="noopener">${esc(extras.joke.source)}</a></p>` : ''}` : ''}
+        <button type="button" class="link np-joke-new">Another joke</button>
       </section>
       <section class="np-out">
         <span class="np-kicker">Ausblick</span>
@@ -170,10 +204,18 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null }) {
       </section>
       <section class="np-corr">
         <span class="np-kicker">Korrekturen</span>
-        ${r.slips.length ? `<p class="np-small">In our planning of last week, the following ${r.slips.length === 1 ? 'item' : 'items'} did not appear as printed: ${r.slips.slice(-6).map((x) => `“${esc(x.title || 'a session')}” ${kindTxt[x.kind]}${x.by ? ` by ${dur(x.by)}` : ''}`).join('; ')}. We regret the error.</p>` : '<p class="np-small">No corrections this week. The editors are insufferable about it.</p>'}
+        ${r.slips.length ? `<p class="np-small">In our planning ${P.this === 'this week' ? 'of the week' : 'of ' + P.this.replace('this ', 'the ').replace('these', 'the')}, the following ${r.slips.length === 1 ? 'item' : 'items'} did not appear as printed: ${r.slips.slice(-6).map((x) => `“${esc(x.title || 'a session')}” ${kindTxt[x.kind]}${x.by ? ` by ${dur(x.by)}` : ''}`).join('; ')}. We regret the error.</p>` : '<p class="np-small">No corrections this week. The editors are insufferable about it.</p>'}
         ${r.sum.overrun ? `<p class="np-small">Also: ${plural(r.sum.overrun, 'session')} ran over time.</p>` : ''}
       </section>
     </div>
+    ${pics.length ? `<details class="np-archive"><summary>Bildarchiv — pictures shown before (${pics.length})</summary><ol>${pics.map((x) => `<li><a href="${esc(x.page)}" target="_blank" rel="noopener">${esc(x.title)}</a>${x.year ? ` <span class="np-mute">(${x.year})</span>` : ''} <span class="np-mute">· ${esc(T.format(x.at, z, { day: 'numeric', month: 'short' }))}</span></li>`).join('')}</ol></details>` : ''}
     <footer class="np-foot">Der Zeitplan is written by Tempo from your calendar · not affiliated with any real newspaper</footer>
   </article>`;
+}
+
+export function pictureHTML(pic) {
+  if (!pic) return '<p class="np-small np-mute">The archive is closed today — no picture could be fetched. Try “Another picture”.</p>';
+  const cap = [pic.artist, pic.year].filter(Boolean).join(', ');
+  return `<figure class="np-figure"><a href="${esc(pic.page)}" target="_blank" rel="noopener"><img src="${esc(pic.thumb)}" alt="${esc(pic.title)}" loading="lazy" referrerpolicy="no-referrer"></a>
+    <figcaption><b>${esc(pic.title)}</b>${cap ? ` — ${esc(cap)}` : ''}${pic.desc && pic.desc !== pic.title ? `<br><span class="np-mute">${esc(pic.desc)}</span>` : ''}<br><span class="np-mute">Wikimedia Commons · ${esc(pic.license)}</span></figcaption></figure>`;
 }

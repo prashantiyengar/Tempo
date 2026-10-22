@@ -18,6 +18,7 @@ import { createApi, AI_PROMPT } from './api.js';
 import * as N from './notify.js';
 import * as W from './weather.js';
 import * as NP from './paper.js';
+import * as XT from './extras.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -192,6 +193,7 @@ async function render() {
   const seq = ++app.renderSeq;
   document.body.classList.toggle('analysis-mode', app.view === 'analysis');
   document.body.classList.toggle('review-mode', app.view === 'review');
+  if (app.view !== 'review') app.npVisit = null; // a new picture, joke and quote next time the paper is opened
   if (app.view === 'analysis') { renderToolbar(); renderSidebar(); return renderAnalysisView(seq); }
   if (app.view === 'review') { renderToolbar(); renderSidebar(); return renderPaperView(seq); }
   const r = range();
@@ -220,7 +222,7 @@ function renderToolbar() {
   let title;
   $$('#view-seg button, #bottombar button').forEach((b) => b.classList.toggle('on', b.dataset.view === app.view));
   if (app.view === 'analysis') { $('#range-title').textContent = 'Time analysis'; return; }
-  if (app.view === 'review') { const wk = paperWeek(); $('#range-title').textContent = innerWidth < 600 ? 'Weekly review' : `Review · ${T.format(T.dayStart(wk, z), z, { month: 'short', day: 'numeric' })} – ${T.format(T.dayStart(T.addDays(wk, 6), z), z, { month: 'short', day: 'numeric' })}`; return; }
+  if (app.view === 'review') { const wk = paperWeek(); $('#range-title').textContent = innerWidth < 600 ? 'Weekly review' : `Review · ${T.format(T.dayStart(wk, z), z, { month: 'short', day: 'numeric' })} – ${T.format(T.dayStart(T.addDays(paperEnd(wk), -1), z), z, { month: 'short', day: 'numeric', ...(paperPeriod() === 'year' || paperPeriod() === 'quarter' ? { year: 'numeric' } : {}) })}`; return; }
   const { days, monthKey } = range();
   if (app.view === 'month') title = T.format(T.dayStart(monthKey, z), z, { month: 'long', year: 'numeric' });
   else if (app.view === 'day') title = T.format(T.dayStart(days[0], z), z, innerWidth < 600 ? { weekday: 'short', day: 'numeric', month: 'short' } : { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -1847,22 +1849,44 @@ function openReview() {
   storeSet({ lastReviewWeek: T.startOfWeek(T.dayKey(Date.now(), tz()), set().weekStart) });
   app.view = 'review'; app.paperWeek = null; closeDrawer(); render();
 }
-// The week the review shows: chosen with ‹ › — by default last week on its first two days, otherwise this week.
-function paperWeek() {
-  if (app.paperWeek) return app.paperWeek;
-  const z = tz(), today = T.dayKey(Date.now(), z), wk = T.startOfWeek(today, set().weekStart);
-  return T.daysBetween(wk, today) <= 1 ? T.addDays(wk, -7) : wk;
+// The period the review shows (week, two weeks, month, quarter, year), chosen with ‹ ›. By default the current
+// one — or, on its first two days, the one that just ended.
+const paperPeriod = () => (NP.PERIODS[set().paperPeriod] ? set().paperPeriod : 'week');
+function periodStartOf(k, per) {
+  const ws = set().weekStart, { y, m } = T.parseKey(k);
+  if (per === 'week') return T.startOfWeek(k, ws);
+  if (per === 'fortnight') { const w = T.startOfWeek(k, ws); return Math.floor(T.daysBetween('2024-01-01', w) / 7) % 2 ? T.addDays(w, -7) : w; }
+  if (per === 'month') return T.keyOf(y, m, 1);
+  if (per === 'quarter') return T.keyOf(y, Math.floor((m - 1) / 3) * 3 + 1, 1);
+  return T.keyOf(y, 1, 1);
 }
+function periodShift(k, per, n) {
+  if (per === 'week') return T.addDays(k, 7 * n);
+  if (per === 'fortnight') return T.addDays(k, 14 * n);
+  if (per === 'month') return T.addMonths(k, n);
+  if (per === 'quarter') return T.addMonths(k, 3 * n);
+  return T.addMonths(k, 12 * n);
+}
+function paperWeek() {
+  const per = paperPeriod();
+  if (app.paperWeek && app.paperPer === per) return app.paperWeek;
+  const z = tz(), today = T.dayKey(Date.now(), z), cur = periodStartOf(today, per);
+  return T.daysBetween(cur, today) <= 1 ? periodShift(cur, per, -1) : cur;
+}
+const paperEnd = (k) => periodShift(k, paperPeriod(), 1);
 async function renderPaperView(seq) {
-  const s = set(), z = tz(), wk = paperWeek();
+  const s = set(), z = tz(), wk = paperWeek(), end = paperEnd(wk), per = paperPeriod();
   const view = $('#view');
   if (!$('.np-wrap', view)) setHTML(view, '<div class="np-wrap"><p class="muted">Printing…</p></div>');
-  const days = Array.from({ length: 14 }, (_, i) => T.addDays(wk, i - 7));
+  // a new picture, joke, quote and masthead ornaments for each visit (kept while you stay on the page)
+  const visit = app.npVisit ||= { orn: XT.ornaments(), quote: XT.randomQuote(), joke: { text: XT.JOKES[Math.floor(Math.random() * XT.JOKES.length)] }, pic: undefined, horo: {} };
+  const days = [];
+  for (let k = T.addDays(wk, -7); k < end; k = T.addDays(k, 1)) days.push(k);
   const items = await collectItems(days);
   if (seq !== app.renderSeq) return;
-  const from = T.dayStart(wk, z), to = T.dayStart(T.addDays(wk, 7), z);
+  const from = T.dayStart(wk, z), to = T.dayStart(end, z);
   const events = items.filter((it) => it.kind !== 'chunk');
-  const r = RV.weeklyReview(st(), Date.now(), { weekKey: wk, events });
+  const r = RV.weeklyReview(st(), Date.now(), { weekKey: wk, endKey: end, events });
   // time use over the extended day (day bounds + evenings/weekends), by category
   const actx = { settings: s, gmeta: st().gmeta, calColor };
   const groups = {};
@@ -1878,15 +1902,78 @@ async function renderPaperView(seq) {
     occupied: data.totals.available - data.totals.free - (data.totals.gaps || 0), free: data.totals.free, available: data.totals.available, busiest,
     scope: `between ${s.overflowBounds.start} and ${s.overflowBounds.end}${r.isCurrent ? ' so far' : ''}`,
   };
-  const tools = `<div class="np-tools"><label class="chk"><input type="checkbox" data-np="all" ${s.reviewAllEvents ? 'checked' : ''}> Include all events <span class="muted small">(not ones repeating daily or 3+ times a week)</span></label>
-    <span class="grow"></span><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
+  const hsrc = s.horoscopeSource || 'community';
+  const tools = `<div class="np-tools">
+    <label class="field inline np-per"><span>Period</span><select data-np="period">${Object.entries(NP.PERIODS).map(([k, v]) => `<option value="${k}" ${k === per ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
+    <label class="chk"><input type="checkbox" data-np="all" ${s.reviewAllEvents ? 'checked' : ''}> Include all events <span class="muted small">(not ones repeating daily or 3+ times a week)</span></label>
+    <span class="grow"></span><button type="button" class="btn small ghost np-hsrc" title="Where the horoscope text comes from">Horoscope: ${hsrc === 'off' ? 'off' : hsrc === 'apiverve' ? 'APIVerve' : 'online'}</button><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
   const root = $('.np-wrap', view) || view.appendChild(el('<div class="np-wrap"></div>'));
-  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null }));
+  const scrollY = root.scrollTop;
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory() }));
+  root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
+  $('[data-np=period]', root).onchange = async (e) => { s.paperPeriod = e.target.value; app.paperWeek = null; await E.persist(st(), ['settings']); render(); };
   $('[data-np=sign]', root).onchange = async (e) => { s.zodiac = e.target.value || null; await E.persist(st(), ['settings']); render(); };
   $('.np-hist', root).onclick = () => { app.view = 'analysis'; app.anMode = 'history'; render(); };
   $('.np-print', root).onclick = () => window.print();
+  $('.np-hsrc', root).onclick = horoscopeSourceDialog;
   $$('.rv-open', root).forEach((b) => (b.onclick = () => editTask(st().tasks.find((t) => t.id === b.dataset.task))));
+  // picture: fetched once per visit; "Another picture" fetches a new one
+  const showPic = () => { const box = $('.np-pic', root); if (box && visit.pic !== undefined) setHTML(box, NP.pictureHTML(visit.pic)); };
+  const loadPic = () => { visit.pic = undefined; const box = $('.np-pic', root); if (box) setHTML(box, '<p class="np-small np-mute">Fetching a picture from the 19th century…</p>'); return (visit.picLoad = XT.fetchPicture().then((p) => { visit.pic = p; if (app.npVisit === visit && app.view === 'review') render(); })); };
+  if (visit.pic === undefined && !visit.picLoad) loadPic(); else showPic();
+  $('.np-pic-new', root).onclick = () => { visit.picLoad = null; loadPic(); };
+  $('.np-pic-hist', root)?.addEventListener('click', () => { const d = $('.np-archive', root); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
+  // joke: an online one when available (once per visit), otherwise from our own list
+  const setJoke = (j) => { visit.joke = j; const host = $('.np-joke', root); if (host) { host.textContent = j.text; const src = host.nextElementSibling?.classList.contains('np-small') ? host.nextElementSibling : null; if (src) src.remove(); if (j.link) host.insertAdjacentHTML('afterend', `<p class="np-small np-mute">From <a href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.source)}</a></p>`); } };
+  if (!visit.jokeLoaded) { visit.jokeLoaded = true; XT.getJoke().then((j) => { if (app.npVisit === visit) setJoke(j); }); }
+  $('.np-joke-new', root).onclick = () => XT.getJoke().then(setJoke);
+  $('.np-quote-new', root).onclick = () => { visit.quote = XT.randomQuote(); const q = $('.np-quote', root); if (q) setHTML(q, `“${esc(visit.quote.text)}”<cite>— ${esc(visit.quote.by)}</cite>`); };
+  // horoscope paragraph from an online source (for the sign shown)
+  const sign = (NP.SIGNS.find((x) => x[0] === s.zodiac) || NP.signOfDate(T.dayKey(Date.now(), z)))[0];
+  const showHoro = (h) => {
+    const box = $('.np-horo-live', root); if (!box) return;
+    if (hsrc === 'off') return setHTML(box, '');
+    setHTML(box, h ? `<p class="np-small np-horo-txt"><b>Today, from the astrologers:</b> ${esc(h.text)}</p><p class="np-small np-mute">Source: <a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.source)}</a></p>`
+      : `<p class="np-small np-mute">Today's horoscope from the web couldn't be loaded. <button type="button" class="link np-hsrc2">Choose a source</button></p>`);
+    $('.np-hsrc2', box)?.addEventListener('click', horoscopeSourceDialog);
+  };
+  if (hsrc !== 'off') {
+    const hk = `${sign}|${hsrc}`;
+    if (hk in visit.horo) showHoro(visit.horo[hk]);
+    else XT.fetchHoroscope(sign, { apiKey: hsrc === 'apiverve' ? apiverveKey() : '' }).then((h) => { visit.horo[hk] = h; if (app.npVisit === visit) showHoro(h); });
+  }
+}
+function apiverveKey() { try { return localStorage.getItem('tempo:apiverveKey') || ''; } catch { return ''; } }
+const HORO_ORIGINS = { community: 'https://horoscope-app-api.vercel.app/*', apiverve: 'https://api.apiverve.com/*' };
+async function horoscopeSourceDialog() {
+  const cur = set().horoscopeSource || 'community';
+  const r = await modal(`<form class="choice"><h2>Horoscope source</h2>
+      <p class="muted small">Besides the playful forecast from your own plan, the paper can print today's horoscope for your sign from the web.</p>
+      <label class="chk"><input type="radio" name="src" value="community" ${cur === 'community' ? 'checked' : ''}> Horoscope API (free, no account) — texts from horoscope.com. May not work in the phone app.</label>
+      <label class="chk"><input type="radio" name="src" value="apiverve" ${cur === 'apiverve' ? 'checked' : ''}> APIVerve (free account) — paste your API key:</label>
+      <input name="key" placeholder="APIVerve API key" value="${esc(apiverveKey())}" autocomplete="off" spellcheck="false" style="width:100%">
+      <p class="muted small">Get a free key at apiverve.com. The key stays on this device.</p>
+      <label class="chk"><input type="radio" name="src" value="off" ${cur === 'off' ? 'checked' : ''}> Off — just the forecast from my plan</label>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
+  (dlg, close) => {
+    const f = $('form', dlg);
+    f.key.addEventListener('input', () => { f.querySelector('[value=apiverve]').checked = true; });
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const src = f.src.value;
+      // the extension needs permission to reach the chosen service (asked here, while you click)
+      if (HORO_ORIGINS[src] && ext?.permissions?.request) { try { await ext.permissions.request({ origins: [HORO_ORIGINS[src]] }); } catch { /* the web app has no permissions */ } }
+      close({ src, key: f.key.value.trim() });
+    };
+  }, { cls: 'narrow' });
+  if (!r) return;
+  set().horoscopeSource = r.src;
+  try { if (r.key) localStorage.setItem('tempo:apiverveKey', r.key); else localStorage.removeItem('tempo:apiverveKey'); } catch { /* ignore */ }
+  try { localStorage.removeItem('tempo:npHoroscope'); } catch { /* ignore */ }
+  if (app.npVisit) app.npVisit.horo = {};
+  await E.persist(st(), ['settings']);
+  render();
 }
 // On the first day of the week, offer the review once.
 async function maybeOfferReview() {
@@ -2406,7 +2493,7 @@ function slideIn() {
 }
 
 function nav(dir) {
-  if (app.view === 'review') { app.paperWeek = T.addDays(paperWeek(), 7 * dir); return render(); }
+  if (app.view === 'review') { app.paperWeek = periodShift(paperWeek(), paperPeriod(), dir); app.paperPer = paperPeriod(); return render(); }
   if (app.view === 'day') app.cursor = T.addDays(app.cursor, dir);
   else if (app.view === '3day') app.cursor = T.addDays(app.cursor, 3 * dir);
   else if (app.view === 'week') app.cursor = T.addDays(app.cursor, 7 * dir);

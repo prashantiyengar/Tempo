@@ -770,3 +770,34 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 }
 @media (max-width: 1600px) { #view-seg button { padding: 6px 9px; } .topbar { gap: 8px; } }
 @media (max-width: 760px) { .np-tools .chk .muted { display: none; } .np-tools .grow { display: none; } }
+/* newspaper: ornaments, picture, quote, joke, events by day, archive */
+.np-crown { display: flex; justify-content: center; margin: 4px 0 -4px; }
+.np-crown svg { width: 74px; height: 38px; color: var(--np-ink); }
+.np-titlerow { display: flex; align-items: center; justify-content: center; gap: 14px; }
+.np-titlerow .np-title { margin: 2px 0; }
+.np-orn { width: 64px; height: 64px; color: var(--np-ink); flex: none; }
+.np-orn.flip { transform: scaleX(-1); }
+.np-motto { display: flex; justify-content: center; margin: 0 0 6px; }
+.np-motto span { position: relative; font-style: italic; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; padding: 2px 22px; border-top: 1px solid var(--np-rule); border-bottom: 1px solid var(--np-rule); }
+.np-motto span::before, .np-motto span::after { content: '❦'; position: absolute; top: 50%; transform: translateY(-50%); font-style: normal; font-size: 13px; }
+.np-motto span::before { left: 3px; } .np-motto span::after { right: 3px; transform: translateY(-50%) scaleX(-1); }
+.np-pic-s { grid-column: 1 / 4; border-top: 1px solid var(--np-hair); }
+.np-words { grid-column: 4 / 7; border-top: 1px solid var(--np-hair); border-left: 1px solid var(--np-hair); padding-left: 20px !important; }
+.np-figure { margin: 4px 0 6px; }
+.np-figure img { display: block; width: 100%; max-height: 420px; object-fit: contain; background: #e9e3d6; filter: grayscale(1) contrast(1.05); border: 1px solid var(--np-hair); }
+.np-figure figcaption { font-size: 12.5px; margin-top: 5px; line-height: 1.35; }
+.np-pic-tools { font-size: 12px; }
+.np-quote { margin: 4px 0 6px; font-size: 19px; line-height: 1.35; font-style: italic; }
+.np-quote cite { display: block; font-size: 12.5px; font-style: normal; margin-top: 6px; color: var(--np-mute); }
+.np-joke { font-size: 15px; margin: 4px 0; }
+.np-days { columns: 2 180px; column-gap: 18px; }
+.np-day { break-inside: avoid; margin-bottom: 6px; }
+.np-dayh { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--np-hair); padding-bottom: 1px; margin-bottom: 2px; }
+.np-plain { list-style: none; padding-left: 0; margin: 0; font-size: 13.5px; }
+.np-archive { margin-top: 10px; font-size: 13px; }
+.np-archive summary { cursor: pointer; font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.np-archive ol { columns: 2 260px; margin: 6px 0 0; padding-left: 22px; }
+.np-archive a, .np-figure a, .np-horo-live a, .np-words a { color: inherit; }
+.np-horo-txt { border-left: 2px solid var(--np-rule); padding-left: 8px; }
+.np-per select { padding: 3px 6px; }
+@media (max-width: 760px) { .np-orn { width: 38px; height: 38px; } .np-crown svg { width: 54px; height: 28px; } .np-titlerow { gap: 6px; } .np-per span { display: none; } }

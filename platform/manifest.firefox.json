@@ -54,6 +54,8 @@
     "https://*.icloud.com/*",
     "https://api.open-meteo.com/*",
     "https://geocoding-api.open-meteo.com/*",
+    "https://horoscope-app-api.vercel.app/*",
+    "https://api.apiverve.com/*",
     "https://*/*"
   ]
 }

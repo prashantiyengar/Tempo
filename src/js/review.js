@@ -102,15 +102,19 @@ export function renderHistory(state, weeks = 8, now = Date.now()) {
 // ---------- Weekly review ----------
 // `events`: calendar event items (as the views draw them) for the review week and the week before (the week before
 // is only used to tell how often a repeating event occurs).
-export function weeklyReview(state, now = Date.now(), { weekKey = null, events = [] } = {}) {
+// `endKey` (exclusive) lets the review cover any period: a week (default), a month, a quarter…
+export function weeklyReview(state, now = Date.now(), { weekKey = null, endKey = null, events = [] } = {}) {
   const s = state.settings, z = s.tz;
   const thisWeek = T.startOfWeek(T.dayKey(now, z), s.weekStart);
   // On the first days of a week, review the week that just ended.
   const reviewWeek = weekKey || (T.daysBetween(thisWeek, T.dayKey(now, z)) <= 1 ? T.addDays(thisWeek, -7) : thisWeek);
-  const weekEnd = T.dayStart(T.addDays(reviewWeek, 7), z);
+  const weekEnd = T.dayStart(endKey || T.addDays(reviewWeek, 7), z);
   const from = T.dayStart(reviewWeek, z), to = Math.min(now, weekEnd);
   const sum = summarize(state, from, to);
-  const nextFrom = T.dayStart(reviewWeek >= thisWeek ? T.addDays(reviewWeek, 7) : thisWeek, z), nextTo = nextFrom + 7 * T.DAY;
+  const current = from <= now && now < weekEnd;
+  const isWeek = !endKey || T.daysBetween(reviewWeek, endKey) === 7;
+  // outlook: the next week (for a week under review), else the coming 7 days
+  const nextFrom = current ? (isWeek ? weekEnd : T.dayStart(T.addDays(T.dayKey(now, z), 1), z)) : T.dayStart(from >= T.dayStart(thisWeek, z) ? T.addDays(reviewWeek, 7) : thisWeek, z), nextTo = nextFrom + 7 * T.DAY;
   const active = state.tasks.filter((t) => !t.archived);
   const completed = state.tasks.filter((t) => !t.repeat && S.progress(t, now).pct >= 100 && (t.frozen || []).some((c) => c.end >= from && c.end < to));
   const inWeek = (e) => (e.allDay ? T.dayStart(e.startKey, z) : e.start) >= from && (e.allDay ? T.dayStart(e.startKey, z) : e.start) < weekEnd;
@@ -153,7 +157,7 @@ export function weeklyReview(state, now = Date.now(), { weekKey = null, events =
   const load = {};
   for (const t of active) for (const c of S.sessions(t)) if (c.start >= nextFrom && c.start < nextTo && c.kind !== 'done') { const k = T.dayKey(c.start, z); load[k] = (load[k] || 0) + c.minutes; }
   const slips = sum.records.filter((r) => ['skipped', 'undone', 'moved'].includes(r.kind));
-  return { reviewWeek, from, to, weekEnd, sum, completed, doneEvents, allEvents, skippedFrequent, reading, risks, load, slips, nextFrom, isCurrent: reviewWeek === thisWeek };
+  return { reviewWeek, from, to, weekEnd, sum, completed, doneEvents, allEvents, skippedFrequent, reading, risks, load, slips, nextFrom, isCurrent: current };
 }
 
 export function renderReview(state, now = Date.now()) {
