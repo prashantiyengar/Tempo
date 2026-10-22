@@ -801,3 +801,46 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .np-horo-txt { border-left: 2px solid var(--np-rule); padding-left: 8px; }
 .np-per select { padding: 3px 6px; }
 @media (max-width: 760px) { .np-orn { width: 38px; height: 38px; } .np-crown svg { width: 54px; height: 28px; } .np-titlerow { gap: 6px; } .np-per span { display: none; } }
+/* ---------- Goals ---------- */
+.goals { overflow-y: auto; flex: 1; padding: 14px 20px 32px; }
+.goals-mode #btn-today, .goals-mode .navs { visibility: hidden; }
+.g-intro { margin: 0 0 6px; max-width: 900px; }
+.g-h { font-size: 15px; margin: 16px 0 8px; display: flex; align-items: center; gap: 10px; }
+.g-mtoggle { display: inline-flex; border: 1px solid var(--line2); border-radius: 7px; overflow: hidden; font-weight: 400; }
+.g-mtoggle button { border: 0; background: var(--panel); padding: 3px 9px; font-size: 12px; cursor: pointer; color: var(--ink2); }
+.g-mtoggle button.on { background: var(--accent); color: var(--accent-ink); }
+.g-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+.g-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.g-year { grid-column: 1 / -1; }
+.g-card header { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.g-card h3 { margin: 0; font-size: 15px; }
+.g-count { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--accent); }
+.g-trips { list-style: none; margin: 0; padding: 6px 8px; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); border-radius: 8px; font-size: 12.5px; display: flex; flex-direction: column; gap: 3px; }
+.g-trips li { display: flex; gap: 8px; justify-content: space-between; align-items: baseline; }
+.g-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.g-row { display: flex; align-items: center; gap: 6px; padding: 3px 2px; border-radius: 6px; }
+.g-row:hover { background: var(--off); }
+.g-rank { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--off); font-size: 11px; font-weight: 700; display: grid; place-items: center; color: var(--ink2); }
+.g-row:nth-child(1) .g-rank { background: var(--accent); color: var(--accent-ink); }
+.g-text { flex: 1; min-width: 0; text-align: left; border: 0; background: none; font: inherit; font-size: 13.5px; color: var(--ink); cursor: text; padding: 2px 0; overflow-wrap: anywhere; }
+.g-row.done .g-text { text-decoration: line-through; color: var(--muted); }
+.g-edit { flex: 1; min-width: 0; font: inherit; font-size: 13.5px; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.g-acts { display: inline-flex; flex: none; opacity: .55; }
+.g-row:hover .g-acts, .g-row:focus-within .g-acts { opacity: 1; }
+.g-acts .icon-btn[disabled] { opacity: .25; cursor: default; }
+.g-add { display: flex; gap: 6px; margin-top: 2px; }
+.g-add input { flex: 1; min-width: 0; padding: 6px 9px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; }
+@media (max-width: 760px) { .goals { padding: 10px 10px 90px; } .g-acts { opacity: 1; } #bottombar button span { font-size: 10px; } }
+/* newspaper: picture at the top, centred; goals */
+.np-top { max-width: 680px; margin: 0 auto 14px; padding-bottom: 12px; border-bottom: 1px solid var(--np-hair); text-align: center; grid-column: auto; border-top: 0; }
+.np-top .np-figure { margin: 0; }
+.np-top .np-figure img { width: auto; max-width: 100%; height: auto; max-height: 480px; margin: 0 auto; object-fit: contain; }
+.np-top .np-figure figcaption { text-align: center; }
+.np-top .np-pic-tools { margin-top: 4px; }
+.np-top .np-pic-tools .np-kicker { margin: 0 6px 0 0; }
+.np-goals { grid-column: 1 / 4; border-top: 1px solid var(--np-hair); }
+.np-goal-list { margin: 4px 0 8px; padding-left: 0; list-style: none; font-size: 14px; }
+.np-goal-list li { margin: 2px 0; }
+.np-gdone { color: var(--np-mute); text-decoration: line-through; }
+@media (max-width: 1600px) { #view-seg button { padding: 6px 8px; font-size: 13px; } .topbar { gap: 6px; } }
+@media (max-width: 1250px) { #view-seg button { padding: 5px 6px; font-size: 12.5px; } }

@@ -11,6 +11,7 @@ import * as E from './engine.js';
 import * as EV from './events.js';
 import * as C from './categories.js';
 import * as N from './notify.js';
+import * as GL from './goals.js';
 import { parseTask, resolveDate } from './parse.js';
 
 export function createApi(h) {
@@ -102,6 +103,19 @@ export function createApi(h) {
     const days = [];
     for (let k = T.dayKey(from, tz()); T.dayStart(k, tz()) < to; k = T.addDays(k, 1)) days.push(k);
     return (await h.collectItems(days)).filter((it) => it.kind === 'event' && it.end > from && it.start < to);
+  }
+  function goalKey(p) {
+    const z = h.tz(), today = T.dayKey(Date.now(), z), v = String(p || '').toLowerCase().trim();
+    const wk = T.startOfWeek(today, h.set().weekStart ?? 1);
+    if (/this week/.test(v)) return GL.weekKey(wk);
+    if (/next week/.test(v)) return GL.weekKey(T.addDays(wk, 7));
+    if (/year|12 months/.test(v)) return GL.YEAR;
+    if (/this month/.test(v)) return GL.monthKey(today);
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+    const mi = months.findIndex((m) => v.startsWith(m));
+    if (mi >= 0) { const { y, m } = T.parseKey(today); const yy = mi + 1 <= m ? y + 1 : y; return GL.monthKey(T.keyOf(yy, mi + 1, 1)); }
+    if (/^\d{4}-\d{2}/.test(v)) return GL.monthKey(v);
+    return err('Unknown "period". Use "this week", "next week", "this month", a month name, or "year".');
   }
   function profileByName(n) {
     return N.profiles(h.set()).find((p) => p.id === n || p.name.toLowerCase() === String(n).toLowerCase()) || err(`No notification profile "${n}". Profiles: ${N.profiles(h.set()).map((p) => p.name).join(', ')}.`);
@@ -212,6 +226,19 @@ export function createApi(h) {
       return (await h.freeSlots(from, to, +(a.minMinutes || 15), a.within || 'work hours')).map((s) => ({ start: fmt(s.start), end: fmt(s.end), minutes: Math.round((s.end - s.start) / T.MIN) }));
     } },
     listCalendars: { about: 'Calendars you can add events to.', run: () => (h.st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)).map((c) => ({ id: c.id, name: c.summary, primary: !!c.primary })) },
+    listGoals: { about: 'Ranked goals: this week, next week, this month, the next months, and the next 12 months.', run: () => {
+      const z = h.tz(), sec = GL.sections(h.set(), T.dayKey(Date.now(), z)).list;
+      return sec.map((x) => ({ period: x.title || T.format(T.dayStart(x.month, z), z, { month: 'long', year: 'numeric' }), goals: GL.list(h.set(), x.key).map((g, i) => ({ rank: i + 1, text: g.text, done: !!g.done })) }));
+    } },
+    addGoal: { params: 'period ("this week" | "next week" | "this month" | a month name like "November" | "year"), text', about: 'Add a goal (ranked last).', write: true, run: async (a) => {
+      const key = goalKey(a.period); const text = String(a.text || '').trim() || err('Missing "text".');
+      h.set().goals = GL.add(h.set(), key, text); await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, to: a.period };
+    } },
+    markGoal: { params: 'period, goal (text or rank), done? (default true)', about: 'Tick a goal off as reached (or reopen it).', write: true, run: async (a) => {
+      const key = goalKey(a.period), l = GL.list(h.set(), key);
+      const g = (/^\d+$/.test(String(a.goal)) ? l[+a.goal - 1] : l.find((x) => x.text.toLowerCase().includes(String(a.goal || '').toLowerCase()))) || err(`No goal "${a.goal}".`);
+      h.set().goals = GL.update(h.set(), key, g.id, { done: a.done !== false }); await E.persist(h.st(), ['settings']); h.render?.(); return { goal: g.text, done: a.done !== false };
+    } },
     listLater: { about: 'Notes in the "Later" list: things to schedule, but not yet.', run: () => (h.set().later || []).map((x) => ({ id: x.id, text: x.text, added: fmt(x.created) })) },
     addLater: { params: 'text', about: 'Add a note to the "Later" list.', write: true, run: async (a) => {
       const text = String(a.text || '').trim().slice(0, 300) || err('Missing "text".');

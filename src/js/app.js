@@ -19,6 +19,7 @@ import * as N from './notify.js';
 import * as W from './weather.js';
 import * as NP from './paper.js';
 import * as XT from './extras.js';
+import * as GL from './goals.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -88,7 +89,7 @@ function notify(title, message) {
 // ======================================================================================
 function range(view = app.view, cursor = app.cursor) {
   const ws = set().weekStart;
-  if (view === 'analysis' || view === 'review') view = 'week';
+  if (view === 'analysis' || view === 'review' || view === 'goals') view = 'week';
   if (view === 'day') return { days: [cursor] };
   if (view === '3day') return { days: [cursor, T.addDays(cursor, 1), T.addDays(cursor, 2)] };
   if (view === 'week') { const a = set().weekView === 'rolling' ? cursor : T.startOfWeek(cursor, ws); return { days: Array.from({ length: 7 }, (_, i) => T.addDays(a, i)) }; }
@@ -196,6 +197,8 @@ async function render() {
   if (app.view !== 'review') app.npVisit = null; // a new picture, joke and quote next time the paper is opened
   if (app.view === 'analysis') { renderToolbar(); renderSidebar(); return renderAnalysisView(seq); }
   if (app.view === 'review') { renderToolbar(); renderSidebar(); return renderPaperView(seq); }
+  document.body.classList.toggle('goals-mode', app.view === 'goals');
+  if (app.view === 'goals') { renderToolbar(); renderSidebar(); return renderGoalsView(seq); }
   const r = range();
   renderToolbar();
   renderSidebar();
@@ -222,6 +225,7 @@ function renderToolbar() {
   let title;
   $$('#view-seg button, #bottombar button').forEach((b) => b.classList.toggle('on', b.dataset.view === app.view));
   if (app.view === 'analysis') { $('#range-title').textContent = 'Time analysis'; return; }
+  if (app.view === 'goals') { $('#range-title').textContent = 'Goals'; return; }
   if (app.view === 'review') { const wk = paperWeek(); $('#range-title').textContent = innerWidth < 600 ? 'Weekly review' : `Review · ${T.format(T.dayStart(wk, z), z, { month: 'short', day: 'numeric' })} – ${T.format(T.dayStart(T.addDays(paperEnd(wk), -1), z), z, { month: 'short', day: 'numeric', ...(paperPeriod() === 'year' || paperPeriod() === 'quarter' ? { year: 'numeric' } : {}) })}`; return; }
   const { days, monthKey } = range();
   if (app.view === 'month') title = T.format(T.dayStart(monthKey, z), z, { month: 'long', year: 'numeric' });
@@ -468,6 +472,7 @@ async function saveLater(list, label) {
   const before = laterList();
   set().later = list;
   await E.persist(st(), ['settings']);
+  syncSharedSoon();
   if (label) pushUndo(label, async () => { set().later = before; await E.persist(st(), ['settings']); renderLater(); });
   renderLater();
 }
@@ -1909,7 +1914,8 @@ async function renderPaperView(seq) {
     <span class="grow"></span><button type="button" class="btn small ghost np-hsrc" title="Where the horoscope text comes from">Horoscope: ${hsrc === 'off' ? 'off' : hsrc === 'apiverve' ? 'APIVerve' : 'online'}</button><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
   const root = $('.np-wrap', view) || view.appendChild(el('<div class="np-wrap"></div>'));
   const scrollY = root.scrollTop;
-  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory() }));
+  const ng = GL.forPeriod(s, end, paperEnd(end), per);
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: { cur: GL.forPeriod(s, wk, end, per), next: ng } }));
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
   $('[data-np=period]', root).onchange = async (e) => { s.paperPeriod = e.target.value; app.paperWeek = null; await E.persist(st(), ['settings']); render(); };
@@ -1919,7 +1925,13 @@ async function renderPaperView(seq) {
   $('.np-hsrc', root).onclick = horoscopeSourceDialog;
   $$('.rv-open', root).forEach((b) => (b.onclick = () => editTask(st().tasks.find((t) => t.id === b.dataset.task))));
   // picture: fetched once per visit; "Another picture" fetches a new one
-  const showPic = () => { const box = $('.np-pic', root); if (box && visit.pic !== undefined) setHTML(box, NP.pictureHTML(visit.pic)); };
+  const showPic = () => {
+    const box = $('.np-pic', root); if (!box || visit.pic === undefined) return;
+    setHTML(box, NP.pictureHTML(visit.pic));
+    // if the image itself won't load, try another one (twice at most per visit)
+    const img = $('img', box);
+    if (img) img.onerror = () => { if ((visit.picFails = (visit.picFails || 0) + 1) <= 2) { visit.picLoad = null; loadPic(); } else setHTML(box, NP.pictureHTML(null)); };
+  };
   const loadPic = () => { visit.pic = undefined; const box = $('.np-pic', root); if (box) setHTML(box, '<p class="np-small np-mute">Fetching a picture from the 19th century…</p>'); return (visit.picLoad = XT.fetchPicture().then((p) => { visit.pic = p; if (app.npVisit === visit && app.view === 'review') render(); })); };
   if (visit.pic === undefined && !visit.picLoad) loadPic(); else showPic();
   $('.np-pic-new', root).onclick = () => { visit.picLoad = null; loadPic(); };
@@ -1975,6 +1987,80 @@ async function horoscopeSourceDialog() {
   await E.persist(st(), ['settings']);
   render();
 }
+// ---------- Goals ----------
+// Shared settings (goals, Later notes…) go to Google a few seconds after the last edit.
+let shareTimer = null;
+function syncSharedSoon() { clearTimeout(shareTimer); shareTimer = setTimeout(() => { if (E.connected(st())) cycle({ sync: false }); }, 2500); }
+async function saveGoals(goals, label) {
+  const before = set().goals || {};
+  set().goals = GL.prune(goals, T.dayKey(Date.now(), tz()));
+  await E.persist(st(), ['settings']);
+  syncSharedSoon();
+  if (label) pushUndo(label, async () => { set().goals = before; await E.persist(st(), ['settings']); render(); });
+  render();
+}
+async function renderGoalsView(seq) {
+  const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
+  const view = $('#view');
+  if (!$('.goals', view)) setHTML(view, '<div class="goals"><p class="muted">Loading…</p></div>');
+  const sec = GL.sections(s, today);
+  const last = sec.list[sec.list.length - 1].to;
+  const items = await collectItems([sec.list[0].from, T.addDays(last, -1)]);
+  if (seq !== app.renderSeq) return;
+  const fmtD = (k) => T.format(T.dayStart(k, z), z, { day: 'numeric', month: 'short' });
+  const monthName = (k) => T.format(T.dayStart(k, z), z, { month: 'long', year: T.parseKey(k).y !== T.parseKey(today).y ? 'numeric' : undefined });
+  const card = (x) => {
+    const goals = GL.list(s, x.key);
+    const trips = GL.travelIn(items, x.kind === 'year' ? today : x.from, x.to, s);
+    const title = x.title || monthName(x.month);
+    const sub = x.kind === 'week' ? `${fmtD(x.from)} – ${fmtD(T.addDays(x.to, -1))}` : x.kind === 'year' ? `${monthName(T.addMonths(sec.thisMonth, 1))} – ${monthName(T.addMonths(sec.thisMonth, 12))}` : x.title ? `${monthName(x.month)} · ${sec.daysLeft} days left` : '';
+    const done = goals.filter((g) => g.done).length;
+    return `<section class="g-card ${x.kind === 'year' ? 'g-year' : ''}" data-key="${esc(x.key)}">
+      <header><h3>${esc(title)}</h3><span class="muted small">${esc(sub)}</span>${goals.length ? `<span class="g-count" title="Reached">${done}/${goals.length}</span>` : ''}</header>
+      ${trips.length ? `<ul class="g-trips">${trips.slice(0, x.kind === 'year' ? 12 : 6).map((t, i) => `<li><span>✈ ${esc(t.title)} <span class="muted">· ${esc(GL.fmtTrip(t, s))}</span></span><button type="button" class="link g-trip-add" data-i="${i}" title="Add a goal for this trip">+ goal</button></li>`).join('')}</ul>` : ''}
+      <ol class="g-list">${goals.map((g, i) => `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
+        <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
+        <button type="button" class="g-text" title="Edit">${esc(g.text)}</button>
+        <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`).join('')}</ol>
+      <form class="g-add"><input name="t" placeholder="${goals.length ? 'Add another goal…' : 'Add a goal…'}" maxlength="200" autocomplete="off" aria-label="Add a goal to ${esc(title)}"><button class="btn small" type="submit">Add</button></form>
+    </section>`;
+  };
+  const weeks = sec.list.filter((x) => x.kind === 'week'), months = sec.list.filter((x) => x.kind === 'month'), year = sec.list.find((x) => x.kind === 'year');
+  const root = $('.goals', view) || view.appendChild(el('<div class="goals"></div>'));
+  const y0 = root.scrollTop;
+  setHTML(root, `<p class="muted small g-intro">Rank goals with ▲▼ (1 = most important) and tick them off when reached. Trips on your calendar are listed as reminders. Goals sync to your other devices and appear in the weekly review.</p>
+    <h2 class="g-h">Weeks</h2><div class="g-grid">${weeks.map(card).join('')}</div>
+    <h2 class="g-h">Months <span class="g-mtoggle"><button type="button" data-m="3" class="${s.goalsMonths === 12 ? '' : 'on'}">Next 3</button><button type="button" data-m="12" class="${s.goalsMonths === 12 ? 'on' : ''}">Next 12</button></span></h2>
+    ${sec.daysLeft <= 14 ? `<p class="muted small">${esc(monthName(sec.thisMonth))} has ${sec.daysLeft} day${sec.daysLeft === 1 ? '' : 's'} left — this week's and next week's goals cover it.</p>` : ''}
+    <div class="g-grid">${months.map(card).join('')}</div>
+    <h2 class="g-h">The year ahead</h2><div class="g-grid">${card(year)}</div>`);
+  root.scrollTop = y0;
+  $$('.g-mtoggle button', root).forEach((b) => (b.onclick = async () => { s.goalsMonths = +b.dataset.m; await E.persist(st(), ['settings']); render(); }));
+  $$('.g-card', root).forEach((c) => {
+    const key = c.dataset.key, x = sec.list.find((q) => q.key === key);
+    const trips = GL.travelIn(items, x.kind === 'year' ? today : x.from, x.to, s);
+    $('.g-add', c).onsubmit = (e) => { e.preventDefault(); const v = e.target.t.value.trim(); if (!v) return; app.goalFocus = key; saveGoals(GL.add(set(), key, v), 'add goal'); };
+    $$('.g-trip-add', c).forEach((b) => (b.onclick = () => { const t = trips[+b.dataset.i]; saveGoals(GL.add(set(), key, `Prepare for ${t.title} (${GL.fmtTrip(t, s)})`), 'add goal'); }));
+    $$('.g-row', c).forEach((r) => {
+      const id = r.dataset.id;
+      $('.g-done', r).onchange = (e) => saveGoals(GL.update(set(), key, id, { done: e.target.checked, doneAt: e.target.checked ? Date.now() : null }), e.target.checked ? 'goal reached' : 'goal reopened');
+      $('.g-up', r).onclick = () => saveGoals(GL.move(set(), key, id, -1));
+      $('.g-down', r).onclick = () => saveGoals(GL.move(set(), key, id, 1));
+      $('.g-del', r).onclick = () => { saveGoals(GL.remove(set(), key, id), 'remove goal'); toast('Goal removed'); };
+      $('.g-text', r).onclick = () => {
+        const g = GL.list(set(), key).find((q) => q.id === id);
+        const inp = el(`<input class="g-edit" maxlength="200">`); inp.value = g.text;
+        $('.g-text', r).replaceWith(inp); inp.focus(); inp.select();
+        let doneEd = false;
+        const finish = (save) => { if (doneEd) return; doneEd = true; const v = inp.value.trim(); if (save && v && v !== g.text) saveGoals(GL.update(set(), key, id, { text: v.slice(0, 200) }), 'edit goal'); else render(); };
+        inp.onkeydown = (e) => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
+        inp.onblur = () => finish(true);
+      };
+    });
+  });
+  if (app.goalFocus) { $(`.g-card[data-key="${CSS.escape(app.goalFocus)}"] .g-add input`, root)?.focus(); app.goalFocus = null; }
+}
+
 // On the first day of the week, offer the review once.
 async function maybeOfferReview() {
   const z = tz(), wk = T.startOfWeek(T.dayKey(Date.now(), z), set().weekStart);
@@ -2580,6 +2666,7 @@ function bindToolbar() {
     else if (k === 'r') refreshFromServer();
     else if (k === 'q') { e.preventDefault(); if (innerWidth < 760) $('#btn-menu').click(); $('#quick-add')?.focus(); }
     else if (k === 'v') openReview();
+    else if (k === 'g') { app.view = 'goals'; render(); }
     else if (k === 'f') finishedEarly();
     else if (k === 'l') fillSinceLast();
     else if (k === 'u') undo();
@@ -2597,7 +2684,7 @@ async function init() {
   setQuickTz(set().tz);
   app.cursor = app.miniCursor = T.dayKey(Date.now(), tz());
   if (innerWidth < 760) app.view = 'day';
-  { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis', 'review'].includes(v)) app.view = v; }
+  { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis', 'review', 'goals'].includes(v)) app.view = v; }
   if (redirect?.ret?.view) { app.view = redirect.ret.view; app.cursor = app.miniCursor = redirect.ret.cursor || app.cursor; }
   if (redirect?.ok) sessionStorage.removeItem('tempo:silentTried');
   if (redirect && !redirect.ok && redirect.kind === 'silent' && redirect.ret?.autoInteractive && ['interaction_required', 'login_required', 'consent_required'].includes(redirect.code)) {

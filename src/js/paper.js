@@ -89,7 +89,7 @@ export const PERIODS = {
 
 // extras: { orn: {left, right, top, motto}, joke: {text, source, link}, quote: {text, by} } — picture and online
 // horoscope are filled in afterwards (they load from the network) into .np-pic and .np-horo-live.
-export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [] }) {
+export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { cur: [], next: [] } }) {
   const z = s.tz;
   const P = PERIODS[period] || PERIODS.week;
   const rand = rng(r.reviewWeek + period);
@@ -138,6 +138,16 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
     <ul class="np-list np-plain">${list.map((e) => `<li><span class="np-mute">${e.allDay ? 'all day' : esc(T.fmtTime(e.start, z, s.h12))}</span> ${e.evDone ? '✓ ' : ''}${esc(e.title)}</li>`).join('')}</ul></div>`).join('');
 
   const hz = horoscope(r, s, use, signId);
+  // ---- goals for this period, and what's next
+  const allG = goals.cur.flatMap((x) => x.list), reached = allG.filter((g) => g.done).length;
+  const gHead = !allG.length ? 'No goals on record'
+    : reached === allG.length ? pick(rand, [`Mission accomplished: all ${allG.length} goals reached`, 'A clean sweep of goals'])
+      : reached * 2 >= allG.length ? `${reached} of ${allG.length} goals reached`
+        : pick(rand, [`Goals in sight: ${reached} of ${allG.length} reached`, `Work in progress: ${reached} of ${allG.length} goals`]);
+  const glist = (x, max = 8) => `<ol class="np-goal-list">${x.list.slice(0, max).map((g) => `<li class="${g.done ? 'np-gdone' : ''}">${g.done ? '✓' : '○'} ${esc(g.text)}</li>`).join('')}</ol>`;
+  const goalsHTML = `<h3 class="np-h3">${esc(gHead)}</h3>
+    ${allG.length ? goals.cur.map((x) => `${goals.cur.length > 1 ? `<h4 class="np-h4">${esc(x.label)}</h4>` : ''}${glist(x)}`).join('') : `<p class="np-small">Set ranked goals for the weeks and months ahead in the <b>Goals</b> tab, and the paper will report on them.</p>`}
+    ${goals.next.length ? `<h4 class="np-h4">Coming up</h4>${goals.next.slice(0, 2).map((x) => `<p class="np-small"><i>${esc(x.label)}:</i> ${x.list.slice(0, 3).map((g, i) => `${i + 1}. ${esc(g.text)}`).join(' · ')}${x.list.length > 3 ? ' …' : ''}</p>`).join('')}` : ''}`;
   const days = Array.from({ length: 7 }, (_, i) => T.addDays(T.dayKey(r.nextFrom, z), i));
   const maxL = Math.max(60, ...Object.values(r.load));
   const kindTxt = { skipped: 'was deleted', undone: 'was marked undone', moved: 'was pushed later' };
@@ -150,6 +160,10 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
       ${extras.orn ? `<div class="np-motto"><span>${esc(extras.orn.motto)}</span></div>` : ''}
       <div class="np-tag">Wochenzeitung für Ihre Zeit · ${esc(de(r.from, { day: 'numeric', month: 'long' }))} – ${esc(de(T.dayStart(wkEndK, z), { day: 'numeric', month: 'long', year: 'numeric' }))}</div>
     </header>
+    <section class="np-pic-s np-top">
+      <div class="np-pic"><p class="np-small np-mute">Fetching a picture from the 19th century…</p></div>
+      <div class="np-pic-tools"><span class="np-kicker">Aus dem Archiv</span> <button type="button" class="link np-pic-new">Another picture</button><span ${pics.length ? '' : 'hidden'}> · <button type="button" class="link np-pic-hist">Picture archive (${pics.length})</button></span></div>
+    </section>
     <div class="np-grid">
       <section class="np-lead">
         <span class="np-kicker">${lead.kicker}</span>
@@ -181,10 +195,9 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         ${books}
         ${s.reviewAllEvents ? `<h4 class="np-h4">Termine ${P.de}</h4>${evRows ? `<div class="np-days">${evRows}</div>` : '<p class="np-small">No events.</p>'}${r.allEvents.length > MAXEV ? `<p class="np-small np-mute">…and ${r.allEvents.length - MAXEV} more.</p>` : ''}${r.skippedFrequent ? `<p class="np-small np-mute">Left out: ${plural(r.skippedFrequent, 'event')} repeating daily or 3+ times a week.</p>` : ''}` : ''}
       </section>
-      <section class="np-pic-s">
-        <span class="np-kicker">Aus dem Archiv</span>
-        <div class="np-pic"><p class="np-small np-mute">Fetching a picture from the 19th century…</p></div>
-        <div class="np-pic-tools"><button type="button" class="link np-pic-new">Another picture</button><span ${pics.length ? '' : 'hidden'}> · <button type="button" class="link np-pic-hist">Picture archive (${pics.length})</button></span></div>
+      <section class="np-goals">
+        <span class="np-kicker">Ziele</span>
+        ${goalsHTML}
       </section>
       <section class="np-words">
         <span class="np-kicker">Gedanke des Tages</span>
@@ -216,6 +229,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
 export function pictureHTML(pic) {
   if (!pic) return '<p class="np-small np-mute">The archive is closed today — no picture could be fetched. Try “Another picture”.</p>';
   const cap = [pic.artist, pic.year].filter(Boolean).join(', ');
-  return `<figure class="np-figure"><a href="${esc(pic.page)}" target="_blank" rel="noopener"><img src="${esc(pic.thumb)}" alt="${esc(pic.title)}" loading="lazy" referrerpolicy="no-referrer"></a>
+  const ar = pic.w && pic.h ? ` width="${pic.w}" height="${pic.h}" style="aspect-ratio:${pic.w} / ${pic.h}"` : '';
+  return `<figure class="np-figure"><a href="${esc(pic.page)}" target="_blank" rel="noopener"><img src="${esc(pic.thumb)}" alt="${esc(pic.title)}"${ar} decoding="async"></a>
     <figcaption><b>${esc(pic.title)}</b>${cap ? ` — ${esc(cap)}` : ''}${pic.desc && pic.desc !== pic.title ? `<br><span class="np-mute">${esc(pic.desc)}</span>` : ''}<br><span class="np-mute">Wikimedia Commons · ${esc(pic.license)}</span></figcaption></figure>`;
 }

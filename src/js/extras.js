@@ -29,10 +29,10 @@ export async function fetchPicture({ fetchFn = fetch, tries = 4 } = {}) {
     const q = new URLSearchParams({ action: 'query', list: 'search', srnamespace: '6', srsearch: pickR(PIC_QUERIES), srlimit: '50', sroffset: String(rnd(4) * 50), format: 'json', origin: '*' });
     let hits;
     try { const r = await fetchFn(`${COMMONS}?${q}`); if (!r.ok) continue; hits = (await r.json())?.query?.search || []; } catch { continue; }
-    hits = hits.filter((h) => /\.(jpe?g|png|gif|tiff?)$/i.test(h.title));
+    hits = hits.filter((h) => /\.(jpe?g|png|gif)$/i.test(h.title)); // TIFF scans make slow, heavy thumbnails
     if (!hits.length) continue;
     const title = pickR(hits).title;
-    const q2 = new URLSearchParams({ action: 'query', titles: title, prop: 'imageinfo', iiprop: 'url|extmetadata|size', iiurlwidth: '720', format: 'json', origin: '*' });
+    const q2 = new URLSearchParams({ action: 'query', titles: title, prop: 'imageinfo', iiprop: 'url|extmetadata|size', iiurlwidth: '960', format: 'json', origin: '*' }); // 960 = a standard Wikimedia thumbnail width
     try {
       const r = await fetchFn(`${COMMONS}?${q2}`); if (!r.ok) continue;
       const page = Object.values((await r.json())?.query?.pages || {})[0];
@@ -42,7 +42,7 @@ export async function fetchPicture({ fetchFn = fetch, tries = 4 } = {}) {
       if (year && (year < 1800 || year > 1910) && i < tries - 1) continue; // keep to the 19th century (and just after)
       const pic = {
         title: strip(meta.ObjectName?.value) || title.replace(/^File:/, '').replace(/\.[a-z]+$/i, '').replace(/_/g, ' '),
-        thumb: ii.thumburl, page: ii.descriptionurl, artist: strip(meta.Artist?.value).slice(0, 80), year,
+        thumb: ii.thumburl, w: ii.thumbwidth || null, h: ii.thumbheight || null, page: ii.descriptionurl, artist: strip(meta.Artist?.value).slice(0, 80), year,
         desc: strip(meta.ImageDescription?.value).slice(0, 220), license: strip(meta.LicenseShortName?.value) || 'Public domain', at: Date.now(),
       };
       remember(pic);
