@@ -486,36 +486,43 @@ function renderLater() {
   const list = laterList();
   const n = $('#later-n'); if (n) n.textContent = list.length ? String(list.length) : '';
   const z = tz();
-  setHTML(box, `<form class="later-add"><input name="t" placeholder="Something to schedule later…" maxlength="300" autocomplete="off" aria-label="Add a note"><button class="btn small" type="submit">Add</button></form>
+  const today = T.dayKey(Date.now(), z);
+  const due = (x) => { if (!x.deadline) return ''; const k = T.dayKey(x.deadline, z), d = T.daysBetween(today, k); return `<span class="later-due ${d < 0 ? 'over' : d <= 3 ? 'soon' : ''}" title="Deadline">by ${esc(T.format(x.deadline, z, { weekday: 'short', day: 'numeric', month: 'short' }))}</span>`; };
+  setHTML(box, `<form class="later-add"><input name="t" placeholder="Something to schedule later…" maxlength="300" autocomplete="off" aria-label="Add a note"><button class="btn small" type="submit">Add</button>
+      <div class="later-more"><label title="How long it will likely take">⏱ <input name="h" type="number" min="0" step="0.25" placeholder="h" aria-label="Hours"></label><label title="Must be done by">by <input name="d" type="date" aria-label="Deadline"></label></div></form>
     ${list.length ? list.map((x) => `<div class="later-row" data-id="${esc(x.id)}">
-      <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="muted small"> · ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span></button>
+      <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="later-meta">${x.minutes ? `<span class="later-dur">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}${due(x)}<span class="muted small">added ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span></span></button>
       <span class="later-acts"><button type="button" class="icon-btn sm l-task" title="Make it a task (Tempo finds the time)">⧉</button><button type="button" class="icon-btn sm l-event" title="Put it on the calendar as an event">📅</button><button type="button" class="icon-btn sm l-del" title="Remove">✕</button></span>
     </div>`).join('') : '<p class="muted small empty">Jot down things you need to schedule, but not right away. Turn one into a task or an event when you\'re ready.</p>'}`);
   $('.later-add', box).onsubmit = async (e) => {
     e.preventDefault();
     const v = e.target.t.value.trim(); if (!v) return;
-    await saveLater([...laterList(), { id: S.newId('l'), text: v.slice(0, 300), created: Date.now() }], `add “${v.slice(0, 30)}” to Later`);
+    const h = parseFloat(e.target.h.value), d = e.target.d.value;
+    await saveLater([...laterList(), { id: S.newId('l'), text: v.slice(0, 300), created: Date.now(), ...(h > 0 ? { minutes: Math.round(h * 60) } : {}), ...(d ? { deadline: T.atTime(d, set().bounds?.end || '17:00', z) } : {}) }], `add “${v.slice(0, 30)}” to Later`);
     $('#later-list .later-add input')?.focus();
   };
   $$('.later-row', box).forEach((r) => {
     const item = laterList().find((x) => x.id === r.dataset.id); if (!item) return;
     const drop = () => saveLater(laterList().filter((x) => x.id !== item.id), `remove “${item.text.slice(0, 30)}” from Later`);
     $('.l-del', r).onclick = () => { drop(); toast('Removed from Later'); };
-    $('.l-task', r).onclick = async () => { closeDrawer(); const before = st().tasks.length; await newTask({ kind: 'generic', title: item.text }); if (st().tasks.length > before) drop(); };
+    $('.l-task', r).onclick = async () => { closeDrawer(); const before = st().tasks.length; await newTask({ kind: 'generic', title: item.text, ...(item.minutes ? { totalMinutes: item.minutes } : {}), ...(item.deadline ? { deadline: item.deadline } : {}) }); if (st().tasks.length > before) drop(); };
     $('.l-event', r).onclick = async () => {
       closeDrawer();
       const start = Math.ceil((Date.now() + 15 * T.MIN) / (15 * T.MIN)) * 15 * T.MIN;
       const n0 = createdEvents;
-      await newEvent({ start, end: start + (set().defaultEventMinutes || 60) * T.MIN, title: item.text });
+      await newEvent({ start, end: start + Math.min(8 * 60, item.minutes || set().defaultEventMinutes || 60) * T.MIN, title: item.text });
       if (createdEvents > n0) drop();
     };
     $('.later-t', r).onclick = async () => {
       const v = await modal(`<form class="choice"><h2>Edit note</h2><textarea name="v" rows="3" maxlength="300" style="width:100%">${esc(item.text)}</textarea>
+        <div class="row"><label class="field"><span>Likely takes (hours)</span><input name="h" type="number" min="0" step="0.25" value="${item.minutes ? +(item.minutes / 60).toFixed(2) : ''}" placeholder="—"></label>
+        <label class="field"><span>Must be done by</span><input name="d" type="date" value="${item.deadline ? T.dayKey(item.deadline, z) : ''}"></label></div>
         <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
-      (dlg, close) => { $('form', dlg).onsubmit = (e) => { e.preventDefault(); close($('[name=v]', dlg).value.trim()); }; setTimeout(() => $('[name=v]', dlg).focus(), 30); }, { cls: 'narrow' });
+      (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); close({ text: f.v.value.trim(), h: parseFloat(f.h.value), d: f.d.value }); }; setTimeout(() => f.v.focus(), 30); }, { cls: 'narrow' });
       if (v == null) return;
-      if (!v) return drop();
-      await saveLater(laterList().map((x) => (x.id === item.id ? { ...x, text: v.slice(0, 300) } : x)), 'edit note');
+      if (!v.text) return drop();
+      const upd = { text: v.text.slice(0, 300), minutes: v.h > 0 ? Math.round(v.h * 60) : undefined, deadline: v.d ? T.atTime(v.d, set().bounds?.end || '17:00', z) : undefined };
+      await saveLater(laterList().map((x) => (x.id === item.id ? { ...x, ...upd } : x)), 'edit note');
     };
   });
 }
@@ -1914,8 +1921,8 @@ async function renderPaperView(seq) {
     <span class="grow"></span><button type="button" class="btn small ghost np-hsrc" title="Where the horoscope text comes from">Horoscope: ${hsrc === 'off' ? 'off' : hsrc === 'apiverve' ? 'APIVerve' : 'online'}</button><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
   const root = $('.np-wrap', view) || view.appendChild(el('<div class="np-wrap"></div>'));
   const scrollY = root.scrollTop;
-  const ng = GL.forPeriod(s, end, paperEnd(end), per);
-  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: { cur: GL.forPeriod(s, wk, end, per), next: ng } }));
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: await paperGoals(wk, end, per, items) }));
+  if (seq !== app.renderSeq) return;
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
   $('[data-np=period]', root).onchange = async (e) => { s.paperPeriod = e.target.value; app.paperWeek = null; await E.persist(st(), ['settings']); render(); };
@@ -1955,6 +1962,29 @@ async function renderPaperView(seq) {
     if (hk in visit.horo) showHoro(visit.horo[hk]);
     else XT.fetchHoroscope(sign, { apiKey: hsrc === 'apiverve' ? apiverveKey() : '' }).then((h) => { visit.horo[hk] = h; if (app.npVisit === visit) showHoro(h); });
   }
+}
+// Goal progress for the paper: weekly and monthly (or the months / year for longer periods).
+async function paperGoals(wk, end, per, items) {
+  const s = set(), z = tz(), blocks = [];
+  const mStart = (k) => T.keyOf(T.parseKey(k).y, T.parseKey(k).m, 1);
+  const weekLbl = (k) => `Week of ${T.format(T.dayStart(k, z), z, { day: 'numeric', month: 'short' })}`;
+  const monLbl = (k) => T.format(T.dayStart(k, z), z, { month: 'long', year: 'numeric' });
+  let months = [];
+  if (per === 'week' || per === 'fortnight') {
+    for (let w = wk; w < end; w = T.addDays(w, 7)) blocks.push({ label: weekLbl(w), key: GL.weekKey(w), from: w, to: T.addDays(w, 7) });
+    months = [mStart(T.addDays(wk, 3))];
+  } else {
+    if (per === 'month') for (let w = T.startOfWeek(wk, s.weekStart ?? 1); w < end; w = T.addDays(w, 7)) if (GL.list(s, GL.weekKey(w)).length) blocks.push({ label: weekLbl(w), key: GL.weekKey(w), from: w, to: T.addDays(w, 7) });
+    for (let m = wk; m < end; m = T.addMonths(m, 1)) months.push(m);
+  }
+  const monthBlocks = months.map((m) => ({ label: monLbl(m), key: GL.monthKey(m), from: m, to: T.addMonths(m, 1) }));
+  const ordered = per === 'week' || per === 'fortnight' ? [...blocks, ...monthBlocks] : [...monthBlocks, ...blocks];
+  if (per === 'year' || per === 'quarter') ordered.push({ label: 'The next 12 months', key: GL.YEAR, from: wk, to: end });
+  // items for the whole span (months can reach beyond the period shown)
+  const a = ordered.reduce((x, b) => (b.from < x ? b.from : x), wk), bEnd = ordered.reduce((x, b) => (b.to > x ? b.to : x), end);
+  const all = a < T.addDays(wk, -7) || bEnd > end ? await collectItems([a, T.addDays(bEnd, -1)]) : items;
+  const out = ordered.map((b) => ({ label: b.label, prog: GL.progress(s, b.key, all, b.from, b.to) })).filter((b) => b.prog.some((p) => p.goals.length || (p.cats.length && p.spent)));
+  return { blocks: out.slice(0, per === 'year' ? 14 : 8), next: GL.forPeriod(s, end, paperEnd(end), per) };
 }
 function apiverveKey() { try { return localStorage.getItem('tempo:apiverveKey') || ''; } catch { return ''; } }
 const HORO_ORIGINS = { community: 'https://horoscope-app-api.vercel.app/*', apiverve: 'https://api.apiverve.com/*' };
@@ -2000,35 +2030,61 @@ async function saveGoals(goals, label) {
   render();
 }
 async function renderGoalsView(seq) {
-  const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
+  const s = set(), z = tz(), today = T.dayKey(Date.now(), z), now = Date.now();
   const view = $('#view');
   if (!$('.goals', view)) setHTML(view, '<div class="goals"><p class="muted">Loading…</p></div>');
   const sec = GL.sections(s, today);
   const last = sec.list[sec.list.length - 1].to;
-  const items = await collectItems([sec.list[0].from, T.addDays(last, -1)]);
+  const wk0 = T.startOfWeek(today, s.weekStart ?? 1);
+  const items = await collectItems([T.addDays(wk0, -7), T.addDays(last, -1)]);
   if (seq !== app.renderSeq) return;
+  app.goalItems = items;
   const fmtD = (k) => T.format(T.dayStart(k, z), z, { day: 'numeric', month: 'short' });
   const monthName = (k) => T.format(T.dayStart(k, z), z, { month: 'long', year: T.parseKey(k).y !== T.parseKey(today).y ? 'numeric' : undefined });
+  const catName = (id) => (id === '__none' ? 'No category' : C.catLabel(C.catById(s, id)) || id);
+  const hrs = (m) => T.fmtDur(Math.round(m));
+  // unfinished goals from periods that are over (or whose card isn't shown) can be moved forward
+  const prevMonth = T.addMonths(sec.thisMonth, -1);
+  const firstMonthCard = sec.list.find((x) => x.kind === 'month');
+  const leftoverKeys = (x) => {
+    if (x.key === GL.weekKey(wk0)) return [GL.weekKey(T.addDays(wk0, -7))];
+    if (x === firstMonthCard) return [GL.monthKey(prevMonth), ...(sec.daysLeft <= 14 ? [GL.monthKey(sec.thisMonth)] : [])].filter((k) => k !== x.key);
+    return [];
+  };
   const card = (x) => {
-    const goals = GL.list(s, x.key);
     const trips = GL.travelIn(items, x.kind === 'year' ? today : x.from, x.to, s);
     const title = x.title || monthName(x.month);
     const sub = x.kind === 'week' ? `${fmtD(x.from)} – ${fmtD(T.addDays(x.to, -1))}` : x.kind === 'year' ? `${monthName(T.addMonths(sec.thisMonth, 1))} – ${monthName(T.addMonths(sec.thisMonth, 12))}` : x.title ? `${monthName(x.month)} · ${sec.daysLeft} days left` : '';
-    const done = goals.filter((g) => g.done).length;
+    const all = GL.list(s, x.key), reached = all.filter((g) => g.done).length;
+    const prog = GL.progress(s, x.key, items, x.from, x.to, now);
+    const left = leftoverKeys(x).flatMap((k) => GL.list(s, k).filter((g) => !g.done).map((g) => ({ g, k })));
     return `<section class="g-card ${x.kind === 'year' ? 'g-year' : ''}" data-key="${esc(x.key)}">
-      <header><h3>${esc(title)}</h3><span class="muted small">${esc(sub)}</span>${goals.length ? `<span class="g-count" title="Reached">${done}/${goals.length}</span>` : ''}</header>
+      <header><h3>${esc(title)}</h3><span class="muted small">${esc(sub)}</span>${all.length ? `<span class="g-count" title="Reached">${reached}/${all.length} reached</span>` : ''}</header>
       ${trips.length ? `<ul class="g-trips">${trips.slice(0, x.kind === 'year' ? 12 : 6).map((t, i) => `<li><span>✈ ${esc(t.title)} <span class="muted">· ${esc(GL.fmtTrip(t, s))}</span></span><button type="button" class="link g-trip-add" data-i="${i}" title="Add a goal for this trip">+ goal</button></li>`).join('')}</ul>` : ''}
-      <ol class="g-list">${goals.map((g, i) => `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
-        <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
-        <button type="button" class="g-text" title="Edit">${esc(g.text)}</button>
-        <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`).join('')}</ol>
-      <form class="g-add"><input name="t" placeholder="${goals.length ? 'Add another goal…' : 'Add a goal…'}" maxlength="200" autocomplete="off" aria-label="Add a goal to ${esc(title)}"><button class="btn small" type="submit">Add</button></form>
+      ${left.length ? `<div class="g-left"><b>Unfinished from ${esc(GL.keyLabel(s, left[0].k))}${new Set(left.map((l) => l.k)).size > 1 ? ' and before' : ''}</b>
+        <ul>${left.map((l) => `<li><span>${GL.HEADS.find(([h]) => h === GL.headOf(l.g))[2]} ${esc(l.g.text)}</span><button type="button" class="link g-carry" data-from="${esc(l.k)}" data-id="${esc(l.g.id)}">→ move here</button></li>`).join('')}</ul>
+        ${left.length > 1 ? '<button type="button" class="btn small g-carry-all">Move all here</button>' : ''}</div>` : ''}
+      ${prog.map((p) => {
+        const bar = p.budget ? `<div class="g-bar" title="${hrs(p.spent)} done${p.planned ? `, ${hrs(p.planned)} planned` : ''} of a ${hrs(p.budget)} budget"><i class="d" style="width:${Math.min(100, (p.spent / p.budget) * 100)}%"></i><i class="p" style="width:${Math.max(0, Math.min(100 - (p.spent / p.budget) * 100, (p.planned / p.budget) * 100))}%"></i></div>` : '';
+        const tm = p.cats.length ? `${hrs(p.spent)}${p.planned ? ` + ${hrs(p.planned)} planned` : ''}${p.budget ? ` / ${hrs(p.budget)}` : ''}` : (p.budget ? `budget ${hrs(p.budget)}` : '');
+        return `<div class="g-head" data-head="${p.head}">
+          <div class="g-hh"><span class="g-hn">${p.icon} ${p.label}</span>${p.goals.length ? `<span class="muted small">${p.reached}/${p.goals.length}</span>` : ''}
+            <button type="button" class="link g-cats" data-head="${p.head}" title="Which categories of events and tasks count towards ${p.label.toLowerCase()} goals (all periods)">${p.cats.length ? 'counts: ' + esc(p.cats.map(catName).join(', ')) : 'set categories that count'}</button>
+            <span class="g-time">${esc(tm)}</span></div>
+          ${bar}
+          <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
+            <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
+            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + ' / ' : ''}${hrs(g.budget)}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}</button>
+            <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
+          <form class="g-add" data-head="${p.head}"><input name="t" placeholder="Add a ${p.label.toLowerCase()} goal…" maxlength="200" autocomplete="off" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}"><input name="b" type="number" min="0" step="0.25" placeholder="h" title="Time budget in hours (optional)" class="g-bin"><button class="btn small" type="submit">Add</button></form>
+        </div>`;
+      }).join('')}
     </section>`;
   };
   const weeks = sec.list.filter((x) => x.kind === 'week'), months = sec.list.filter((x) => x.kind === 'month'), year = sec.list.find((x) => x.kind === 'year');
   const root = $('.goals', view) || view.appendChild(el('<div class="goals"></div>'));
   const y0 = root.scrollTop;
-  setHTML(root, `<p class="muted small g-intro">Rank goals with ▲▼ (1 = most important) and tick them off when reached. Trips on your calendar are listed as reminders. Goals sync to your other devices and appear in the weekly review.</p>
+  setHTML(root, `<p class="muted small g-intro">Goals under Work, Fitness and Personal. Rank them with ▲▼ (1 = most important), give them an optional time budget, and tick them off when reached. Time in the categories that count for each head (set once, used for every week, month and year) shows as progress. → moves a goal to another period. Trips on your calendar are listed as reminders.</p>
     <h2 class="g-h">Weeks</h2><div class="g-grid">${weeks.map(card).join('')}</div>
     <h2 class="g-h">Months <span class="g-mtoggle"><button type="button" data-m="3" class="${s.goalsMonths === 12 ? '' : 'on'}">Next 3</button><button type="button" data-m="12" class="${s.goalsMonths === 12 ? 'on' : ''}">Next 12</button></span></h2>
     ${sec.daysLeft <= 14 ? `<p class="muted small">${esc(monthName(sec.thisMonth))} has ${sec.daysLeft} day${sec.daysLeft === 1 ? '' : 's'} left — this week's and next week's goals cover it.</p>` : ''}
@@ -2036,29 +2092,63 @@ async function renderGoalsView(seq) {
     <h2 class="g-h">The year ahead</h2><div class="g-grid">${card(year)}</div>`);
   root.scrollTop = y0;
   $$('.g-mtoggle button', root).forEach((b) => (b.onclick = async () => { s.goalsMonths = +b.dataset.m; await E.persist(st(), ['settings']); render(); }));
+  const targets = (exceptKey) => sec.list.filter((q) => q.key !== exceptKey).map((q) => ({ value: q.key, label: q.title || monthName(q.month), desc: q.kind === 'week' ? `${fmtD(q.from)} – ${fmtD(T.addDays(q.to, -1))}` : '' }));
   $$('.g-card', root).forEach((c) => {
     const key = c.dataset.key, x = sec.list.find((q) => q.key === key);
     const trips = GL.travelIn(items, x.kind === 'year' ? today : x.from, x.to, s);
-    $('.g-add', c).onsubmit = (e) => { e.preventDefault(); const v = e.target.t.value.trim(); if (!v) return; app.goalFocus = key; saveGoals(GL.add(set(), key, v), 'add goal'); };
-    $$('.g-trip-add', c).forEach((b) => (b.onclick = () => { const t = trips[+b.dataset.i]; saveGoals(GL.add(set(), key, `Prepare for ${t.title} (${GL.fmtTrip(t, s)})`), 'add goal'); }));
+    $$('.g-add', c).forEach((f) => (f.onsubmit = (e) => {
+      e.preventDefault(); const v = f.t.value.trim(); if (!v) return;
+      const b = parseFloat(f.b.value); app.goalFocus = `${key}|${f.dataset.head}`;
+      saveGoals(GL.add(set(), key, v, { head: f.dataset.head, budget: b > 0 ? b * 60 : null }), 'add goal');
+    }));
+    $$('.g-trip-add', c).forEach((b) => (b.onclick = () => { const t = trips[+b.dataset.i]; saveGoals(GL.add(set(), key, `Prepare for ${t.title} (${GL.fmtTrip(t, s)})`, { head: 'personal' }), 'add goal'); }));
+    $$('.g-carry', c).forEach((b) => (b.onclick = () => saveGoals(GL.moveTo(set(), b.dataset.from, b.dataset.id, key), 'move goal')));
+    $('.g-carry-all', c)?.addEventListener('click', () => { let gs = set().goals || {}; for (const b of $$('.g-carry', c)) gs = GL.moveTo({ ...set(), goals: gs }, b.dataset.from, b.dataset.id, key); saveGoals(gs, 'move goals'); });
+    $$('.g-cats', c).forEach((b) => (b.onclick = () => editHeadCats(b.dataset.head)));
     $$('.g-row', c).forEach((r) => {
       const id = r.dataset.id;
       $('.g-done', r).onchange = (e) => saveGoals(GL.update(set(), key, id, { done: e.target.checked, doneAt: e.target.checked ? Date.now() : null }), e.target.checked ? 'goal reached' : 'goal reopened');
       $('.g-up', r).onclick = () => saveGoals(GL.move(set(), key, id, -1));
       $('.g-down', r).onclick = () => saveGoals(GL.move(set(), key, id, 1));
       $('.g-del', r).onclick = () => { saveGoals(GL.remove(set(), key, id), 'remove goal'); toast('Goal removed'); };
-      $('.g-text', r).onclick = () => {
-        const g = GL.list(set(), key).find((q) => q.id === id);
-        const inp = el(`<input class="g-edit" maxlength="200">`); inp.value = g.text;
-        $('.g-text', r).replaceWith(inp); inp.focus(); inp.select();
-        let doneEd = false;
-        const finish = (save) => { if (doneEd) return; doneEd = true; const v = inp.value.trim(); if (save && v && v !== g.text) saveGoals(GL.update(set(), key, id, { text: v.slice(0, 200) }), 'edit goal'); else render(); };
-        inp.onkeydown = (e) => { if (e.key === 'Enter') finish(true); if (e.key === 'Escape') finish(false); };
-        inp.onblur = () => finish(true);
-      };
+      $('.g-mv', r).onclick = async () => { const to = await choose('Move this goal to…', GL.list(set(), key).find((g) => g.id === id)?.text, targets(key)); if (to) { saveGoals(GL.moveTo(set(), key, id, to), 'move goal'); toast(`Moved to ${GL.keyLabel(set(), to)}`); } };
+      $('.g-text', r).onclick = () => editGoal(key, id);
     });
   });
-  if (app.goalFocus) { $(`.g-card[data-key="${CSS.escape(app.goalFocus)}"] .g-add input`, root)?.focus(); app.goalFocus = null; }
+  if (app.goalFocus) { const [k, h] = app.goalFocus.split('|'); $(`.g-card[data-key="${CSS.escape(k)}"] .g-add[data-head="${h}"] input[name=t]`, root)?.focus(); app.goalFocus = null; }
+}
+// Categories that count towards a head (one setting for every week, month and year).
+async function editHeadCats(head) {
+  const s = set(), [, label, icon] = GL.HEADS.find(([h]) => h === head), cur = new Set(GL.headCats(s, head));
+  const r = await modal(`<form class="choice"><h2>${icon} What counts as ${esc(label.toLowerCase())}?</h2>
+      <p class="muted small">Time in events and task sessions of these categories shows as progress on your ${esc(label.toLowerCase())} goals — in every week, month and the year.</p>
+      <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" value="${esc(c.id)}" ${cur.has(c.id) ? 'checked' : ''}> <span class="sw-dot" style="background:${esc(c.color)}"></span> ${esc(C.catLabel(c))}</label>`).join('')}
+        <label class="chk"><input type="checkbox" value="__none" ${cur.has('__none') ? 'checked' : ''}> Events and tasks without a category</label></div>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
+  (dlg, close) => { $('form', dlg).onsubmit = (e) => { e.preventDefault(); close($$('input[type=checkbox]:checked', dlg).map((x) => x.value)); }; }, { cls: 'narrow' });
+  if (!r) return;
+  const before = s.goalHeads;
+  s.goalHeads = GL.withHeadCats(s, head, r);
+  await E.persist(st(), ['settings']); syncSharedSoon();
+  pushUndo(`categories for ${label}`, async () => { set().goalHeads = before; await E.persist(st(), ['settings']); render(); });
+  render();
+}
+async function editGoal(key, id) {
+  const s = set(), g = GL.list(s, key).find((q) => q.id === id); if (!g) return;
+  const own = new Set(g.cats || []);
+  const r = await modal(`<form class="choice"><h2>Goal</h2>
+      <label class="field"><span>Goal</span><input name="t" value="${esc(g.text)}" maxlength="200" autofocus></label>
+      <div class="row">
+        <label class="field grow"><span>Head</span><select name="h">${GL.HEADS.map(([h, l, ic]) => `<option value="${h}" ${GL.headOf(g) === h ? 'selected' : ''}>${ic} ${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Time budget (h)</span><input name="b" type="number" min="0" step="0.25" value="${g.budget ? +(g.budget / 60).toFixed(2) : ''}" placeholder="none" style="width:110px"></label>
+      </div>
+      <details ${own.size ? 'open' : ''}><summary class="small">Count only these categories for this goal (otherwise the head's)</summary>
+        <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
+      <label class="chk"><input type="checkbox" name="d" ${g.done ? 'checked' : ''}> Reached</label>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
+  (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), done: f.d.checked }); }; }, { cls: 'narrow' });
+  if (!r) return;
+  saveGoals(GL.update(set(), key, id, { text: r.text.slice(0, 200), head: r.head, budget: r.budget, cats: r.cats.length ? r.cats : null, done: r.done }), 'edit goal');
 }
 
 // On the first day of the week, offer the review once.

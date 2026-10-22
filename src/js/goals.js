@@ -9,13 +9,68 @@ export const YEAR = 'y';
 export const list = (s, key) => (s.goals || {})[key] || [];
 const newId = () => 'g' + Math.random().toString(36).slice(2, 9);
 
+// Goals are grouped under three heads. Each head has categories whose events and task sessions count towards it
+// (one setting for all periods); a goal can use its own categories instead.
+export const HEADS = [['work', 'Work', '💼'], ['fitness', 'Fitness', '🏃'], ['personal', 'Personal', '🏠']];
+const DEFAULT_CATS = { work: ['work', 'study'], fitness: [], personal: ['personal', 'leisure'] };
+export const headOf = (g) => (HEADS.some(([h]) => h === g.head) ? g.head : 'personal');
+export const headCats = (s, head) => (s.goalHeads?.[head]?.cats ?? DEFAULT_CATS[head] ?? []).filter((id) => id === '__none' || (s.categories || []).some((c) => c.id === id));
+export const goalCats = (s, g) => (g.cats?.length ? g.cats : headCats(s, headOf(g)));
+export const withHeadCats = (s, head, cats) => ({ ...(s.goalHeads || {}), [head]: { ...((s.goalHeads || {})[head] || {}), cats } });
+
+// Time spent (before now) and planned (after now) in [from, to) on events and task sessions in these categories.
+export function timeIn(items, cats, from, to, now = Date.now()) {
+  const set = new Set(cats || []);
+  let done = 0, planned = 0;
+  if (!set.size) return { done, planned };
+  for (const it of items) {
+    if (it.allDay || it.declined || it.ev?.transparency === 'transparent') continue;
+    const cat = it.kind === 'chunk' ? it.task?.categoryId : it.catId;
+    if (!set.has(cat || '__none')) continue;
+    if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) continue;
+    const a = Math.max(it.start, from), b = Math.min(it.end, to);
+    if (b <= a) continue;
+    done += Math.max(0, Math.min(b, now) - a) / T.MIN;
+    planned += Math.max(0, b - Math.max(a, now)) / T.MIN;
+  }
+  return { done: Math.round(done), planned: Math.round(planned) };
+}
+// Per head: goals reached, budget, time done/planned — for a section [fromKey, toKey).
+export function progress(s, key, items, fromKey, toKey, now = Date.now()) {
+  const z = s.tz, from = T.dayStart(fromKey, z), to = T.dayStart(toKey, z);
+  return HEADS.map(([h, label, icon]) => {
+    const goals = list(s, key).filter((g) => headOf(g) === h);
+    const budget = goals.reduce((a, g) => a + (+g.budget || 0), 0);
+    const t = timeIn(items, headCats(s, h), from, to, now);
+    return { head: h, label, icon, goals, reached: goals.filter((g) => g.done).length, budget, spent: t.done, planned: t.planned, cats: headCats(s, h),
+      perGoal: goals.filter((g) => g.budget && g.cats?.length).map((g) => ({ id: g.id, ...timeIn(items, g.cats, from, to, now) })) };
+  });
+}
+
 // Edits return a new goals object (the caller saves it).
-export function add(s, key, text) { return { ...(s.goals || {}), [key]: [...list(s, key), { id: newId(), text: text.trim().slice(0, 200), done: false, at: Date.now() }] }; }
+export function add(s, key, text, { head = 'personal', budget = null, cats = null } = {}) {
+  return { ...(s.goals || {}), [key]: [...list(s, key), { id: newId(), text: text.trim().slice(0, 200), done: false, at: Date.now(), head, ...(budget ? { budget: Math.round(budget) } : {}), ...(cats?.length ? { cats } : {}) }] };
+}
+// Move a goal to another period (e.g. carry an unfinished one over); it goes to the end of that list.
+export function moveTo(s, fromKey, id, toKey) {
+  const g = list(s, fromKey).find((x) => x.id === id);
+  if (!g || fromKey === toKey) return s.goals || {};
+  return { ...(s.goals || {}), [fromKey]: list(s, fromKey).filter((x) => x.id !== id), [toKey]: [...list(s, toKey), { ...g, done: false, movedFrom: fromKey }] };
+}
+export function keyLabel(s, k) {
+  if (k === YEAR) return 'the next 12 months';
+  if (k.startsWith('w:')) return `the week of ${T.format(T.dayStart(k.slice(2), s.tz), s.tz, { day: 'numeric', month: 'short' })}`;
+  return T.format(T.dayStart(k.slice(2) + '-01', s.tz), s.tz, { month: 'long', year: 'numeric' });
+}
 export function update(s, key, id, ch) { return { ...(s.goals || {}), [key]: list(s, key).map((g) => (g.id === id ? { ...g, ...ch } : g)) }; }
 export function remove(s, key, id) { return { ...(s.goals || {}), [key]: list(s, key).filter((g) => g.id !== id) }; }
 export function move(s, key, id, dir) {
-  const l = [...list(s, key)], i = l.findIndex((g) => g.id === id), j = i + dir;
-  if (i < 0 || j < 0 || j >= l.length) return s.goals || {};
+  const l = [...list(s, key)], i = l.findIndex((g) => g.id === id);
+  if (i < 0) return s.goals || {};
+  const h = headOf(l[i]);
+  let j = i + dir;
+  while (j >= 0 && j < l.length && headOf(l[j]) !== h) j += dir;
+  if (j < 0 || j >= l.length) return s.goals || {};
   [l[i], l[j]] = [l[j], l[i]];
   return { ...(s.goals || {}), [key]: l };
 }

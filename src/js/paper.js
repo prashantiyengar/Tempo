@@ -89,7 +89,7 @@ export const PERIODS = {
 
 // extras: { orn: {left, right, top, motto}, joke: {text, source, link}, quote: {text, by} } — picture and online
 // horoscope are filled in afterwards (they load from the network) into .np-pic and .np-horo-live.
-export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { cur: [], next: [] } }) {
+export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] } }) {
   const z = s.tz;
   const P = PERIODS[period] || PERIODS.week;
   const rand = rng(r.reviewWeek + period);
@@ -138,16 +138,21 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
     <ul class="np-list np-plain">${list.map((e) => `<li><span class="np-mute">${e.allDay ? 'all day' : esc(T.fmtTime(e.start, z, s.h12))}</span> ${e.evDone ? '✓ ' : ''}${esc(e.title)}</li>`).join('')}</ul></div>`).join('');
 
   const hz = horoscope(r, s, use, signId);
-  // ---- goals for this period, and what's next
-  const allG = goals.cur.flatMap((x) => x.list), reached = allG.filter((g) => g.done).length;
-  const gHead = !allG.length ? 'No goals on record'
-    : reached === allG.length ? pick(rand, [`Mission accomplished: all ${allG.length} goals reached`, 'A clean sweep of goals'])
-      : reached * 2 >= allG.length ? `${reached} of ${allG.length} goals reached`
-        : pick(rand, [`Goals in sight: ${reached} of ${allG.length} reached`, `Work in progress: ${reached} of ${allG.length} goals`]);
-  const glist = (x, max = 8) => `<ol class="np-goal-list">${x.list.slice(0, max).map((g) => `<li class="${g.done ? 'np-gdone' : ''}">${g.done ? '✓' : '○'} ${esc(g.text)}</li>`).join('')}</ol>`;
+  // ---- goal progress: blocks (e.g. this week, this month), each with Work / Fitness / Personal
+  const blocks = goals.blocks || [];
+  const allG = (blocks[0]?.prog || []).flatMap((p) => p.goals), reached = allG.filter((g) => g.done).length;
+  const gHead = !blocks.some((b) => b.prog.some((p) => p.goals.length)) ? 'No goals on record'
+    : !allG.length ? 'Goal progress'
+      : reached === allG.length ? pick(rand, [`Mission accomplished: all ${allG.length} goals reached`, 'A clean sweep of goals'])
+        : reached * 2 >= allG.length ? `${reached} of ${allG.length} goals reached`
+          : pick(rand, [`Goals in sight: ${reached} of ${allG.length} reached`, `Work in progress: ${reached} of ${allG.length} goals`]);
+  const bar = (p) => p.budget ? `<span class="np-gbar"><i style="width:${Math.min(100, (p.spent / p.budget) * 100)}%"></i></span>` : '';
+  const headRow = (p) => (!p.goals.length && !p.spent) ? '' : `<div class="np-ghead"><div class="np-ghh"><b>${p.icon} ${esc(p.label)}</b> <span class="np-mute">${p.goals.length ? `${p.reached}/${p.goals.length} goals` : 'no goals'}${p.cats.length ? ` · ${dur(p.spent)}${p.budget ? ` of ${dur(p.budget)}` : ''}` : ''}</span>${bar(p)}</div>
+    ${p.goals.length ? `<ol class="np-goal-list">${p.goals.slice(0, 5).map((g) => `<li class="${g.done ? 'np-gdone' : ''}">${g.done ? '✓' : '○'} ${esc(g.text)}</li>`).join('')}${p.goals.length > 5 ? `<li class="np-mute">…${p.goals.length - 5} more</li>` : ''}</ol>` : ''}</div>`;
   const goalsHTML = `<h3 class="np-h3">${esc(gHead)}</h3>
-    ${allG.length ? goals.cur.map((x) => `${goals.cur.length > 1 ? `<h4 class="np-h4">${esc(x.label)}</h4>` : ''}${glist(x)}`).join('') : `<p class="np-small">Set ranked goals for the weeks and months ahead in the <b>Goals</b> tab, and the paper will report on them.</p>`}
-    ${goals.next.length ? `<h4 class="np-h4">Coming up</h4>${goals.next.slice(0, 2).map((x) => `<p class="np-small"><i>${esc(x.label)}:</i> ${x.list.slice(0, 3).map((g, i) => `${i + 1}. ${esc(g.text)}`).join(' · ')}${x.list.length > 3 ? ' …' : ''}</p>`).join('')}` : ''}`;
+    ${blocks.length && blocks.some((b) => b.prog.some((p) => p.goals.length || p.spent)) ? blocks.map((b) => { const rows = b.prog.map(headRow).join(''); return rows ? `<h4 class="np-h4">${esc(b.label)}</h4>${rows}` : ''; }).join('')
+      : `<p class="np-small">Set goals under Work, Fitness and Personal in the <b>Goals</b> tab, and the paper will report on them.</p>`}
+    ${goals.next?.length ? `<h4 class="np-h4">Coming up</h4>${goals.next.slice(0, 2).map((x) => `<p class="np-small"><i>${esc(x.label)}:</i> ${x.list.slice(0, 3).map((g, i) => `${i + 1}. ${esc(g.text)}`).join(' · ')}${x.list.length > 3 ? ' …' : ''}</p>`).join('')}` : ''}`;
   const days = Array.from({ length: 7 }, (_, i) => T.addDays(T.dayKey(r.nextFrom, z), i));
   const maxL = Math.max(60, ...Object.values(r.load));
   const kindTxt = { skipped: 'was deleted', undone: 'was marked undone', moved: 'was pushed later' };
@@ -196,7 +201,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         ${s.reviewAllEvents ? `<h4 class="np-h4">Termine ${P.de}</h4>${evRows ? `<div class="np-days">${evRows}</div>` : '<p class="np-small">No events.</p>'}${r.allEvents.length > MAXEV ? `<p class="np-small np-mute">…and ${r.allEvents.length - MAXEV} more.</p>` : ''}${r.skippedFrequent ? `<p class="np-small np-mute">Left out: ${plural(r.skippedFrequent, 'event')} repeating daily or 3+ times a week.</p>` : ''}` : ''}
       </section>
       <section class="np-goals">
-        <span class="np-kicker">Ziele</span>
+        <span class="np-kicker">Ziele · Goal progress</span>
         ${goalsHTML}
       </section>
       <section class="np-words">

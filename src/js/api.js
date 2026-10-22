@@ -228,21 +228,22 @@ export function createApi(h) {
     listCalendars: { about: 'Calendars you can add events to.', run: () => (h.st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)).map((c) => ({ id: c.id, name: c.summary, primary: !!c.primary })) },
     listGoals: { about: 'Ranked goals: this week, next week, this month, the next months, and the next 12 months.', run: () => {
       const z = h.tz(), sec = GL.sections(h.set(), T.dayKey(Date.now(), z)).list;
-      return sec.map((x) => ({ period: x.title || T.format(T.dayStart(x.month, z), z, { month: 'long', year: 'numeric' }), goals: GL.list(h.set(), x.key).map((g, i) => ({ rank: i + 1, text: g.text, done: !!g.done })) }));
+      return sec.map((x) => ({ period: x.title || T.format(T.dayStart(x.month, z), z, { month: 'long', year: 'numeric' }), goals: GL.list(h.set(), x.key).map((g, i) => ({ rank: i + 1, head: GL.headOf(g), text: g.text, done: !!g.done, budgetMinutes: g.budget || undefined })) }));
     } },
-    addGoal: { params: 'period ("this week" | "next week" | "this month" | a month name like "November" | "year"), text', about: 'Add a goal (ranked last).', write: true, run: async (a) => {
+    addGoal: { params: 'period ("this week" | "next week" | "this month" | a month name like "November" | "year"), text, head? ("work" | "fitness" | "personal"), hours? (time budget)', about: 'Add a goal (ranked last under its head).', write: true, run: async (a) => {
       const key = goalKey(a.period); const text = String(a.text || '').trim() || err('Missing "text".');
-      h.set().goals = GL.add(h.set(), key, text); await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, to: a.period };
+      const head = GL.HEADS.some(([x]) => x === String(a.head || '').toLowerCase()) ? String(a.head).toLowerCase() : 'personal';
+      h.set().goals = GL.add(h.set(), key, text, { head, budget: +a.hours > 0 ? +a.hours * 60 : null }); await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, to: a.period };
     } },
     markGoal: { params: 'period, goal (text or rank), done? (default true)', about: 'Tick a goal off as reached (or reopen it).', write: true, run: async (a) => {
       const key = goalKey(a.period), l = GL.list(h.set(), key);
       const g = (/^\d+$/.test(String(a.goal)) ? l[+a.goal - 1] : l.find((x) => x.text.toLowerCase().includes(String(a.goal || '').toLowerCase()))) || err(`No goal "${a.goal}".`);
       h.set().goals = GL.update(h.set(), key, g.id, { done: a.done !== false }); await E.persist(h.st(), ['settings']); h.render?.(); return { goal: g.text, done: a.done !== false };
     } },
-    listLater: { about: 'Notes in the "Later" list: things to schedule, but not yet.', run: () => (h.set().later || []).map((x) => ({ id: x.id, text: x.text, added: fmt(x.created) })) },
-    addLater: { params: 'text', about: 'Add a note to the "Later" list.', write: true, run: async (a) => {
+    listLater: { about: 'Notes in the "Later" list: things to schedule, but not yet.', run: () => (h.set().later || []).map((x) => ({ id: x.id, text: x.text, added: fmt(x.created), minutes: x.minutes || undefined, deadline: x.deadline ? fmt(x.deadline) : undefined })) },
+    addLater: { params: 'text, hours? (likely duration), deadline? (date)', about: 'Add a note to the "Later" list.', write: true, run: async (a) => {
       const text = String(a.text || '').trim().slice(0, 300) || err('Missing "text".');
-      const item = { id: S.newId('l'), text, created: Date.now() };
+      const item = { id: S.newId('l'), text, created: Date.now(), ...(+a.hours > 0 ? { minutes: Math.round(+a.hours * 60) } : {}), ...(a.deadline ? { deadline: when(a.deadline, { end: true }) } : {}) };
       h.set().later = [...(h.set().later || []), item]; await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, id: item.id };
     } },
     removeLater: { params: 'note (id or text)', about: 'Remove a note from the "Later" list (e.g. after scheduling it).', write: true, run: async (a) => {
