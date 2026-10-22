@@ -100,16 +100,47 @@ export function renderHistory(state, weeks = 8, now = Date.now()) {
 }
 
 // ---------- Weekly review ----------
-export function weeklyReview(state, now = Date.now()) {
+// `events`: calendar event items (as the views draw them) for the review week and the week before (the week before
+// is only used to tell how often a repeating event occurs).
+export function weeklyReview(state, now = Date.now(), { weekKey = null, events = [] } = {}) {
   const s = state.settings, z = s.tz;
   const thisWeek = T.startOfWeek(T.dayKey(now, z), s.weekStart);
   // On the first days of a week, review the week that just ended.
-  const reviewWeek = T.daysBetween(thisWeek, T.dayKey(now, z)) <= 1 ? T.addDays(thisWeek, -7) : thisWeek;
-  const from = T.dayStart(reviewWeek, z), to = Math.min(now, T.dayStart(T.addDays(reviewWeek, 7), z));
+  const reviewWeek = weekKey || (T.daysBetween(thisWeek, T.dayKey(now, z)) <= 1 ? T.addDays(thisWeek, -7) : thisWeek);
+  const weekEnd = T.dayStart(T.addDays(reviewWeek, 7), z);
+  const from = T.dayStart(reviewWeek, z), to = Math.min(now, weekEnd);
   const sum = summarize(state, from, to);
-  const nextFrom = T.dayStart(reviewWeek === thisWeek ? T.addDays(thisWeek, 7) : thisWeek, z), nextTo = nextFrom + 7 * T.DAY;
+  const nextFrom = T.dayStart(reviewWeek >= thisWeek ? T.addDays(reviewWeek, 7) : thisWeek, z), nextTo = nextFrom + 7 * T.DAY;
   const active = state.tasks.filter((t) => !t.archived);
   const completed = state.tasks.filter((t) => !t.repeat && S.progress(t, now).pct >= 100 && (t.frozen || []).some((c) => c.end >= from && c.end < to));
+  const inWeek = (e) => (e.allDay ? T.dayStart(e.startKey, z) : e.start) >= from && (e.allDay ? T.dayStart(e.startKey, z) : e.start) < weekEnd;
+  const evs = events.filter((e) => e.kind !== 'chunk' && !e.declined);
+  // events you ticked off count as finished
+  const doneEvents = evs.filter((e) => e.evDone && inWeek(e)).sort((a, b) => a.start - b.start);
+  // optionally all events — except ones repeating daily or 3+ times a week
+  const freq = {};
+  for (const e of evs) if (e.ev?.recurringEventId) { const k = `${e.ev._calId}|${e.ev.recurringEventId}|${T.startOfWeek(T.dayKey(e.start, z), s.weekStart)}`; freq[k] = (freq[k] || 0) + 1; }
+  const frequent = (e) => {
+    if (!e.ev?.recurringEventId) return false;
+    const wk = T.startOfWeek(T.dayKey(e.start, z), s.weekStart);
+    const n = (w) => freq[`${e.ev._calId}|${e.ev.recurringEventId}|${w}`] || 0;
+    return n(wk) >= 3 || n(T.addDays(wk, -7)) >= 3 || /FREQ=DAILY/.test((e.ev.recurrence || []).join(';'));
+  };
+  const allEvents = s.reviewAllEvents ? evs.filter((e) => inWeek(e) && !frequent(e)).sort((a, b) => (a.allDay ? T.dayStart(a.startKey, z) : a.start) - (b.allDay ? T.dayStart(b.startKey, z) : b.start)) : [];
+  const skippedFrequent = s.reviewAllEvents ? new Set(evs.filter((e) => inWeek(e) && frequent(e)).map((e) => e.ev.recurringEventId)).size : 0;
+  // pages read: done reading sessions this week (reported pages, or what the session covered)
+  const reading = [];
+  for (const t of state.tasks.filter((x) => x.kind === 'reading')) {
+    const pph = S.pagesPerHour(t.reading || {});
+    let pages = 0, minutes = 0;
+    for (const c of t.frozen || []) {
+      if (c.status !== 'done' || c.start < from || c.start >= to) continue;
+      pages += c.pagesDone != null && c.pagesDone !== '' ? +c.pagesDone : (S.work(c, t) / 60) * pph;
+      minutes += (c.end - c.start) / T.MIN;
+    }
+    if (pages >= 0.5) reading.push({ t, pages: Math.round(pages), minutes: Math.round(minutes), total: t.reading?.pages || null });
+  }
+  reading.sort((a, b) => b.pages - a.pages);
   const risks = [];
   for (const t of active) {
     const lp = t.lastPlan || {};
@@ -122,7 +153,7 @@ export function weeklyReview(state, now = Date.now()) {
   const load = {};
   for (const t of active) for (const c of S.sessions(t)) if (c.start >= nextFrom && c.start < nextTo && c.kind !== 'done') { const k = T.dayKey(c.start, z); load[k] = (load[k] || 0) + c.minutes; }
   const slips = sum.records.filter((r) => ['skipped', 'undone', 'moved'].includes(r.kind));
-  return { reviewWeek, from, to, sum, completed, risks, load, slips, nextFrom };
+  return { reviewWeek, from, to, weekEnd, sum, completed, doneEvents, allEvents, skippedFrequent, reading, risks, load, slips, nextFrom, isCurrent: reviewWeek === thisWeek };
 }
 
 export function renderReview(state, now = Date.now()) {
@@ -139,7 +170,7 @@ export function renderReview(state, now = Date.now()) {
         <div class="an-tiles">
           <div class="tile"><span>Done</span><b>${r.sum.done + r.sum.partial}</b><em>${r.sum.partial} partly · ${T.fmtDur(Math.round(r.sum.actMin))} spent</em></div>
           <div class="tile"><span>Slipped</span><b>${r.sum.slipped}</b><em>${r.sum.skipped} deleted · ${r.sum.undone} undone · ${r.sum.moved} pushed</em></div>
-          <div class="tile"><span>Tasks finished</span><b>${r.completed.length}</b><em>${esc(r.completed.slice(0, 3).map((t) => t.title).join(', ')) || '—'}</em></div>
+          <div class="tile"><span>Tasks finished</span><b>${r.completed.length + r.doneEvents.length}</b><em>${esc([...r.completed.map((t) => t.title), ...r.doneEvents.map((e) => e.title)].slice(0, 3).join(', ')) || '—'}</em></div>
         </div>
         ${cats.length ? `<div class="rv-cats">${cats.map((c) => `<span class="rv-cat"><i class="sw-dot" style="background:${esc(c.color)}"></i>${esc(c.name)} <b>${T.fmtDur(Math.round(c.act))}</b>${c.plan && Math.abs(c.act - c.plan) > 10 ? ` <em class="muted">of ${T.fmtDur(Math.round(c.plan))}</em>` : ''}</span>`).join('')}</div>` : ''}
         ${r.slips.length ? `<details class="rv-slips"><summary>What slipped (${r.slips.length})</summary><ul>${r.slips.slice(-12).map((x) => `<li>${esc(x.title || 'Session')} — ${kindTxt[x.kind]}${x.by ? ` by ${T.fmtDur(x.by)}` : ''} <span class="muted small">${esc(fmtD(x.t))}</span></li>`).join('')}</ul></details>` : '<p class="muted small">Nothing slipped. 🎉</p>'}

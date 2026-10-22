@@ -181,9 +181,9 @@ async def main():
         await A.click('#view-seg button[data-view=analysis]'); await A.wait_for_selector('.an-mode'); await clear_toast(A); await A.click('.an-mode button[data-mode=history]'); await A.wait_for_selector('.hist')
         print('9. history tiles:', (await A.inner_text('.hist .an-tiles')).replace('\n', ' | '))
         await A.screenshot(path=f'{OUT}/p6-history.png', full_page=True)
-        await A.click('.an-mode button[data-mode=review]'); await A.wait_for_selector('dialog .review')
-        print('   review:', (await A.inner_text('dialog .review')).replace('\n', ' | ')[:400])
-        await A.screenshot(path=f'{OUT}/p7-review.png'); await A.click('dialog .review-dlg [data-close] >> nth=-1')
+        await A.click('.an-mode button[data-mode=review]'); await A.wait_for_selector('.np')
+        print('   review:', (await A.inner_text('.np')).replace('\n', ' | ')[:400])
+        await A.screenshot(path=f'{OUT}/p7-review.png')
         await A.click('#view-seg button[data-view=week]'); await A.wait_for_timeout(500)
 
         # 10. Other calendars: ICS link, another Google account, Outlook

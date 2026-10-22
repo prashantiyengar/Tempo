@@ -829,6 +829,7 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Drag snapping (min)</span><select name="snapMinutes">${[5, 10, 15, 30, 60].map((v) => `<option ${v === s.snapMinutes ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
           <label class="field"><span>Default event length (min)</span><input type="number" name="defaultEventMinutes" min="5" step="5" value="${s.defaultEventMinutes}"></label>
           <label class="field"><span>“Since last event” starts this many minutes after it (0–15)</span><input type="number" name="sinceLastBuffer" min="0" max="15" step="1" value="${s.sinceLastBuffer || 0}"></label>
+          <label class="field"><span>“Till next event” ends this many minutes before it (0–15)</span><input type="number" name="tillNextBuffer" min="0" max="15" step="1" value="${s.tillNextBuffer ?? s.sinceLastBuffer ?? 0}"></label>
           <fieldset class="box"><legend>Analysis (full 24 hours)</legend>
             <label class="chk"><input type="checkbox" name="sleepAssume" ${s.sleepAssume !== false ? 'checked' : ''}> Count this time as sleep on nights with nothing else in it</label>
             <div class="row"><input type="time" name="sleepStart" value="${esc(s.sleepStart || '23:00')}" step="900"> <span class="muted">to</span> <input type="time" name="sleepEnd" value="${esc(s.sleepEnd || '07:00')}" step="900"></div>
@@ -1074,7 +1075,7 @@ export function settingsDialog(ctx) {
       setHTML($('.cats-list', dlg), cats.map((c, i) => `<div class="cat-row" data-i="${i}">
         <span class="sw-dot big" style="background:${esc(c.color)}"></span>
         <details class="ic-pick"><summary class="cat-icbtn" title="Icon" aria-label="Choose icon">${esc(c.icon || '＋')}</summary>
-          <div class="icon-grid"><input class="cat-icin" placeholder="Type or paste" maxlength="8" value="${esc(c.icon || '')}">${C.CAT_ICONS.map((ic) => `<button type="button" class="ic-btn" data-ic="${ic}">${ic}</button>`).join('')}<button type="button" class="ic-btn none" data-ic="">No icon</button></div></details>
+          <div class="icon-grid grouped"><div class="row"><input class="cat-icin" placeholder="Type or paste" maxlength="8" value="${esc(c.icon || '')}"><button type="button" class="ic-btn none" data-ic="">No icon</button></div>${C.iconGridHTML({ categories: cats }, { keep: c.icon || '', exceptId: c.id })}</div></details>
         <select class="cat-pref" title="Preferred time of day" aria-label="Preferred time of day">${[['', 'Any time'], ['morning', 'Mornings'], ['afternoon', 'Afternoons'], ['evening', 'Evenings']].map(([v, l]) => `<option value="${v}" ${(c.prefer || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <input class="cat-nm" value="${esc(c.name)}" maxlength="30" aria-label="Category name">
         ${C.swatchesHTML('cc' + i, c.color)}
@@ -1188,6 +1189,7 @@ export function settingsDialog(ctx) {
         breakMinutes: Math.max(0, +f.breakMinutes.value || 0),
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
         sinceLastBuffer: Math.max(0, Math.min(15, Math.round(+f.sinceLastBuffer.value || 0))),
+        tillNextBuffer: Math.max(0, Math.min(15, Math.round(+f.tillNextBuffer.value || 0))),
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
         sleepAssume: f.sleepAssume.checked, sleepCategory: f.sleepCategory.value || null, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
         dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),
@@ -1495,6 +1497,65 @@ export function deleteDoneDialog(ctx, task, sess) {
 // Reading: how many pages were read. Other tasks: how much of the session's work got done. The rest is either added
 // as new time or squeezed into the remaining sessions. Optionally, part of the slot went to something else: the
 // block is then split into that (an event, or time on another task) and the shorter session.
+// Started a task session late: when did you start, what (if anything) filled the time before, and should the
+// missed minutes be planned again later?
+export function startedLateDialog(ctx, { task, sess }) {
+  const st = ctx.state, s = st.settings, tz = s.tz;
+  const fmt = (ms) => T.fmtTime(ms, tz, s.h12);
+  const hhmm = (ms) => T.toDTInput(ms, tz).slice(11, 16);
+  const nowM = Math.floor(Date.now() / T.MIN) * T.MIN;
+  const def = Math.min(Math.max(nowM, sess.start + T.MIN), sess.end - 5 * T.MIN);
+  const others = st.tasks.filter((t) => !t.archived && t.id !== task.id);
+  const cals = ctx.writableCalendars();
+  const def0 = ctx.defaultCalendar?.() || cals[0]?.id;
+  return modal(`<form class="late-form" novalidate>
+      <header class="dlg-head"><h2>Started late</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+      <div class="dlg-body">
+        <p class="muted small" style="margin:0">“${esc(sess.label || task.title)}” was planned ${esc(fmt(sess.start))}–${esc(fmt(sess.end))}.</p>
+        <label class="field"><span>I started at</span><input type="time" name="at" step="60" value="${hhmm(def)}"></label>
+        <p class="late-sum small"></p>
+        <fieldset class="box"><legend class="late-before">Before that</legend>
+          <label class="chk"><input type="radio" name="fill" value="none" checked> Leave it as free time</label>
+          <label class="chk"><input type="radio" name="fill" value="event"> I was doing something else: <input name="evTitle" placeholder="e.g. Phone call" style="flex:1;min-width:0"></label>
+          <div class="row late-ev" hidden>
+            <select name="evCat"><option value="">No category</option>${(s.categories || []).map((c) => `<option value="${esc(c.id)}">${esc((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}</select>
+            ${cals.length > 1 ? `<select name="evCal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def0 ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>` : ''}
+          </div>
+          ${others.length ? `<label class="chk"><input type="radio" name="fill" value="task"> I worked on another task: <select name="otherTask">${others.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}</option>`).join('')}</select></label>` : ''}
+        </fieldset>
+        <label class="chk late-re"><input type="checkbox" name="realloc" checked> <span>Plan the missed time again later</span></label>
+        <p class="muted small" style="margin:0">Untick to drop it: this session then still counts as fully done.</p>
+      </div>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Save</button></div>
+    </form>`, (dlg, close) => {
+    const f = $('form', dlg);
+    const at = () => {
+      const k = T.dayKey(sess.start, tz);
+      const v = T.atTime(k, f.at.value || hhmm(def), tz);
+      return Math.min(Math.max(v, sess.start + T.MIN), sess.end - T.MIN);
+    };
+    const upd = () => {
+      const a = at(), late = Math.round((a - sess.start) / T.MIN);
+      setHTML($('.late-sum', dlg), `The session becomes <b>${esc(fmt(a))}–${esc(fmt(sess.end))}</b> (${T.fmtDur(Math.round((sess.end - a) / T.MIN))}); you missed <b>${T.fmtDur(late)}</b>.`);
+      $('.late-before', dlg).textContent = `${fmt(sess.start)}–${fmt(a)}`;
+      $('.late-re span', dlg).textContent = `Plan the missed ${T.fmtDur(late)} again later`;
+      $('.late-ev', dlg).hidden = f.fill.value !== 'event';
+    };
+    f.addEventListener('input', upd); f.addEventListener('change', upd);
+    f.evTitle.addEventListener('focus', () => { f.querySelector('input[name=fill][value=event]').checked = true; upd(); });
+    f.otherTask?.addEventListener('focus', () => { f.querySelector('input[name=fill][value=task]').checked = true; upd(); });
+    upd();
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const a = at(), kind = f.fill.value;
+      if (kind === 'event' && !f.evTitle.value.trim()) { f.evTitle.focus(); return; }
+      close({ start: a, reallocate: f.realloc.checked,
+        fill: kind === 'event' ? { kind, title: f.evTitle.value.trim(), catId: f.evCat.value || null, calId: f.evCal?.value || def0 }
+          : kind === 'task' ? { kind, taskId: f.otherTask.value } : null });
+    });
+  }, { cls: 'narrow' });
+}
+
 export function partialDialog(ctx, task, sess, opts = {}) {
   const st = ctx.state, s = st.settings, tz = s.tz;
   const when = `${T.format(sess.start, tz, { weekday: 'short', day: 'numeric', month: 'short' })}, ${T.fmtTime(sess.start, tz, s.h12)}–${T.fmtTime(sess.end, tz, s.h12)}`;

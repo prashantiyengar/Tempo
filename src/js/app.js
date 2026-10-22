@@ -17,6 +17,7 @@ import { parseTask } from './parse.js';
 import { createApi, AI_PROMPT } from './api.js';
 import * as N from './notify.js';
 import * as W from './weather.js';
+import * as NP from './paper.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -86,7 +87,7 @@ function notify(title, message) {
 // ======================================================================================
 function range(view = app.view, cursor = app.cursor) {
   const ws = set().weekStart;
-  if (view === 'analysis') view = 'week';
+  if (view === 'analysis' || view === 'review') view = 'week';
   if (view === 'day') return { days: [cursor] };
   if (view === '3day') return { days: [cursor, T.addDays(cursor, 1), T.addDays(cursor, 2)] };
   if (view === 'week') { const a = set().weekView === 'rolling' ? cursor : T.startOfWeek(cursor, ws); return { days: Array.from({ length: 7 }, (_, i) => T.addDays(a, i)) }; }
@@ -190,7 +191,9 @@ async function collectItems(days) {
 async function render() {
   const seq = ++app.renderSeq;
   document.body.classList.toggle('analysis-mode', app.view === 'analysis');
+  document.body.classList.toggle('review-mode', app.view === 'review');
   if (app.view === 'analysis') { renderToolbar(); renderSidebar(); return renderAnalysisView(seq); }
+  if (app.view === 'review') { renderToolbar(); renderSidebar(); return renderPaperView(seq); }
   const r = range();
   renderToolbar();
   renderSidebar();
@@ -217,6 +220,7 @@ function renderToolbar() {
   let title;
   $$('#view-seg button, #bottombar button').forEach((b) => b.classList.toggle('on', b.dataset.view === app.view));
   if (app.view === 'analysis') { $('#range-title').textContent = 'Time analysis'; return; }
+  if (app.view === 'review') { const wk = paperWeek(); $('#range-title').textContent = innerWidth < 600 ? 'Weekly review' : `Review · ${T.format(T.dayStart(wk, z), z, { month: 'short', day: 'numeric' })} – ${T.format(T.dayStart(T.addDays(wk, 6), z), z, { month: 'short', day: 'numeric' })}`; return; }
   const { days, monthKey } = range();
   if (app.view === 'month') title = T.format(T.dayStart(monthKey, z), z, { month: 'long', year: 'numeric' });
   else if (app.view === 'day') title = T.format(T.dayStart(days[0], z), z, innerWidth < 600 ? { weekday: 'short', day: 'numeric', month: 'short' } : { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
@@ -1031,6 +1035,7 @@ function openChunk(it, rect) {
         ${isDone ? '<button class="btn small undone">↺ Mark undone</button>' : '<button class="btn small primary done">✓ Mark done</button>'}
         <button class="btn small partial">◐ Partly done…</button>
         ${(!isDone || sess.auto) && sess.start <= now && sess.end > now ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}
+        ${(!isDone || sess.auto) && sess.start < now && sess.end > now + T.MIN ? '<button class="btn small late">⏰ Started late…</button>' : ''}
         ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         <button class="btn small ghost del">Delete…</button>
@@ -1046,6 +1051,7 @@ function openChunk(it, rect) {
     $('.edit', pop).onclick = () => { close(); editTask(task); };
     $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
     $('.fin-early', pop)?.addEventListener('click', () => { close(); finishedEarly(it); });
+    $('.late', pop)?.addEventListener('click', () => { close(); startedLate(it); });
     $('.tm-start', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'stopwatch'); });
     $('.tm-pomo', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'pomodoro'); });
     $('.sync-now', pop)?.addEventListener('click', () => { close(); openSyncPanel(); });
@@ -1562,6 +1568,44 @@ async function itemsToday() {
   const k = T.dayKey(Date.now(), tz());
   return collectItems([k]);
 }
+// Started a task session late: shorten it to start when you began; optionally record what filled the time
+// before, and plan the missed minutes again later (or drop them).
+async function startedLate(it0) {
+  let it = it0;
+  if (!it) {
+    const now = Date.now();
+    const list = (await itemsToday()).filter((x) => x.kind === 'chunk' && x.start < now && x.end > now + T.MIN && (x.status !== 'done' || x.sess.auto));
+    if (!list.length) { toast('No task session is running right now.'); return; }
+    if (list.length === 1) it = list[0];
+    else {
+      const k = await choose('Which session did you start late?', null, list.map((x) => ({ value: x.key, label: x.title, desc: `${T.fmtTime(x.start, tz(), set().h12)}–${T.fmtTime(x.end, tz(), set().h12)}` })));
+      it = list.find((x) => x.key === k); if (!it) return;
+    }
+  }
+  const cur = st().tasks.find((t) => t.id === it.task.id);
+  const sess = S.sessions(cur).find((c) => c.id === it.sess.id);
+  if (!sess) return;
+  const r = await D.startedLateDialog(ctx, { task: cur, sess });
+  if (!r) return;
+  const missed = Math.round((r.start - sess.start) / T.MIN);
+  try {
+    replaceTask(S.startedLate(cur, sess.id, r.start, { reallocate: r.reallocate }));
+    if (r.fill?.kind === 'task') {
+      const o = st().tasks.find((t) => t.id === r.fill.taskId);
+      if (o) replaceTask(S.addDoneBlock(o, sess.start, r.start));
+    }
+    app.pendingWhy = `you started “${cur.title}” ${T.fmtDur(missed)} late`;
+    await saveTasks('started late');
+    if (r.fill?.kind === 'event') {
+      const cat = C.catById(set(), r.fill.catId);
+      const g = r.fill.calId !== E.LOCAL_CAL;
+      await saveNewEvent(r.fill.calId, { ...selBody({ start: sess.start, end: r.start }, r.fill.title, r.fill.calId), ...(cat ? C.eventCategoryChanges({}, cat) : {}), reminders: { useDefault: false, overrides: [] }, ...(g ? {} : {}) });
+    }
+    await cycle();
+    toast(r.reallocate ? `Started ${T.fmtDur(missed)} late — the missed time is planned again later` : `Started ${T.fmtDur(missed)} late — the missed time was dropped`);
+  } catch (err) { handleError(err); }
+}
+
 async function finishedEarly(it0, choice = null) {
   let it = it0;
   if (!it) {
@@ -1643,7 +1687,7 @@ async function lastEventEnd({ ref = null, exclude = null } = {}) {
 // "Till next event": the start of the next event after `ref` (looking ahead up to 12 hours), minus the buffer.
 async function nextEventStart({ ref, exclude = null } = {}) {
   const z = tz(), at = ref ?? nowMin(), day = T.dayKey(at, z);
-  const buf = Math.max(0, Math.min(15, +set().sinceLastBuffer || 0)) * T.MIN;
+  const buf = Math.max(0, Math.min(15, +(set().tillNextBuffer ?? set().sinceLastBuffer) || 0)) * T.MIN;
   const items = (await collectItems([day, T.addDays(day, 1)])).filter((x) => !x.allDay && x.key !== exclude && x.start > at && x.start <= at + LOOKBACK && A.isOccupying(x, set()));
   if (!items.length) return { found: false, note: 'No event in the 12 hours after this — set the end yourself.' };
   const next = items.reduce((a, b) => (b.start < a.start ? b : a));
@@ -1799,15 +1843,50 @@ function buildDraft(d) {
 // ======================================================================================
 // Weekly review
 // ======================================================================================
-async function openReview() {
+function openReview() {
   storeSet({ lastReviewWeek: T.startOfWeek(T.dayKey(Date.now(), tz()), set().weekStart) });
-  await modal(`<div class="review-dlg"><header class="dlg-head"><h2>Weekly review</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
-    <div class="dlg-body">${RV.renderReview(st())}</div>
-    <footer class="actions"><button type="button" class="btn ghost hist">Plan vs actual history</button><span class="grow"></span><button type="button" class="btn primary" data-close>Done</button></footer></div>`, (dlg, close) => {
-    $$('.rv-open', dlg).forEach((b) => (b.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === b.dataset.task)); }));
-    $('.hist', dlg).onclick = () => { close(); app.view = 'analysis'; app.anMode = 'history'; render(); };
-    bindTips(dlg);
-  }, { cls: 'wide' });
+  app.view = 'review'; app.paperWeek = null; closeDrawer(); render();
+}
+// The week the review shows: chosen with ‹ › — by default last week on its first two days, otherwise this week.
+function paperWeek() {
+  if (app.paperWeek) return app.paperWeek;
+  const z = tz(), today = T.dayKey(Date.now(), z), wk = T.startOfWeek(today, set().weekStart);
+  return T.daysBetween(wk, today) <= 1 ? T.addDays(wk, -7) : wk;
+}
+async function renderPaperView(seq) {
+  const s = set(), z = tz(), wk = paperWeek();
+  const view = $('#view');
+  if (!$('.np-wrap', view)) setHTML(view, '<div class="np-wrap"><p class="muted">Printing…</p></div>');
+  const days = Array.from({ length: 14 }, (_, i) => T.addDays(wk, i - 7));
+  const items = await collectItems(days);
+  if (seq !== app.renderSeq) return;
+  const from = T.dayStart(wk, z), to = T.dayStart(T.addDays(wk, 7), z);
+  const events = items.filter((it) => it.kind !== 'chunk');
+  const r = RV.weeklyReview(st(), Date.now(), { weekKey: wk, events });
+  // time use over the extended day (day bounds + evenings/weekends), by category
+  const actx = { settings: s, gmeta: st().gmeta, calColor };
+  const groups = {};
+  const occ = items.filter((it) => A.isOccupying(it, s) && it.end > from && it.start < to).map((it) => {
+    const g = A.groupOf(it, 'category', actx); groups[g.key] ||= g;
+    return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.title, kind: it.kind, uid: it.key };
+  });
+  const data = A.compute(occ, A.scopeWindows('waking', from, Math.min(to, Math.max(from + T.DAY, r.isCurrent ? T.dayStart(T.addDays(T.dayKey(Date.now(), z), 1), z) : to)), s), z);
+  let busiest = null;
+  for (const [k, d] of Object.entries(data.days)) { const used = d.available - d.free - (d.gaps || 0); if (used > 0 && (!busiest || used > busiest.m)) busiest = { k, m: used }; }
+  const use = {
+    groups: Object.entries(data.totals.groups).map(([k, m]) => ({ label: groups[k]?.label || k, color: groups[k]?.color || '#888', m })).sort((a, b) => b.m - a.m),
+    occupied: data.totals.available - data.totals.free - (data.totals.gaps || 0), free: data.totals.free, available: data.totals.available, busiest,
+    scope: `between ${s.overflowBounds.start} and ${s.overflowBounds.end}${r.isCurrent ? ' so far' : ''}`,
+  };
+  const tools = `<div class="np-tools"><label class="chk"><input type="checkbox" data-np="all" ${s.reviewAllEvents ? 'checked' : ''}> Include all events <span class="muted small">(not ones repeating daily or 3+ times a week)</span></label>
+    <span class="grow"></span><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
+  const root = $('.np-wrap', view) || view.appendChild(el('<div class="np-wrap"></div>'));
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null }));
+  $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
+  $('[data-np=sign]', root).onchange = async (e) => { s.zodiac = e.target.value || null; await E.persist(st(), ['settings']); render(); };
+  $('.np-hist', root).onclick = () => { app.view = 'analysis'; app.anMode = 'history'; render(); };
+  $('.np-print', root).onclick = () => window.print();
+  $$('.rv-open', root).forEach((b) => (b.onclick = () => editTask(st().tasks.find((t) => t.id === b.dataset.task))));
 }
 // On the first day of the week, offer the review once.
 async function maybeOfferReview() {
@@ -2327,6 +2406,7 @@ function slideIn() {
 }
 
 function nav(dir) {
+  if (app.view === 'review') { app.paperWeek = T.addDays(paperWeek(), 7 * dir); return render(); }
   if (app.view === 'day') app.cursor = T.addDays(app.cursor, dir);
   else if (app.view === '3day') app.cursor = T.addDays(app.cursor, 3 * dir);
   else if (app.view === 'week') app.cursor = T.addDays(app.cursor, 7 * dir);
@@ -2336,7 +2416,7 @@ function nav(dir) {
 }
 
 function bindToolbar() {
-  $('#btn-today').onclick = () => { app.cursor = app.miniCursor = T.dayKey(Date.now(), tz()); render(); };
+  $('#btn-today').onclick = () => { app.cursor = app.miniCursor = T.dayKey(Date.now(), tz()); app.paperWeek = null; render(); };
   $('#btn-prev').onclick = () => nav(-1);
   $('#btn-next').onclick = () => nav(1);
   $$('#view-seg button, #bottombar button').forEach((b) => (b.onclick = () => { app.view = b.dataset.view; closeDrawer(); render(); }));
@@ -2350,6 +2430,7 @@ function bindToolbar() {
     { ic: '+', label: 'New event', run: () => $('#btn-new-event').click() },
     { ic: '⧉', label: 'New task (split into sessions)', run: () => newTask({ kind: 'generic' }) },
     { ic: '📖', label: 'New reading plan', run: () => newTask({ kind: 'reading' }) },
+    { ic: '⏰', label: 'Started late', run: () => startedLate() },
     { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
     { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
   ]);
@@ -2358,6 +2439,7 @@ function bindToolbar() {
     { ic: '✓', label: 'Sync status', run: openSyncPanel },
     { ic: '⚙', label: 'Settings', run: openSettings },
     { ic: '↶', label: 'Undo last change', run: undo },
+    { ic: '⏰', label: 'Started late', run: () => startedLate() },
     { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
     { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
     { ic: '★', label: 'Weekly review', run: openReview },
@@ -2372,6 +2454,7 @@ function bindToolbar() {
   $('#btn-settings').onclick = openSettings;
   $('#btn-undo').onclick = undo;
   $('#btn-now').onclick = () => sheetMenu([
+    { ic: '⏰', label: 'Started late', run: () => startedLate() },
     { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
     { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
     '-',
@@ -2427,7 +2510,7 @@ async function init() {
   setQuickTz(set().tz);
   app.cursor = app.miniCursor = T.dayKey(Date.now(), tz());
   if (innerWidth < 760) app.view = 'day';
-  { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis'].includes(v)) app.view = v; }
+  { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis', 'review'].includes(v)) app.view = v; }
   if (redirect?.ret?.view) { app.view = redirect.ret.view; app.cursor = app.miniCursor = redirect.ret.cursor || app.cursor; }
   if (redirect?.ok) sessionStorage.removeItem('tempo:silentTried');
   if (redirect && !redirect.ok && redirect.kind === 'silent' && redirect.ret?.autoInteractive && ['interaction_required', 'login_required', 'consent_required'].includes(redirect.code)) {

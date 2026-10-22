@@ -3,30 +3,29 @@
 import { $$, esc, setHTML } from './ui.js';
 import { nearestColorId } from './gcal.js';
 
-export const CAT_ICONS = [
-  // work & study
-  '💼', '💻', '📊', '📈', '🗂️', '📝', '✏️', '📚', '📖', '🎓', '🔬', '🧪', '🧮', '📞', '✉️', '🗓️', '🤝', '🎤', '🧑‍💻', '🛠️',
-  // home & life
-  '🏠', '🧹', '🧺', '🍳', '🛒', '💰', '🧾', '🚗', '🚲', '✈️', '🧳', '👪', '👶', '🐶', '🐱', '🌱', '🪴', '🔧', '📦', '🏦',
-  // health
-  '💪', '🏃', '🧘', '🏊', '🚴', '🩺', '💊', '🦷', '😴', '🥗', '🍎', '❤️',
-  // leisure & social
-  '🎉', '🎨', '🎵', '🎸', '🎹', '🎬', '📺', '🎮', '♟️', '⚽', '🏀', '🎾', '⛰️', '🏖️', '☕', '🍽️', '🍷', '🎁', '📷', '✍️',
-  // misc
-  '⭐', '🔥', '⚡', '🎯', '🚀', '💡', '🧠', '🙏', '🌍', '🕊️', '⏰', '📌',
-  // more work & learning
-  '📅', '📋', '📎', '🖊️', '📐', '🗣️', '🧑‍🏫', '🏢', '🧾', '📣', '🔍', '🧩', '🗃️', '📤', '📥', '💬', '☎️', '🖥️', '⌨️', '🖨️',
-  // more life & errands
-  '🏡', '🛏️', '🚿', '🧼', '👕', '🧺', '🪥', '🍲', '🥪', '🍕', '🍰', '🥤', '🛍️', '🎒', '🚌', '🚆', '🚕', '⛽', '🏥', '🧑‍⚕️',
-  // more health & outdoors
-  '🧗', '🚶', '🤸', '🏋️', '🥾', '🚣', '⛷️', '🏄', '🌳', '🌞', '🌙', '💧', '🫁', '🦶', '🩹', '🧴',
-  // more fun & culture
-  '🎭', '🎤', '🎧', '🎻', '🥁', '🎲', '🧶', '🪴', '📸', '🎟️', '🏛️', '🗺️', '🍿', '📚', '🐾', '🐦',
-  // people & feelings
-  '❤️‍🩹', '💞', '👫', '👨‍👩‍👧', '🧓', '🎂', '🥳', '😴', '😌', '🤝', '🫶', '🙌',
-  // symbols & colors
-  '✅', '❗', '❓', '⚠️', '🔔', '🔒', '♻️', '🏁', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪',
-].filter((x, i, a) => a.indexOf(x) === i);
+// Icons for categories, grouped by theme (the pickers show them under these headings).
+export const CAT_ICON_GROUPS = [
+  ['Work & office', ['💼', '💻', '🖥️', '⌨️', '🖨️', '📊', '📈', '🗂️', '🗃️', '📋', '📎', '🖊️', '📝', '✏️', '📅', '🗓️', '📞', '☎️', '✉️', '📤', '📥', '💬', '📣', '🏢', '🤝', '🎤', '🗣️', '🧑‍💻', '🛠️', '🔧', '🔍']],
+  ['Learning', ['📚', '📖', '🎓', '🧑‍🏫', '🔬', '🧪', '🧮', '📐', '🧩', '🧠', '💡']],
+  ['Home & errands', ['🏠', '🏡', '🛏️', '🧹', '🧺', '🧼', '🚿', '🪥', '👕', '🛒', '🛍️', '📦', '🎒', '💰', '🧾', '🏦', '🌱', '🪴']],
+  ['Food & drink', ['🍳', '🍲', '🥪', '🍕', '🍰', '🥗', '🍎', '🍽️', '☕', '🥤', '🍷', '🍿']],
+  ['Health & rest', ['🩺', '🧑‍⚕️', '🏥', '💊', '🦷', '🩹', '🧴', '🫁', '🦶', '😴', '😌', '❤️', '❤️‍🩹']],
+  ['Sport & outdoors', ['💪', '🏃', '🚶', '🧘', '🤸', '🏋️', '🏊', '🚴', '🚣', '🧗', '🥾', '⛷️', '🏄', '⚽', '🏀', '🎾', '⛰️', '🌳', '🏖️']],
+  ['Travel', ['🚗', '🚲', '🚌', '🚆', '🚕', '⛽', '✈️', '🧳', '🗺️', '🌍', '🏛️']],
+  ['Fun & culture', ['🎉', '🎨', '🎭', '🎵', '🎧', '🎸', '🎹', '🎻', '🥁', '🎬', '📺', '🎮', '♟️', '🎲', '🧶', '📷', '📸', '🎟️', '✍️', '🎁']],
+  ['People & pets', ['👪', '👨‍👩‍👧', '👫', '👶', '🧓', '🎂', '🥳', '💞', '🫶', '🙌', '🙏', '🕊️', '🐶', '🐱', '🐾', '🐦']],
+  ['Nature & time', ['🌞', '🌙', '💧', '🔥', '⚡', '⭐', '⏰']],
+  ['Symbols & colors', ['🎯', '🚀', '📌', '✅', '❗', '❓', '⚠️', '🔔', '🔒', '♻️', '🏁', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪']],
+];
+export const CAT_ICONS = CAT_ICON_GROUPS.flatMap(([, list]) => list).filter((x, i, a) => a.indexOf(x) === i);
+// The icon grid, by theme. Icons other categories already use are left out (except `keep`, the current one).
+export function iconGridHTML(settings, { keep = '', exceptId = null } = {}) {
+  const used = new Set((settings?.categories || []).filter((c) => c.id !== exceptId).map((c) => c.icon).filter(Boolean));
+  return CAT_ICON_GROUPS.map(([name, list]) => {
+    const free = list.filter((ic) => ic === keep || !used.has(ic));
+    return free.length ? `<div class="ic-group"><span class="ic-gl">${esc(name)}</span><div class="ic-gi">${free.map((ic) => `<button type="button" class="ic-btn ${ic === keep ? 'on' : ''}" data-ic="${ic}">${ic}</button>`).join('')}</div></div>` : '';
+  }).join('');
+}
 // Keep only the first emoji/symbol (or 2 letters) a person typed.
 export function cleanIcon(v) {
   const s = String(v || '').trim();
@@ -111,7 +110,7 @@ export function categoryPicker(host, { settings, selected, onChange, onCreate, a
       </div>
       ${adding ? `<div class="cat-new">
         <div class="row"><input class="cat-icon" placeholder="🙂" maxlength="8" aria-label="Icon" value="${esc(newIcon)}"><input class="cat-name" placeholder="New category, e.g. Leisure" maxlength="30"></div>
-        <div class="icon-grid">${CAT_ICONS.map((ic) => `<button type="button" class="ic-btn" data-ic="${ic}">${ic}</button>`).join('')}</div>
+        <div class="icon-grid grouped">${iconGridHTML(settings, { keep: newIcon })}</div>
         ${swatchesHTML('catcolor', newColor)}
         <div class="row"><button type="button" class="btn small primary cat-save">Add</button><button type="button" class="btn small ghost cat-cancel">Cancel</button></div>
       </div>` : ''}`);
@@ -122,7 +121,7 @@ export function categoryPicker(host, { settings, selected, onChange, onCreate, a
       wireSwatches(host.querySelector('.cat-new'), (c) => { newColor = c; });
       const iconIn = host.querySelector('.cat-icon');
       iconIn.oninput = () => { newIcon = iconIn.value; };
-      $$('.ic-btn', host).forEach((b) => (b.onclick = () => { newIcon = iconIn.value = b.dataset.ic; }));
+      $$('.ic-btn', host).forEach((b) => (b.onclick = () => { newIcon = iconIn.value = b.dataset.ic; $$('.ic-btn', host).forEach((x) => x.classList.toggle('on', x === b)); }));
       const save = async () => {
         const n = name.value.trim();
         if (!n) { name.focus(); return; }

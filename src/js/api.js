@@ -252,6 +252,21 @@ export function createApi(h) {
       const it = await findEvent(a.event); const done = a.done !== false && a.done !== 'false';
       await h.setEventDone(it, done, { quiet: true }); return { [done ? 'done' : 'undone']: it.title };
     } },
+    startedLate: { params: 'session? (default: the one running now) | task + index, at ("14:25" or a date-time), reallocate? (default true: plan the missed time again later; false: drop it)', about: 'You started a session late: it then runs from "at" to its planned end.', write: true, run: async (a) => {
+      let task, sess;
+      if (a.session || a.task) ({ task, sess } = findSession(a.session, a.task, a.index));
+      else {
+        const now = Date.now();
+        const run = h.st().tasks.filter((t) => !t.archived).flatMap((t) => S.sessions(t).filter((c) => c.start < now && c.end > now).map((c) => ({ task: t, sess: c })));
+        if (run.length !== 1) err(run.length ? 'Several sessions are running — give "session".' : 'No task session is running right now.');
+        ({ task, sess } = run[0]);
+      }
+      let at = /^\d{1,2}:\d{2}$/.test(String(a.at || '')) ? T.atTime(T.dayKey(sess.start, h.tz()), String(a.at).padStart(5, '0'), h.tz()) : a.at ? when(a.at) : Math.floor(Date.now() / T.MIN) * T.MIN;
+      if (!(at > sess.start && at < sess.end - T.MIN)) err(`"at" must be between ${fmt(sess.start)} and ${fmt(sess.end)}.`);
+      const re = a.reallocate !== false && a.reallocate !== 'false';
+      h.replaceTask(S.startedLate(task, sess.id, at, { reallocate: re })); await h.saveTasks('AI: started late'); await h.cycle();
+      return { session: sess.label, now: `${fmt(at)} – ${fmt(sess.end)}`, missedMinutes: Math.round((at - sess.start) / T.MIN), replanned: re };
+    } },
     markPartial: { params: 'session | task + index, pages (reading) | percent, rest? ("add time" | "fit in")', about: 'Record a partly done session; the rest is re-planned.', write: true, run: async (a) => {
       const { task, sess } = findSession(a.session, a.task, a.index);
       const credit = task.kind === 'reading' ? S.minutesForPages(task, +(a.pages ?? err('Give "pages" for a reading session.'))) : (Math.max(0, Math.min(100, +(a.percent ?? err('Give "percent".')))) / 100) * sess.work;
@@ -297,10 +312,11 @@ export function createApi(h) {
     } },
     finishEarly: { params: 'item? (event id/title or session id; default: whatever is running now), then: "move tasks up" | "keep free" | "nothing"', about: 'End what is running now at the current time.', write: true, run: (a) => h.finishedEarlyApi(a) },
     replan: { about: 'Re-plan all tasks now.', write: true, run: async () => { await h.cycle(); return { ok: true }; } },
-    setSettings: { params: 'workHours {start, end, days}, dailyCapMinutes, marginDays, breakMinutes, sessionMinutes, travelMinutes, gapMinutes (since last / till next buffer, 0–15), eventProfile, taskProfile (notification profile names)', about: 'Change common settings.', write: true, run: async (a) => {
+    setSettings: { params: 'workHours {start, end, days}, dailyCapMinutes, marginDays, breakMinutes, sessionMinutes, travelMinutes, gapMinutes (since last / till next buffer, 0–15), tillNextMinutes (till next only), eventProfile, taskProfile (notification profile names)', about: 'Change common settings.', write: true, run: async (a) => {
       const s = h.set();
       if (a.workHours) s.bounds = { ...s.bounds, ...a.workHours };
       if (a.gapMinutes != null || a.sinceLastBuffer != null) s.sinceLastBuffer = Math.max(0, Math.min(15, Math.round(+(a.gapMinutes ?? a.sinceLastBuffer) || 0)));
+      if (a.tillNextMinutes != null || a.gapMinutes != null) s.tillNextBuffer = Math.max(0, Math.min(15, Math.round(+(a.tillNextMinutes ?? a.gapMinutes) || 0)));
       if (a.eventProfile) s.eventProfile = profileByName(a.eventProfile).id;
       if (a.taskProfile) s.taskProfile = profileByName(a.taskProfile).id;
       for (const [k, sk] of [['dailyCapMinutes', 'dailyCapMinutes'], ['marginDays', 'marginDays'], ['breakMinutes', 'breakMinutes'], ['sessionMinutes', 'chunkMinutes'], ['travelMinutes', 'travelMinutes']]) if (a[k] != null) s[sk] = +a[k];

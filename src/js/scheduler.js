@@ -661,6 +661,19 @@ export function finishEarly(task, chunkId, end) {
   return { ...t, frozen: t.frozen.map((c) => (c.id === chunkId ? { ...c, end: Math.max(c.start + T.MIN, end), slotMin: +c.slotMin || dur(c), credit: task.kind === 'reading' ? c.credit : ss.work, syncHash: null } : c)) };
 }
 
+// Started a session late: it now runs from `start` to its planned end. With `reallocate`, the missed minutes are
+// planned again later (the session only covers what fits); otherwise the session still counts its full work.
+export function startedLate(task, chunkId, start, { reallocate = true } = {}) {
+  const ss = sessions(task).find((x) => x.id === chunkId);
+  const c = (task.planned || []).find((x) => x.id === chunkId) || (task.frozen || []).find((x) => x.id === chunkId);
+  if (!ss || !c || start <= c.start || start >= c.end - T.MIN) return task;
+  const slotMin = +c.slotMin || dur(c);
+  const nc = { ...c, start, status: c.status === 'pinned' ? 'pinned' : 'done', auto: c.status === 'pinned' ? c.auto : true, overdue: undefined, syncHash: null,
+    slotMin, lateMin: Math.round((start - c.start) / T.MIN), credit: reallocate ? undefined : ss.work };
+  if (reallocate) delete nc.credit;
+  return { ...task, planned: (task.planned || []).filter((x) => x.id !== chunkId), frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), nc] };
+}
+
 // Change a reading task's speed without shifting what's already been read: done sessions keep their pages.
 export function withReadingSpeed(task, reading) {
   if (task.kind !== 'reading') return { ...task, reading };
