@@ -12,7 +12,7 @@ try { const o = sessionStorage.getItem('__off'); if (o) globalThis.__off = +o - 
 class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+globalThis.__off);} else super(...a);} static now(){ return _Date.now()+globalThis.__off; } } globalThis.Date = D;
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false}));
+  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2026-10-19'));
 }"""
 async def main():

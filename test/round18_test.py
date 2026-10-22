@@ -11,7 +11,7 @@ const FIX = Date.parse('2026-10-22T13:00:00Z'); const _Date = Date; globalThis._
 class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+globalThis.__off);} else super(...a);} static now(){ return _Date.now()+globalThis.__off; } } globalThis.Date = D;
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, reviewAllEvents: true, zodiac: 'scorpio'}));
+  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false, reviewAllEvents: true, zodiac: 'scorpio'}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2026-10-19'));
 }"""
 PNG = bytes.fromhex('89504e470d0a1a0a0000000d4948445200000001000000010806000000'+'1f15c4890000000d49444154789c6360000000000200015e2b2a8d0000000049454e44ae426082')

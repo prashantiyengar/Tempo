@@ -206,7 +206,11 @@ const MAX_TRIES = 5;
 // Safe to repeat after a network failure: reads, deletes, patches, and inserts that carry their own event id.
 const idempotent = (method, body) => method !== 'POST' || !!body?.id;
 
+// No network: the app keeps working with what it saved (calendar snapshot, tasks); no point retrying.
+export class OfflineError extends Error {}
+export const isOffline = (e) => e instanceof OfflineError || (globalThis.navigator?.onLine === false && /reach Google|network|fetch/i.test(e?.message || ''));
 async function req(method, path, { query, body, retry = true, attempt = 0 } = {}) {
+  if (globalThis.navigator?.onLine === false) throw new OfflineError('You are offline.');
   const token = await getToken(false);
   const url = new URL(path.startsWith('http') ? path : API + path);
   if (query) for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);
@@ -219,6 +223,7 @@ async function req(method, path, { query, body, retry = true, attempt = 0 } = {}
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
+    if (globalThis.navigator?.onLine === false) throw new OfflineError('You are offline.');
     // Network hiccup: retry with backoff when repeating the request can't create a duplicate.
     if (attempt < MAX_TRIES - 1 && idempotent(method, body)) return again();
     throw new Error(`Couldn't reach Google (${e.message || 'network error'})`);

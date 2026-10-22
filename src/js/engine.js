@@ -135,6 +135,28 @@ export function visibleCalendars(state) {
   return (state.gmeta.calendars || []).filter((c) => !hidden.has(c.id));
 }
 
+// ---------- Offline snapshot of calendar events (about two months back to four months ahead) ----------
+const SNAP_BACK = 60 * T.DAY, SNAP_AHEAD = 130 * T.DAY, SNAP_MAX = 4000;
+const snapStart = (e) => (e.start?.dateTime ? Date.parse(e.start.dateTime) : e.start?.date ? Date.parse(e.start.date + 'T00:00:00') : 0);
+const snapEnd = (e) => (e.end?.dateTime ? Date.parse(e.end.dateTime) : e.end?.date ? Date.parse(e.end.date + 'T00:00:00') : snapStart(e));
+const slim = (e) => ({ id: e.id, _calId: e._calId, summary: e.summary, start: e.start, end: e.end, status: e.status, location: e.location, colorId: e.colorId,
+  recurringEventId: e.recurringEventId, transparency: e.transparency, iCalUID: e.iCalUID, htmlLink: e.htmlLink, reminders: e.reminders, extendedProperties: e.extendedProperties,
+  attendees: e.attendees?.filter((a) => a.self), description: e.description ? String(e.description).slice(0, 400) : undefined, hangoutLink: e.hangoutLink, organizer: e.organizer });
+let snapMem = null, snapTimer = null;
+async function loadSnap() { if (!snapMem) snapMem = (await get('evsnap')).evsnap || { at: 0, cals: {} }; return snapMem; }
+function saveSnap(calId, from, to, items) {
+  const now = Date.now(), a = Math.max(from, now - SNAP_BACK), b = Math.min(to, now + SNAP_AHEAD);
+  if (b <= a) return;
+  loadSnap().then((snap) => {
+    const keep = (snap.cals[calId] || []).filter((e) => (snapEnd(e) <= a || snapStart(e) >= b) && snapEnd(e) > now - SNAP_BACK && snapStart(e) < now + SNAP_AHEAD);
+    snap.cals[calId] = [...keep, ...items.filter((e) => snapEnd(e) > a && snapStart(e) < b && !e.extendedProperties?.private?.tempoTask).map(slim)].slice(-SNAP_MAX);
+    snap.at = now;
+    clearTimeout(snapTimer);
+    snapTimer = setTimeout(() => set({ evsnap: snap }).catch(() => {}), 1500);
+  });
+}
+export const offlineSince = (state) => state.offline?.since ?? null;
+
 export async function googleEvents(state, from, to, { calendars, force } = {}) {
   if (!connected(state)) return [];
   const cals = calendars || visibleCalendars(state);
@@ -142,8 +164,19 @@ export async function googleEvents(state, from, to, { calendars, force } = {}) {
     const key = `${c.id}|${from}|${to}`;
     const hit = cache.get(key);
     if (hit && !force && Date.now() - hit.at < TTL) return hit.items;
-    const items = (await G.listEvents(c.id, from, to)).map((e) => ({ ...e, _calId: c.id }));
+    let items;
+    try {
+      items = (await G.listEvents(c.id, from, to)).map((e) => ({ ...e, _calId: c.id }));
+    } catch (err) {
+      // Offline (or Google unreachable): show the events saved the last time we were online.
+      if (!G.isOffline(err) && !/reach Google/i.test(err?.message || '')) throw err;
+      const snap = await loadSnap();
+      state.offline = { since: snap.at || null };
+      return (snap.cals?.[c.id] || []).filter((e) => snapEnd(e) > from && snapStart(e) < to);
+    }
+    state.offline = null;
     cache.set(key, { at: Date.now(), items });
+    saveSnap(c.id, from, to, items);
     return items;
   }));
   // Task sessions we know about are drawn from the scheduler (with their labels, status and actions), so the
@@ -509,7 +542,7 @@ const SHARED_PART = 450;
 export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bounds', 'overflowBounds', 'chunkMinutes', 'minChunkMinutes', 'breakMinutes',
   'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
-  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'later', 'weather'];
+  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'later', 'weather'];
 const normCat = ({ id, name, color, icon, prefer }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}) });
 function sharedOf(s) {
   const o = {};

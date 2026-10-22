@@ -1561,7 +1561,8 @@ async function runCycle({ sync = true, pull = false } = {}) {
     try {
       if (E.connected(st()) && set().syncTasksToGoogle) setStatus('Syncing…', 'busy');
       const res = await E.syncTasks(st(), (fn) => fn(st()), (n, total) => setStatus(`Syncing ${n}/${total}…`, 'busy'));
-      if (res.ok) setStatus(`Synced ${T.fmtTime(Date.now(), tz(), set().h12)}`, 'ok');
+      if (navigator.onLine === false || st().offline) offlineStatus();
+      else if (res.ok) setStatus(`Synced ${T.fmtTime(Date.now(), tz(), set().h12)}`, 'ok');
       else if (res.kind === 'local') setStatus('Local only', 'warn');
       else if (res.kind === 'off') setStatus('Not syncing tasks', 'warn');
       else setStatus('Sync problem', 'bad');
@@ -1906,17 +1907,21 @@ async function renderPaperView(seq) {
     const g = A.groupOf(it, 'category', actx); groups[g.key] ||= g;
     return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.title, kind: it.kind, uid: it.key };
   });
-  const data = A.compute(occ, A.scopeWindows('waking', from, Math.min(to, Math.max(from + T.DAY, r.isCurrent ? T.dayStart(T.addDays(T.dayKey(Date.now(), z), 1), z) : to)), s), z);
+  const scope = s.paperScope && (A.SCOPES[s.paperScope] || (s.periods || []).some((p) => 'period:' + p.id === s.paperScope)) ? s.paperScope : 'waking';
+  const upTo = Math.min(to, Math.max(from + T.DAY, r.isCurrent ? T.dayStart(T.addDays(T.dayKey(Date.now(), z), 1), z) : to));
+  if (scope === 'full' && s.sleepAssume !== false) { const sl = A.assumedSleep(occ, from, upTo, s); if (sl.blocks.length) { const sg = A.sleepGroup(s, 'category'); occ.push(...A.sleepItems(sl, sg)); groups[sg.key] ||= sg; } }
+  const data = A.compute(occ, A.scopeWindows(scope, from, upTo, s), z);
   let busiest = null;
   for (const [k, d] of Object.entries(data.days)) { const used = d.available - d.free - (d.gaps || 0); if (used > 0 && (!busiest || used > busiest.m)) busiest = { k, m: used }; }
   const use = {
     groups: Object.entries(data.totals.groups).map(([k, m]) => ({ label: groups[k]?.label || k, color: groups[k]?.color || '#888', m })).sort((a, b) => b.m - a.m),
     occupied: data.totals.available - data.totals.free - (data.totals.gaps || 0), free: data.totals.free, available: data.totals.available, busiest,
-    scope: `between ${s.overflowBounds.start} and ${s.overflowBounds.end}${r.isCurrent ? ' so far' : ''}`,
+    scope: `${scope === 'waking' ? `between ${s.overflowBounds.start} and ${s.overflowBounds.end}` : scope === 'full' ? 'around the clock' : scope === 'bounds' ? `within day bounds (${s.bounds.start}–${s.bounds.end})` : scope === 'outside' ? 'outside day bounds' : `in “${(s.periods || []).find((p) => 'period:' + p.id === scope)?.name || 'period'}”`}${r.isCurrent ? ' so far' : ''}`,
   };
   const hsrc = s.horoscopeSource || 'community';
   const tools = `<div class="np-tools">
     <label class="field inline np-per"><span>Period</span><select data-np="period">${Object.entries(NP.PERIODS).map(([k, v]) => `<option value="${k}" ${k === per ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
+    <label class="field inline np-per"><span>Hours</span><select data-np="scope">${[...Object.entries(A.SCOPES), ...(s.periods || []).map((p) => ['period:' + p.id, p.name])].map(([k, v]) => `<option value="${esc(k)}" ${k === scope ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
     <label class="chk"><input type="checkbox" data-np="all" ${s.reviewAllEvents ? 'checked' : ''}> Include all events <span class="muted small">(not ones repeating daily or 3+ times a week)</span></label>
     <span class="grow"></span><button type="button" class="btn small ghost np-hsrc" title="Where the horoscope text comes from">Horoscope: ${hsrc === 'off' ? 'off' : hsrc === 'apiverve' ? 'APIVerve' : 'online'}</button><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
   const root = $('.np-wrap', view) || view.appendChild(el('<div class="np-wrap"></div>'));
@@ -1925,6 +1930,7 @@ async function renderPaperView(seq) {
   if (seq !== app.renderSeq) return;
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
+  $('[data-np=scope]', root).onchange = async (e) => { s.paperScope = e.target.value; await E.persist(st(), ['settings']); syncSharedSoon(); render(); };
   $('[data-np=period]', root).onchange = async (e) => { s.paperPeriod = e.target.value; app.paperWeek = null; await E.persist(st(), ['settings']); render(); };
   $('[data-np=sign]', root).onchange = async (e) => { s.zodiac = e.target.value || null; await E.persist(st(), ['settings']); render(); };
   $('.np-hist', root).onclick = () => { app.view = 'analysis'; app.anMode = 'history'; render(); };
@@ -1939,7 +1945,7 @@ async function renderPaperView(seq) {
     const img = $('img', box);
     if (img) img.onerror = () => { if ((visit.picFails = (visit.picFails || 0) + 1) <= 2) { visit.picLoad = null; loadPic(); } else setHTML(box, NP.pictureHTML(null)); };
   };
-  const loadPic = () => { visit.pic = undefined; const box = $('.np-pic', root); if (box) setHTML(box, '<p class="np-small np-mute">Fetching a picture from the 19th century…</p>'); return (visit.picLoad = XT.fetchPicture().then((p) => { visit.pic = p; if (app.npVisit === visit && app.view === 'review') render(); })); };
+  const loadPic = () => { visit.pic = undefined; const box = $('.np-pic', root); if (box) setHTML(box, '<p class="np-small np-mute">Fetching a picture from the 19th century…</p>'); return (visit.picLoad = XT.fetchPicture({ sources: set().picSources }).then((p) => { visit.pic = p; if (app.npVisit === visit && app.view === 'review') render(); })); };
   if (visit.pic === undefined && !visit.picLoad) loadPic(); else showPic();
   $('.np-pic-new', root).onclick = () => { visit.picLoad = null; loadPic(); };
   $('.np-pic-hist', root)?.addEventListener('click', () => { const d = $('.np-archive', root); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
@@ -2074,9 +2080,10 @@ async function renderGoalsView(seq) {
           ${bar}
           <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
             <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
-            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + ' / ' : ''}${hrs(g.budget)}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}</button>
+            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + (g.budget ? ' / ' : '') : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.cats?.length ? ` <span class="g-gcats" title="Counts: ${esc(g.cats.map(catName).join(', '))}">${g.cats.map((id) => `<i style="background:${esc(C.catById(s, id)?.color || '#9aa0aa')}"></i>`).join('')}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}</button>
             <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
-          <form class="g-add" data-head="${p.head}"><input name="t" placeholder="Add a ${p.label.toLowerCase()} goal…" maxlength="200" autocomplete="off" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}"><input name="b" type="number" min="0" step="0.25" placeholder="h" title="Time budget in hours (optional)" class="g-bin"><button class="btn small" type="submit">Add</button></form>
+          <form class="g-add" data-head="${p.head}"><input name="t" placeholder="Add a ${p.label.toLowerCase()} goal…" maxlength="200" autocomplete="off" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}"><input name="b" type="number" min="0" step="0.25" placeholder="h" title="Time budget in hours (optional)" class="g-bin"><button type="button" class="icon-btn sm g-catbtn" title="Categories that count for this goal (optional — otherwise the head's)">🏷</button><button class="btn small" type="submit">Add</button>
+            <div class="g-addcats" hidden><span class="muted small">Counts for this goal:</span>${(s.categories || []).map((c) => `<button type="button" class="cat-chip g-ac" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}"><i></i>${esc(C.catLabel(c))}</button>`).join('')}</div></form>
         </div>`;
       }).join('')}
     </section>`;
@@ -2096,11 +2103,16 @@ async function renderGoalsView(seq) {
   $$('.g-card', root).forEach((c) => {
     const key = c.dataset.key, x = sec.list.find((q) => q.key === key);
     const trips = GL.travelIn(items, x.kind === 'year' ? today : x.from, x.to, s);
-    $$('.g-add', c).forEach((f) => (f.onsubmit = (e) => {
-      e.preventDefault(); const v = f.t.value.trim(); if (!v) return;
-      const b = parseFloat(f.b.value); app.goalFocus = `${key}|${f.dataset.head}`;
-      saveGoals(GL.add(set(), key, v, { head: f.dataset.head, budget: b > 0 ? b * 60 : null }), 'add goal');
-    }));
+    $$('.g-add', c).forEach((f) => {
+      $('.g-catbtn', f).onclick = () => { const box = $('.g-addcats', f); box.hidden = !box.hidden; $('.g-catbtn', f).classList.toggle('on', !box.hidden); };
+      $$('.g-ac', f).forEach((b) => (b.onclick = () => b.classList.toggle('on')));
+      f.onsubmit = (e) => {
+        e.preventDefault(); const v = f.t.value.trim(); if (!v) return;
+        const b = parseFloat(f.b.value); app.goalFocus = `${key}|${f.dataset.head}`;
+        const cats = $$('.g-ac.on', f).map((x) => x.dataset.cat);
+        saveGoals(GL.add(set(), key, v, { head: f.dataset.head, budget: b > 0 ? b * 60 : null, cats }), 'add goal');
+      };
+    });
     $$('.g-trip-add', c).forEach((b) => (b.onclick = () => { const t = trips[+b.dataset.i]; saveGoals(GL.add(set(), key, `Prepare for ${t.title} (${GL.fmtTrip(t, s)})`, { head: 'personal' }), 'add goal'); }));
     $$('.g-carry', c).forEach((b) => (b.onclick = () => saveGoals(GL.moveTo(set(), b.dataset.from, b.dataset.id, key), 'move goal')));
     $('.g-carry-all', c)?.addEventListener('click', () => { let gs = set().goals || {}; for (const b of $$('.g-carry', c)) gs = GL.moveTo({ ...set(), goals: gs }, b.dataset.from, b.dataset.id, key); saveGoals(gs, 'move goals'); });
@@ -2152,6 +2164,57 @@ async function editGoal(key, id) {
 }
 
 // On the first day of the week, offer the review once.
+// On the first day of a new week or month (from 9:00, or whenever the app is opened later that day — or in the
+// first days if it wasn't opened), show this week's and this month's goals once. Snooze hides it for N hours.
+let goalNoticeOpen = false;
+async function checkGoalNotice() {
+  const s = set(), z = tz();
+  if (s.goalNotice === false || goalNoticeOpen || document.querySelector('dialog[open]')) return;
+  const now = Date.now(), today = T.dayKey(now, z), wk = T.startOfWeek(today, s.weekStart ?? 1);
+  const { y, m } = T.parseKey(today), mStart = T.keyOf(y, m, 1);
+  const at = s.goalNoticeAt || '09:00';
+  const due = (start, graceDays) => { const d = T.daysBetween(start, today); return d > 0 ? d <= graceDays : now >= T.atTime(start, at, z); };
+  const shown = s.goalNoticeShown || {};
+  const keys = [];
+  if (due(wk, 2) && !shown[GL.weekKey(wk)]) keys.push(GL.weekKey(wk));
+  if (due(mStart, 3) && !shown[GL.monthKey(mStart)]) keys.push(GL.monthKey(mStart));
+  if (!keys.length) return;
+  let snooze = 0; try { snooze = +localStorage.getItem('tempo:goalSnooze') || 0; } catch { /* ignore */ }
+  if (snooze > now) return;
+  goalNoticeOpen = true;
+  try {
+    const isWeek = keys.some((k) => k.startsWith('w:')), isMonth = keys.some((k) => k.startsWith('m:'));
+    const show = [GL.weekKey(wk), GL.monthKey(mStart)];
+    const block = (k) => {
+      const l = GL.list(s, k);
+      const head = k.startsWith('w:') ? `This week · ${T.format(T.dayStart(wk, z), z, { day: 'numeric', month: 'short' })} – ${T.format(T.dayStart(T.addDays(wk, 6), z), z, { day: 'numeric', month: 'short' })}` : T.format(T.dayStart(mStart, z), z, { month: 'long', year: 'numeric' });
+      if (!l.length) return `<h3 class="gn-h">${esc(head)}</h3><p class="muted small">No goals set yet.</p>`;
+      return `<h3 class="gn-h">${esc(head)}</h3>${GL.HEADS.map(([h, label, icon]) => { const gs = l.filter((g) => GL.headOf(g) === h); return gs.length ? `<div class="gn-head"><b>${icon} ${label}</b><ol>${gs.map((g) => `<li class="${g.done ? 'done' : ''}">${esc(g.text)}${g.budget ? ` <span class="muted small">⏱ ${T.fmtDur(g.budget)}</span>` : ''}</li>`).join('')}</ol></div>` : ''; }).join('')}`;
+    };
+    let lastH = 2; try { lastH = +localStorage.getItem('tempo:goalSnoozeH') || 2; } catch { /* ignore */ }
+    const r = await modal(`<div class="choice goal-notice"><h2>${isWeek && isMonth ? 'A new week and a new month' : isMonth ? 'A new month' : 'A new week'} — your goals</h2>
+        <div class="gn-body">${show.map(block).join('')}</div>
+        <div class="actions gn-actions"><button type="button" class="btn ghost gn-open">Open Goals</button><span class="grow"></span>
+          <span class="gn-snooze">Snooze for <input type="number" class="gn-h-in" min="0.25" max="72" step="0.25" value="${lastH}" aria-label="Hours"> h <button type="button" class="btn gn-snz">Snooze</button></span>
+          <button type="button" class="btn primary gn-ok">Got it</button></div></div>`, (dlg, close) => {
+      $('.gn-open', dlg).onclick = () => close('open');
+      $('.gn-ok', dlg).onclick = () => close('ok');
+      $('.gn-snz', dlg).onclick = () => close({ snooze: Math.max(0.25, Math.min(72, +$('.gn-h-in', dlg).value || 2)) });
+    }, { cls: 'narrow' });
+    if (r && r.snooze) {
+      try { localStorage.setItem('tempo:goalSnooze', String(Date.now() + r.snooze * T.HOUR)); localStorage.setItem('tempo:goalSnoozeH', String(r.snooze)); } catch { /* ignore */ }
+      toast(`Goal reminder snoozed for ${T.fmtDur(Math.round(r.snooze * 60))}`, { noUndo: true });
+      return;
+    }
+    // shown (dismissed or closed): don't show again for these periods, on any device
+    const next = { ...(set().goalNoticeShown || {}) };
+    for (const k of keys) next[k] = Date.now();
+    set().goalNoticeShown = Object.fromEntries(Object.entries(next).sort((a, b) => b[1] - a[1]).slice(0, 12));
+    await E.persist(st(), ['settings']); syncSharedSoon();
+    if (r === 'open') { app.view = 'goals'; render(); }
+  } finally { goalNoticeOpen = false; }
+}
+
 async function maybeOfferReview() {
   const z = tz(), wk = T.startOfWeek(T.dayKey(Date.now(), z), set().weekStart);
   const { lastReviewWeek } = await storeGet('lastReviewWeek');
@@ -2267,7 +2330,13 @@ async function handleProblems(problems) {
 
 function setStatus(text, kind = '') { app.status = { text, kind }; const s = $('#sync-status'); if (s) { s.textContent = text; s.className = 'status ' + kind; } }
 
+function offlineStatus() {
+  const since = E.offlineSince(st());
+  setStatus(since ? `Offline · saved ${T.fmtTime(since, tz(), set().h12)}${T.dayKey(since, tz()) !== T.dayKey(Date.now(), tz()) ? ' ' + T.format(since, tz(), { day: 'numeric', month: 'short' }) : ''}` : 'Offline', 'warn');
+}
 function handleError(err) {
+  // No connection: keep working quietly with saved data; it syncs again when you're back online.
+  if (G.isOffline(err) || (navigator.onLine === false)) { offlineStatus(); return; }
   console.error(err);
   if (err instanceof G.AuthError || err instanceof G.PermissionError) {
     setStatus(err instanceof G.PermissionError ? 'Permission needed' : 'Google sign-in needed', 'bad');
@@ -2805,15 +2874,19 @@ async function init() {
       await E.persist(st(), ['gmeta', 'settings']);
     } catch (err) { handleError(err); }
   }
-  window.__tempo = { app, cycle, render, S, T, E, checkGoogle: async () => { app.gCursors ||= {}; if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); return true; } return false; } }; // handy for debugging from the console
+  window.__tempo = { app, cycle, render, S, T, E, checkGoalNotice, checkGoogle: async () => { app.gCursors ||= {}; if (await E.googleChanged(st(), app.gCursors)) { E.invalidate(); await cycle({ pull: true }); return true; } return false; } }; // handy for debugging from the console
   markBaseline();
   setupApi();
   setupSwipe();
   loadTimer();
   await cycle({ pull: true });
   maybeOfferReview();
+  setTimeout(checkGoalNotice, 3000);
+  setInterval(checkGoalNotice, 60000);
   if (isWeb) startWebReminders();
   if (isWeb && 'serviceWorker' in navigator && document.querySelector('link[rel=manifest]')) navigator.serviceWorker.register('sw.js').catch(() => {});
+  addEventListener('offline', () => { offlineStatus(); toast('You’re offline — showing your saved calendar. Changes sync when you’re back.', { noUndo: true, ms: 5000 }); });
+  addEventListener('online', () => { st().offline = null; E.invalidate(); cycle({ pull: true }); });
   setInterval(() => cycle({ pull: true }), 5 * 60 * 1000);
   // Auto-refresh: while the app is open, check Google every 45 s for changes made elsewhere (phone, Google Calendar,
   // another browser) and reload when something changed.

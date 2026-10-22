@@ -878,3 +878,63 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .np-ghh { font-size: 13.5px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .np-gbar { display: inline-block; width: 70px; height: 6px; border: 1px solid var(--np-rule); vertical-align: middle; }
 .np-gbar i { display: block; height: 100%; background: var(--np-ink); }
+.g-add { flex-wrap: wrap; }
+.g-addcats { display: flex; flex-wrap: wrap; gap: 4px; width: 100%; align-items: center; }
+.g-addcats .cat-chip { font-size: 11.5px; padding: 2px 8px; }
+.g-catbtn.on { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.g-gcats { display: inline-flex; gap: 2px; vertical-align: middle; }
+.g-gcats i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+/* newspaper layout v3: picture in the middle column of the second row */
+.np-side { grid-row: auto; }
+.np-biz { grid-column: 1 / 3; }
+.np-grid > .np-pic-s { grid-column: 3 / 5; border-left: 1px solid var(--np-hair); padding-left: 20px !important; padding-right: 20px !important; border-right: 1px solid var(--np-hair); text-align: center; border-top: 0; }
+.np-feuil { grid-column: 5 / 7; border-left: 0; padding-left: 0 !important; }
+.np-pic-s .np-figure { margin: 2px 0 4px; }
+.np-pic-s .np-figure img { display: block; width: 100%; height: auto; max-height: 340px; object-fit: contain; margin: 0 auto; }
+.np-pic-s .np-figure figcaption { text-align: center; font-size: 12px; }
+.np-pic-s .np-pic-tools { font-size: 12px; }
+.np-words { grid-column: 4 / 7; }
+.pic-src { gap: 6px; align-items: center; flex-wrap: wrap; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.pic-src .ps-name { flex: 0 1 200px; }
+.pic-src .ps-val { flex: 1 1 200px; min-width: 0; }
+@media (max-width: 760px) { .np-grid > .np-pic-s { padding-right: 0 !important; border-right: 0 !important; } }
+/* ---------- Printing the newspaper: undo the app layout, keep the broadsheet columns ---------- */
+@media print {
+  @page { size: A4; margin: 10mm; }
+  body.review-mode { overflow: visible !important; background: #fff !important; }
+  body.review-mode .shell { display: block !important; height: auto !important; }
+  body.review-mode .main, body.review-mode .view, body.review-mode #view { display: block !important; height: auto !important; min-height: 0 !important; overflow: visible !important; }
+  body.review-mode .side, body.review-mode .topbar, body.review-mode .np-tools, body.review-mode #bottombar, body.review-mode #fab, body.review-mode #toast, body.review-mode .np-pic-tools, body.review-mode .np-sign, body.review-mode .np-archive,
+  body.review-mode .np-quote-new, body.review-mode .np-joke-new, body.review-mode .np-horo-live .link, body.review-mode .rv-open, body.review-mode .scrim, body.review-mode #timer-bar { display: none !important; }
+  body.review-mode .np-wrap { overflow: visible !important; padding: 0 !important; }
+  body.review-mode .np { --np-bg: #fff; --np-ink: #000; --np-mute: #444; --np-rule: #000; --np-hair: #999; box-shadow: none !important; max-width: none !important; padding: 0 !important; border-radius: 0; font-size: 10.5pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body.review-mode .np-title { font-size: 40pt; }
+  body.review-mode .np-h1 { font-size: 22pt; }
+  body.review-mode .np-h2 { font-size: 15pt; }
+  body.review-mode .np-h3 { font-size: 13pt; }
+  /* the phone layout's single column must not kick in on paper */
+  body.review-mode .np-grid { display: grid !important; grid-template-columns: repeat(6, minmax(0, 1fr)) !important; gap: 0 14px !important; }
+  body.review-mode .np-lead { grid-column: 1 / 5 !important; }
+  body.review-mode .np-side { grid-column: 5 / 7 !important; border-left: 1px solid var(--np-hair) !important; padding-left: 12px !important; }
+  body.review-mode .np-biz { grid-column: 1 / 3 !important; }
+  body.review-mode .np-grid > .np-pic-s { grid-column: 3 / 5 !important; border-left: 1px solid var(--np-hair) !important; border-right: 1px solid var(--np-hair) !important; padding: 4px 12px 14px !important; }
+  body.review-mode .np-feuil { grid-column: 5 / 7 !important; }
+  body.review-mode .np-goals, body.review-mode .np-out { grid-column: 1 / 4 !important; }
+  body.review-mode .np-words, body.review-mode .np-corr { grid-column: 4 / 7 !important; border-left: 1px solid var(--np-hair) !important; padding-left: 12px !important; }
+  body.review-mode .np-grid > section, body.review-mode .np-grid > aside { break-inside: avoid; page-break-inside: avoid; border-top: 1px solid var(--np-hair); }
+  body.review-mode .np-lead, body.review-mode .np-side { border-top: 0 !important; }
+  body.review-mode .np-cols { columns: 2 !important; column-gap: 14px; }
+  body.review-mode .np-pic-s .np-figure img { max-height: 70mm; filter: grayscale(1); }
+  body.review-mode .np-titlerow .np-orn { width: 48px; height: 48px; }
+  body.review-mode .np-mast { break-after: avoid; }
+}
+/* goal reminder popup */
+.goal-notice .gn-body { max-height: 60vh; overflow-y: auto; margin: 6px 0; }
+.gn-h { font-size: 14px; margin: 10px 0 4px; }
+.gn-head { margin: 2px 0 6px; font-size: 13.5px; }
+.gn-head ol { margin: 2px 0 0; padding-left: 22px; }
+.gn-head li.done { text-decoration: line-through; color: var(--muted); }
+.gn-actions { flex-wrap: wrap; align-items: center; gap: 6px; }
+.gn-snooze { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.gn-snooze input { width: 56px; padding: 4px 6px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.np-per select { width: auto !important; max-width: 200px; }

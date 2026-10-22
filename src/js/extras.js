@@ -24,9 +24,42 @@ const yearOf = (meta) => {
   return m ? +m[1] : null;
 };
 
-export async function fetchPicture({ fetchFn = fetch, tries = 4 } = {}) {
+// Picture sources (Settings → Review): the built-in 19th-century set, a Wikimedia Commons search or category,
+// the Art Institute of Chicago's public-domain collection, or a list of image links.
+export const DEFAULT_SOURCES = [{ id: 'builtin', name: '19th-century cartoons & photographs', kind: 'builtin', value: '', on: true }];
+export const SOURCE_KINDS = { builtin: 'Built-in (19th century)', commons: 'Wikimedia Commons search', commonscat: 'Wikimedia Commons category', aic: 'Art Institute of Chicago (public domain)', urls: 'Image links (one per line)' };
+export function fetchPicture({ sources = DEFAULT_SOURCES, fetchFn = fetch, tries = 4 } = {}) {
+  const on = (sources?.length ? sources : DEFAULT_SOURCES).filter((x) => x.on !== false && (x.kind === 'builtin' || String(x.value || '').trim()));
+  const src = on.length ? pickR(on) : DEFAULT_SOURCES[0];
+  if (src.kind === 'aic') return fetchAic(src, { fetchFn, tries });
+  if (src.kind === 'urls') return Promise.resolve(fromUrls(src));
+  const query = src.kind === 'commons' ? `${src.value} filetype:bitmap` : src.kind === 'commonscat' ? `deepcat:"${String(src.value).replace(/^Category:/i, '').replace(/"/g, '')}" filetype:bitmap` : null;
+  return fetchCommons({ query, fetchFn, tries, sourceName: src.name, old: src.kind === 'builtin' });
+}
+function fromUrls(src) {
+  const urls = String(src.value || '').split(/\s+/).filter((u) => /^https:\/\//i.test(u));
+  if (!urls.length) return null;
+  const u = pickR(urls);
+  const pic = { title: decodeURIComponent(u.split('/').pop().replace(/\.[a-z]+(\?.*)?$/i, '').replace(/[_-]+/g, ' ')).slice(0, 80) || src.name, thumb: u, page: u, artist: '', year: null, desc: '', license: src.name, source: src.name, at: Date.now() };
+  remember(pic); return pic;
+}
+async function fetchAic(src, { fetchFn, tries }) {
   for (let i = 0; i < tries; i++) {
-    const q = new URLSearchParams({ action: 'query', list: 'search', srnamespace: '6', srsearch: pickR(PIC_QUERIES), srlimit: '50', sroffset: String(rnd(4) * 50), format: 'json', origin: '*' });
+    try {
+      const q = new URLSearchParams({ q: src.value, 'query[term][is_public_domain]': 'true', limit: '40', page: String(1 + rnd(3)), fields: 'id,title,image_id,artist_display,date_display' });
+      const r = await fetchFn(`https://api.artic.edu/api/v1/artworks/search?${q}`); if (!r.ok) continue;
+      const list = ((await r.json())?.data || []).filter((x) => x.image_id);
+      if (!list.length) continue;
+      const a = pickR(list);
+      const pic = { title: a.title || 'Untitled', thumb: `https://www.artic.edu/iiif/2/${a.image_id}/full/843,/0/default.jpg`, page: `https://www.artic.edu/artworks/${a.id}`, artist: strip(a.artist_display).split('\n')[0].slice(0, 80), year: null, desc: strip(a.date_display), license: 'Public domain · Art Institute of Chicago', source: src.name, at: Date.now() };
+      remember(pic); return pic;
+    } catch { /* try again */ }
+  }
+  return null;
+}
+async function fetchCommons({ query = null, fetchFn = fetch, tries = 4, sourceName = '', old = true } = {}) {
+  for (let i = 0; i < tries; i++) {
+    const q = new URLSearchParams({ action: 'query', list: 'search', srnamespace: '6', srsearch: query || pickR(PIC_QUERIES), srlimit: '50', sroffset: String(rnd(query ? 2 : 4) * 50), format: 'json', origin: '*' });
     let hits;
     try { const r = await fetchFn(`${COMMONS}?${q}`); if (!r.ok) continue; hits = (await r.json())?.query?.search || []; } catch { continue; }
     hits = hits.filter((h) => /\.(jpe?g|png|gif)$/i.test(h.title)); // TIFF scans make slow, heavy thumbnails
@@ -39,11 +72,11 @@ export async function fetchPicture({ fetchFn = fetch, tries = 4 } = {}) {
       const ii = page?.imageinfo?.[0]; if (!ii?.thumburl) continue;
       const meta = ii.extmetadata || {};
       const year = yearOf(meta);
-      if (year && (year < 1800 || year > 1910) && i < tries - 1) continue; // keep to the 19th century (and just after)
+      if (old && year && (year < 1800 || year > 1910) && i < tries - 1) continue; // built-in set: keep to the 19th century (and just after)
       const pic = {
         title: strip(meta.ObjectName?.value) || title.replace(/^File:/, '').replace(/\.[a-z]+$/i, '').replace(/_/g, ' '),
         thumb: ii.thumburl, w: ii.thumbwidth || null, h: ii.thumbheight || null, page: ii.descriptionurl, artist: strip(meta.Artist?.value).slice(0, 80), year,
-        desc: strip(meta.ImageDescription?.value).slice(0, 220), license: strip(meta.LicenseShortName?.value) || 'Public domain', at: Date.now(),
+        desc: strip(meta.ImageDescription?.value).slice(0, 220), license: strip(meta.LicenseShortName?.value) || 'Public domain', source: sourceName, at: Date.now(),
       };
       remember(pic);
       return pic;

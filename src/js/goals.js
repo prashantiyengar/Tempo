@@ -43,7 +43,7 @@ export function progress(s, key, items, fromKey, toKey, now = Date.now()) {
     const budget = goals.reduce((a, g) => a + (+g.budget || 0), 0);
     const t = timeIn(items, headCats(s, h), from, to, now);
     return { head: h, label, icon, goals, reached: goals.filter((g) => g.done).length, budget, spent: t.done, planned: t.planned, cats: headCats(s, h),
-      perGoal: goals.filter((g) => g.budget && g.cats?.length).map((g) => ({ id: g.id, ...timeIn(items, g.cats, from, to, now) })) };
+      perGoal: goals.filter((g) => g.cats?.length).map((g) => ({ id: g.id, ...timeIn(items, g.cats, from, to, now) })) };
   });
 }
 

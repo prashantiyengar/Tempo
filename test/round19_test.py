@@ -11,7 +11,7 @@ const FIX = Date.parse('2026-10-22T13:00:00Z'); const _Date = Date; globalThis._
 class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+globalThis.__off);} else super(...a);} static now(){ return _Date.now()+globalThis.__off; } } globalThis.Date = D;
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, horoscopeSource: 'off'}));
+  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false, horoscopeSource: 'off'}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2026-10-19'));
 }"""
 PIC = open('test/pic600x420.png', 'rb').read()
@@ -73,8 +73,8 @@ async def main():
         await page.click('#view-seg button[data-view=review]'); await page.wait_for_selector('.np-goals'); await page.wait_for_timeout(2500)
         print('2. paper goals:', await page.text_content('.np-goals .np-h3'), '|', await page.eval_on_selector_all('.np-goal-list li', 'xs => xs.map(x => x.innerText)'), '| coming:', await page.eval_on_selector_all('.np-goals p.np-small', 'xs => xs.map(x => x.innerText)'))
         # 3. picture at top, fully visible
-        info = await page.evaluate("""(() => { const img = document.querySelector('.np-top img'); const grid = document.querySelector('.np-grid'); const mast = document.querySelector('.np-mast'); const r = img.getBoundingClientRect(), np = document.querySelector('.np').getBoundingClientRect();
-          return { src: img.getAttribute('src'), loaded: img.complete && img.naturalHeight > 0, w: Math.round(r.width), h: Math.round(r.height), above: r.bottom <= grid.getBoundingClientRect().top + 1, below: r.top >= mast.getBoundingClientRect().bottom - 1, centred: Math.abs((r.left + r.right) / 2 - (np.left + np.right) / 2) < 3 }; })()""")
+        info = await page.evaluate("""(() => { const img = document.querySelector('.np-pic-s img'); const col = document.querySelector('.np-grid > .np-pic-s').getBoundingClientRect(); const r = img.getBoundingClientRect(), np = document.querySelector('.np').getBoundingClientRect();
+          return { src: img.getAttribute('src'), loaded: img.complete && img.naturalHeight > 0, fits: r.width <= col.width + 1 && r.height <= 341, centred: Math.abs((r.left + r.right) / 2 - (np.left + np.right) / 2) < 30 }; })()""")
         print('3. picture:', info)
         await page.screenshot(path=f'{OUT}/g2-paper.png', full_page=True)
         await page.select_option('[data-np=period]', 'year'); await page.wait_for_timeout(1500)

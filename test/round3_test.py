@@ -11,7 +11,7 @@ class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+o
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
   // saved by an older version: categories without icons
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', hoursChange: 'move', settingsVersion: 2, categories: [{id:'work',name:'Work',color:'#039be5'},{id:'study',name:'Study',color:'#8e24aa'},{id:'x1',name:'Gardening',color:'#0b8043'}]}));
+  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', hoursChange: 'move', goalNotice: false, settingsVersion: 2, categories: [{id:'work',name:'Work',color:'#039be5'},{id:'study',name:'Study',color:'#8e24aa'},{id:'x1',name:'Gardening',color:'#0b8043'}]}));
 }"""
 BERLIN_OFF = 2
 

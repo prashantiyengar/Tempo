@@ -96,8 +96,11 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
   const de = (ms, o) => new Intl.DateTimeFormat('de-DE', { timeZone: z, ...o }).format(ms);
   const wkEndK = T.dayKey(r.weekEnd - 1, z);
   const nr = period === 'week' || period === 'fortnight' ? isoWeek(r.reviewWeek) : period === 'month' ? +r.reviewWeek.slice(5, 7) : period === 'quarter' ? `Q${Math.floor((+r.reviewWeek.slice(5, 7) - 1) / 3) + 1}` : r.reviewWeek.slice(0, 4);
-  const top = use.groups[0], second = use.groups[1];
-  const share = top && use.occupied ? Math.round((top.m / use.occupied) * 100) : 0;
+  // headlines are about what you did — assumed sleep stays in the chart but doesn't make the news
+  const newsy = use.groups.filter((g) => !/Sleep \(assumed\)/.test(g.label));
+  const top = newsy[0], second = newsy[1];
+  const awake = use.occupied - use.groups.filter((g) => /Sleep \(assumed\)/.test(g.label)).reduce((a, g) => a + g.m, 0);
+  const share = top && awake > 0 ? Math.round((top.m / awake) * 100) : 0;
   const finished = [...r.completed.map((t) => ({ title: t.title, kind: 'task' })), ...r.doneEvents.map((e) => ({ title: e.title, kind: 'event', when: e.start }))];
   const sessions = r.sum.done + r.sum.partial;
   const pagesTotal = r.reading.reduce((a, x) => a + x.pages, 0);
@@ -109,7 +112,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
   const lead = !top
     ? { kicker: 'Zeitgeschehen', h: pick(rand, [`A quiet ${P.noun} on the calendar`, 'Calm before the storm?', `The ${P.noun} the calendar took a break`]), sub: 'Hardly anything was scheduled — the editors suspect a holiday, or an unusually good hiding place.' }
     : share >= 45
-      ? { kicker: 'Zeitgeschehen', h: pick(rand, [`${topName} ${v('rules', 'rule')} the ${P.noun}`, `All eyes on ${topName}`, `${topName} ${v('takes', 'take')} the lion's share`]), sub: `${share}% of all occupied time went to ${topName} — ${fmtH(top.m)} in total.` }
+      ? { kicker: 'Zeitgeschehen', h: pick(rand, [`${topName} ${v('rules', 'rule')} the ${P.noun}`, `All eyes on ${topName}`, `${topName} ${v('takes', 'take')} the lion's share`]), sub: `${share}% of ${awake < use.occupied ? "the waking" : "all"} occupied time went to ${topName} — ${fmtH(top.m)} in total.` }
       : { kicker: 'Zeitgeschehen', h: second ? pick(rand, [`Neck and neck: ${topName} ${v('edges', 'edge')} out ${second.label}`, `A balanced ${P.noun}, led by ${topName}`]) : `${topName} ${v('leads', 'lead')} the ${P.noun}`, sub: `${fmtH(top.m)} for ${topName}${second ? `, ${fmtH(second.m)} for ${second.label}` : ''}.` };
   const busyTxt = use.busiest ? ` The busiest day was ${T.format(T.dayStart(use.busiest.k, z), z, { weekday: 'long' })}, with ${fmtH(use.busiest.m)} spoken for.` : '';
   const leadBody = top
@@ -161,14 +164,10 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
     <header class="np-mast">
       <div class="np-ears"><span>Nr. ${nr} · ${r.isCurrent ? P.cur : P.ed}</span><span>Preis: ${Math.round((r.weekEnd - r.from) / T.HOUR)} Stunden</span></div>
       ${extras.orn ? `<div class="np-crown">${extras.orn.top}</div>` : ''}
-      <div class="np-titlerow">${extras.orn ? extras.orn.left : ''}<h1 class="np-title">Der Zeitplan</h1>${extras.orn ? extras.orn.right : ''}</div>
+      <div class="np-titlerow">${extras.orn ? extras.orn.left : ''}<h1 class="np-title">${esc(s.paperName || 'Der Zeitplan')}</h1>${extras.orn ? extras.orn.right : ''}</div>
       ${extras.orn ? `<div class="np-motto"><span>${esc(extras.orn.motto)}</span></div>` : ''}
       <div class="np-tag">Wochenzeitung für Ihre Zeit · ${esc(de(r.from, { day: 'numeric', month: 'long' }))} – ${esc(de(T.dayStart(wkEndK, z), { day: 'numeric', month: 'long', year: 'numeric' }))}</div>
     </header>
-    <section class="np-pic-s np-top">
-      <div class="np-pic"><p class="np-small np-mute">Fetching a picture from the 19th century…</p></div>
-      <div class="np-pic-tools"><span class="np-kicker">Aus dem Archiv</span> <button type="button" class="link np-pic-new">Another picture</button><span ${pics.length ? '' : 'hidden'}> · <button type="button" class="link np-pic-hist">Picture archive (${pics.length})</button></span></div>
-    </section>
     <div class="np-grid">
       <section class="np-lead">
         <span class="np-kicker">${lead.kicker}</span>
@@ -194,6 +193,11 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         <h3 class="np-h2">${esc(bizH)}</h3>
         <p>${esc(bizBody)}</p>
         ${finished.length ? `<h4 class="np-h4">Finished ${P.this}</h4><ul class="np-list np-check">${finished.slice(0, 12).map((x) => `<li>✓ ${esc(x.title)}${x.kind === 'event' ? ' <span class="np-mute">(event)</span>' : ''}</li>`).join('')}${finished.length > 12 ? `<li class="np-mute">…and ${finished.length - 12} more</li>` : ''}</ul>` : ''}
+      </section>
+      <section class="np-pic-s">
+        <span class="np-kicker">Aus dem Archiv</span>
+        <div class="np-pic"><p class="np-small np-mute">Fetching a picture…</p></div>
+        <div class="np-pic-tools"><button type="button" class="link np-pic-new">Another picture</button><span ${pics.length ? '' : 'hidden'}> · <button type="button" class="link np-pic-hist">Picture archive (${pics.length})</button></span></div>
       </section>
       <section class="np-feuil">
         <span class="np-kicker">Feuilleton</span>
@@ -227,7 +231,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
       </section>
     </div>
     ${pics.length ? `<details class="np-archive"><summary>Bildarchiv — pictures shown before (${pics.length})</summary><ol>${pics.map((x) => `<li><a href="${esc(x.page)}" target="_blank" rel="noopener">${esc(x.title)}</a>${x.year ? ` <span class="np-mute">(${x.year})</span>` : ''} <span class="np-mute">· ${esc(T.format(x.at, z, { day: 'numeric', month: 'short' }))}</span></li>`).join('')}</ol></details>` : ''}
-    <footer class="np-foot">Der Zeitplan is written by Tempo from your calendar · not affiliated with any real newspaper</footer>
+    <footer class="np-foot">${esc(s.paperName || 'Der Zeitplan')} is written by Tempo from your calendar · not affiliated with any real newspaper</footer>
   </article>`;
 }
 
@@ -236,5 +240,5 @@ export function pictureHTML(pic) {
   const cap = [pic.artist, pic.year].filter(Boolean).join(', ');
   const ar = pic.w && pic.h ? ` width="${pic.w}" height="${pic.h}" style="aspect-ratio:${pic.w} / ${pic.h}"` : '';
   return `<figure class="np-figure"><a href="${esc(pic.page)}" target="_blank" rel="noopener"><img src="${esc(pic.thumb)}" alt="${esc(pic.title)}"${ar} decoding="async"></a>
-    <figcaption><b>${esc(pic.title)}</b>${cap ? ` — ${esc(cap)}` : ''}${pic.desc && pic.desc !== pic.title ? `<br><span class="np-mute">${esc(pic.desc)}</span>` : ''}<br><span class="np-mute">Wikimedia Commons · ${esc(pic.license)}</span></figcaption></figure>`;
+    <figcaption><b>${esc(pic.title)}</b>${cap ? ` — ${esc(cap)}` : ''}${pic.desc && pic.desc !== pic.title ? `<br><span class="np-mute">${esc(pic.desc)}</span>` : ''}<br><span class="np-mute">${/wikimedia/.test(pic.page || '') ? 'Wikimedia Commons · ' : ''}${esc(pic.license)}</span></figcaption></figure>`;
 }

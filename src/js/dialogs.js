@@ -10,6 +10,7 @@ import * as AC from './accounts.js';
 import * as N from './notify.js';
 import * as A from './analysis.js';
 import * as W from './weather.js';
+import * as XT from './extras.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -812,12 +813,13 @@ export function settingsDialog(ctx) {
   let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
   let projects = (s.projects || []).map((p) => ({ ...p }));
   let wx = { unit: W.defaultUnit(s.tz), ...(s.weather || {}) };
+  let picSrc = (s.picSources?.length ? s.picSources : XT.DEFAULT_SOURCES).map((x) => ({ ...x }));
   let nprofiles = N.profiles(s).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) }));
   const tp = s.timePrefs || S.DEFAULT_SETTINGS.timePrefs;
   const html = `
   <form class="settings-form">
     <header class="dlg-head"><h2>Settings</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
-    <nav class="tabs">${[['General', 0], ['Scheduling', 1], ['Categories', 5], ['Google Calendar', 2], ['Other calendars', 6], ['Notifications', 3], ['Data', 4]].map(([n, i]) => `<button type="button" data-tab="${i}" class="${i ? '' : 'on'}">${n}</button>`).join('')}</nav>
+    <nav class="tabs">${[['General', 0], ['Scheduling', 1], ['Categories', 5], ['Google Calendar', 2], ['Other calendars', 6], ['Notifications', 3], ['Review & goals', 7], ['Data', 4]].map(([n, i]) => `<button type="button" data-tab="${i}" class="${i ? '' : 'on'}">${n}</button>`).join('')}</nav>
     <div class="dlg-body">
       <section data-pane="0">
         <label class="field"><span>Display time zone</span><input name="tz" list="tzlist2" value="${esc(s.tz)}" spellcheck="false"></label>${tzDatalist('tzlist2')}
@@ -962,6 +964,18 @@ export function settingsDialog(ctx) {
         </div>
         <div class="acct-form"></div>
       </section>
+      <section data-pane="7" hidden>
+        <fieldset class="box"><legend>Weekly review newspaper</legend>
+          <label class="field"><span>Name of the newspaper</span><input name="paperName" value="${esc(s.paperName || 'Der Zeitplan')}" maxlength="40"></label>
+          <label class="field"><span>Hours counted for time use</span><select name="paperScope">${[...Object.entries(A.SCOPES), ...(s.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${(s.paperScope || 'waking') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+          <div class="field"><span>Picture sources (one is picked at random each time)</span><div class="pic-src-list"></div><button type="button" class="btn small add-pic-src">+ Add a source</button></div>
+          <p class="muted small" style="margin:0">Wikimedia Commons: any search words (e.g. <i>Art Nouveau poster</i>) or a category name (e.g. <i>Photographs by Julia Margaret Cameron</i>). Art Institute of Chicago: search words (e.g. <i>Monet</i>). Image links: https addresses of pictures, one per line.</p>
+        </fieldset>
+        <fieldset class="box"><legend>Goal reminder</legend>
+          <label class="chk"><input type="checkbox" name="goalNotice" ${s.goalNotice !== false ? 'checked' : ''}> On the first day of a new week or month, show my goals</label>
+          <label class="field"><span>From (time of day)</span><input type="time" name="goalNoticeAt" value="${esc(s.goalNoticeAt || '09:00')}" step="900"></label>
+        </fieldset>
+      </section>
       <section data-pane="4" hidden>
         <p class="muted small">Tasks, settings and local events live in this browser's extension storage. Back them up or move them to another browser:</p>
         <div class="row"><button type="button" class="btn small export-json">Download backup (.json)</button>
@@ -1044,6 +1058,25 @@ export function settingsDialog(ctx) {
       sel.value = nprofiles.some((p) => p.id === cur) ? cur : nprofiles[0]?.id;
     });
     drawProfiles();
+    const drawPicSrc = () => {
+      setHTML($('.pic-src-list', dlg), picSrc.map((x, i) => `<div class="row pic-src" data-i="${i}">
+        <input type="checkbox" class="ps-on" ${x.on !== false ? 'checked' : ''} title="Use this source">
+        <input class="ps-name" value="${esc(x.name)}" maxlength="40" aria-label="Source name">
+        ${x.kind === 'builtin' ? '<span class="muted small">built in</span>' : `<select class="ps-kind">${Object.entries(XT.SOURCE_KINDS).filter(([k]) => k !== 'builtin').map(([k, l]) => `<option value="${k}" ${x.kind === k ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select>
+        ${x.kind === 'urls' ? `<textarea class="ps-val" rows="2" placeholder="https://…">${esc(x.value || '')}</textarea>` : `<input class="ps-val" value="${esc(x.value || '')}" placeholder="${x.kind === 'commonscat' ? 'Category name' : 'Search words'}">`}
+        <button type="button" class="icon-btn ps-del" aria-label="Remove source">✕</button>`}
+      </div>`).join(''));
+      $$('.pic-src', dlg).forEach((r) => {
+        const x = picSrc[+r.dataset.i];
+        $('.ps-on', r).onchange = (e) => { x.on = e.target.checked; };
+        $('.ps-name', r).oninput = (e) => { x.name = e.target.value; };
+        $('.ps-kind', r)?.addEventListener('change', (e) => { x.kind = e.target.value; drawPicSrc(); });
+        $('.ps-val', r)?.addEventListener('input', (e) => { x.value = e.target.value; });
+        $('.ps-del', r)?.addEventListener('click', () => { picSrc.splice(+r.dataset.i, 1); drawPicSrc(); });
+      });
+    };
+    drawPicSrc();
+    $('.add-pic-src', dlg).onclick = () => { picSrc.push({ id: 'ps-' + Math.random().toString(36).slice(2, 7), name: 'My pictures', kind: 'commons', value: '', on: true }); drawPicSrc(); };
     // Weather place: search by name, or use this device's location
     const wxShow = (h) => setHTML($('.wx-results', dlg), h);
     const pick = (pl) => { wx = { ...wx, name: pl.name, lat: pl.lat, lon: pl.lon }; f.wxOn.checked = true; f.wxPlace.value = pl.name; wxShow(`Forecast for <b>${esc(pl.name)}</b>`); };
@@ -1190,6 +1223,9 @@ export function settingsDialog(ctx) {
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
         sinceLastBuffer: Math.max(0, Math.min(15, Math.round(+f.sinceLastBuffer.value || 0))),
         tillNextBuffer: Math.max(0, Math.min(15, Math.round(+f.tillNextBuffer.value || 0))),
+        paperName: f.paperName.value.trim().slice(0, 40) || 'Der Zeitplan', paperScope: f.paperScope.value,
+        picSources: picSrc.map((x) => ({ ...x, name: (x.name || '').trim() || 'Pictures', value: (x.value || '').trim() })),
+        goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
         sleepAssume: f.sleepAssume.checked, sleepCategory: f.sleepCategory.value || null, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
         dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),

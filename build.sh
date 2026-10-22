@@ -36,7 +36,7 @@ head = """  <link rel="manifest" href="manifest.webmanifest">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Tempo">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://upload.wikimedia.org; connect-src 'self' https://www.googleapis.com https://openidconnect.googleapis.com https://oauth2.googleapis.com https://graph.microsoft.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://commons.wikimedia.org https://icanhazdadjoke.com https://api.apiverve.com https://horoscope-app-api.vercel.app; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://www.googleapis.com https://openidconnect.googleapis.com https://oauth2.googleapis.com https://graph.microsoft.com https://api.open-meteo.com https://geocoding-api.open-meteo.com https://commons.wikimedia.org https://icanhazdadjoke.com https://api.apiverve.com https://horoscope-app-api.vercel.app https://api.artic.edu; object-src 'none'; base-uri 'self'; form-action 'self'">
 """
 idx = idx.replace('<link rel="icon"', head + '  <link rel="icon"', 1)
 open(f'{root}/index.html', 'w').write(idx)
