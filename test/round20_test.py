@@ -50,8 +50,7 @@ async def main():
         print('   carry-over:', re.sub(r'\s+', ' ', await page.inner_text('.g-card:first-child .g-left')))
         await page.click('.g-card:first-child .g-carry'); await page.wait_for_timeout(300)
         async def addg(card, head, text, h=''):
-            sel = f'{card} >> .g-add[data-head={head}]'
-            await page.fill(f'{sel} >> input[name=t]', text); await page.fill(f'{sel} >> input[name=b]', h); await page.press(f'{sel} >> input[name=t]', 'Enter'); await page.wait_for_timeout(250)
+            await page.click(f'{card} >> .g-plus[data-head={head}]'); await page.fill('dialog [name=t]', text); await page.fill('dialog [name=b]', h); await page.click('dialog button.primary'); await page.wait_for_timeout(250)
         await addg(tw, 'work', 'Finish report', '6'); await addg(tw, 'work', 'Inbox zero')
         await addg(tw, 'fitness', 'Exercise 3 times', '4')
         print('   this week work:', re.sub(r'\s+', ' ', await page.inner_text('.g-card:first-child .g-head[data-head=work] .g-hh')))

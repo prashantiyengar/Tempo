@@ -49,15 +49,15 @@ async def main():
         print('   travel reminders:', trips)
         wk = '.g-card >> nth=0'
         for t in ['Finish the grant draft', 'Book dentist', 'Run 3 times']:
-            await page.fill(f'{wk} >> .g-add[data-head=personal] >> input[name=t]', t); await page.press(f'{wk} >> .g-add[data-head=personal] >> input[name=t]', 'Enter'); await page.wait_for_timeout(250)
+            await page.click(f'{wk} >> .g-plus[data-head=personal]'); await page.fill('dialog [name=t]', t); await page.click('dialog button.primary'); await page.wait_for_timeout(250)
         await page.click(f'{wk} >> .g-row >> nth=2 >> .g-up'); await page.wait_for_timeout(250)
         await page.check(f'{wk} >> .g-row >> nth=0 >> .g-done'); await page.wait_for_timeout(250)
         await page.click(f'{wk} >> .g-row >> nth=2 >> .g-text'); await page.fill('dialog [name=t]', 'Book dentist for November'); await page.click('dialog button.primary'); await page.wait_for_timeout(250)
         print('   this week:', await page.eval_on_selector_all(f'.g-card:first-child .g-row', 'rs => rs.map(r => (r.classList.contains("done") ? "✓ " : "") + r.querySelector(".g-rank").textContent + ". " + r.querySelector(".g-text").textContent.trim())'), '|', await page.text_content('.g-card:first-child .g-count'))
-        await page.fill('.g-card >> nth=1 >> .g-add[data-head=work] >> input[name=t]', 'Prepare Munich workshop'); await page.press('.g-card >> nth=1 >> .g-add[data-head=work] >> input[name=t]', 'Enter'); await page.wait_for_timeout(250)
+        await page.click('.g-card >> nth=1 >> .g-plus[data-head=work]'); await page.fill('dialog [name=t]', 'Prepare Munich workshop'); await page.click('dialog button.primary'); await page.wait_for_timeout(250)
         await page.click('.g-card:has(h3:text("November")) .g-trip-add'); await page.wait_for_timeout(250)
         print('   November:', await page.eval_on_selector_all('.g-card:has(h3:text("November")) .g-text', 'xs => xs.map(x => x.textContent)'))
-        await page.fill('.g-year .g-add[data-head=personal] input[name=t]', 'Learn Spanish to B1'); await page.press('.g-year .g-add[data-head=personal] input[name=t]', 'Enter'); await page.wait_for_timeout(250)
+        await page.click('.g-year .g-plus[data-head=personal]'); await page.fill('dialog [name=t]', 'Learn Spanish to B1'); await page.click('dialog button.primary'); await page.wait_for_timeout(250)
         await page.click('.g-mtoggle [data-m="12"]'); await page.wait_for_timeout(400)
         print('   12 months shown:', len(await page.query_selector_all('.g-card')) - 3, 'month cards')
         await page.screenshot(path=f'{OUT}/g1-goals.png', full_page=True)

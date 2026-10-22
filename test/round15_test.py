@@ -58,7 +58,7 @@ async def main():
         made = [e for e in E.values() if not (e.get('extendedProperties') or {}).get('private', {}).get('tempoTask') and e['id'] not in ('a', 'b') and 'dateTime' in e['start']]
         print('   saved as:', [(e['summary'], e['start']['dateTime'][11:16], (e.get('extendedProperties') or {}).get('private', {}).get('tempoCatName')) for e in made])
         # untitled with category chosen in quick create → no prompt
-        await slot(11, 12); await page.click('.popover .qc-cat .cat-chip:has-text("Study")'); await page.click('.popover button[type=submit]'); await page.wait_for_timeout(1500)
+        await slot(11, 12); await page.click('.popover .qc-cat .cat-cur'); await page.click('dialog .cat-chip:has-text("Study")'); await page.click('.popover button[type=submit]'); await page.wait_for_timeout(1500)
         made = [e for e in E.values() if not (e.get('extendedProperties') or {}).get('private', {}).get('tempoTask') and e['id'] not in ('a', 'b') and 'dateTime' in e['start']]
         print('   with category, no prompt:', not await page.query_selector('dialog .ask-title'), [(e['summary'], e['start']['dateTime'][11:16]) for e in made])
         # typed title in prompt

@@ -894,7 +894,7 @@ function quickCreate(rect, sel, onClose) {
     });
     $('.qc-cancel', p)?.addEventListener('click', () => { close(); onClose?.(); });
     let qcCat = null;
-    C.categoryPicker($('.qc-cat', p), {
+    C.categoryPicker($('.qc-cat', p), { compact: true,
       settings: set(), selected: null,
       onChange: (c) => { qcCat = c; },
       onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; },
@@ -1895,11 +1895,15 @@ async function renderPaperView(seq) {
   const visit = app.npVisit ||= { orn: XT.ornaments(), quote: XT.randomQuote(), joke: { text: XT.JOKES[Math.floor(Math.random() * XT.JOKES.length)] }, pic: undefined, horo: {} };
   const days = [];
   for (let k = T.addDays(wk, -7); k < end; k = T.addDays(k, 1)) days.push(k);
-  const items = await collectItems(days);
+  const allItems = await collectItems(days);
   if (seq !== app.renderSeq) return;
+  // categories left out of the paper (Settings → Review & goals, or "Categories" above the paper)
+  const incl = paperIncluded(s);
+  const items = allItems.filter((it) => incl(it.kind === 'chunk' ? it.task?.categoryId : it.catId));
   const from = T.dayStart(wk, z), to = T.dayStart(end, z);
   const events = items.filter((it) => it.kind !== 'chunk');
-  const r = RV.weeklyReview(st(), Date.now(), { weekKey: wk, endKey: end, events });
+  const stF = { ...st(), tasks: st().tasks.filter((t) => incl(t.categoryId)), settings: { ...s, history: (s.history || []).filter((h) => incl(h.cat)) } };
+  const r = RV.weeklyReview(stF, Date.now(), { weekKey: wk, endKey: end, events });
   // time use over the extended day (day bounds + evenings/weekends), by category
   const actx = { settings: s, gmeta: st().gmeta, calColor };
   const groups = {};
@@ -1923,7 +1927,7 @@ async function renderPaperView(seq) {
     <label class="field inline np-per"><span>Period</span><select data-np="period">${Object.entries(NP.PERIODS).map(([k, v]) => `<option value="${k}" ${k === per ? 'selected' : ''}>${v.label}</option>`).join('')}</select></label>
     <label class="field inline np-per"><span>Hours</span><select data-np="scope">${[...Object.entries(A.SCOPES), ...(s.periods || []).map((p) => ['period:' + p.id, p.name])].map(([k, v]) => `<option value="${esc(k)}" ${k === scope ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
     <label class="chk"><input type="checkbox" data-np="all" ${s.reviewAllEvents ? 'checked' : ''}> Include all events <span class="muted small">(not ones repeating daily or 3+ times a week)</span></label>
-    <span class="grow"></span><button type="button" class="btn small ghost np-hsrc" title="Where the horoscope text comes from">Horoscope: ${hsrc === 'off' ? 'off' : hsrc === 'apiverve' ? 'APIVerve' : 'online'}</button><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
+    <span class="grow"></span><button type="button" class="btn small ghost np-cats" title="Which categories the paper covers">Categories: ${esc(paperCatsLabel(s))}</button><button type="button" class="btn small ghost np-hsrc" title="Where the horoscope text comes from">Horoscope: ${hsrc === 'off' ? 'off' : hsrc === 'apiverve' ? 'APIVerve' : 'online'}</button><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
   const root = $('.np-wrap', view) || view.appendChild(el('<div class="np-wrap"></div>'));
   const scrollY = root.scrollTop;
   setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: await paperGoals(wk, end, per, items) }));
@@ -1936,6 +1940,7 @@ async function renderPaperView(seq) {
   $('.np-hist', root).onclick = () => { app.view = 'analysis'; app.anMode = 'history'; render(); };
   $('.np-print', root).onclick = () => window.print();
   $('.np-hsrc', root).onclick = horoscopeSourceDialog;
+  $('.np-cats', root).onclick = paperCatsDialog;
   $$('.rv-open', root).forEach((b) => (b.onclick = () => editTask(st().tasks.find((t) => t.id === b.dataset.task))));
   // picture: fetched once per visit; "Another picture" fetches a new one
   const showPic = () => {
@@ -1972,6 +1977,8 @@ async function renderPaperView(seq) {
 // Goal progress for the paper: weekly and monthly (or the months / year for longer periods).
 async function paperGoals(wk, end, per, items) {
   const s = set(), z = tz(), blocks = [];
+  { const keys = []; for (let w = T.startOfWeek(wk, s.weekStart ?? 1); w < T.addDays(end, 7); w = T.addDays(w, 7)) keys.push(GL.weekKey(w)); for (let m = T.keyOf(T.parseKey(wk).y, T.parseKey(wk).m, 1); m <= end; m = T.addMonths(m, 1)) keys.push(GL.monthKey(m));
+    const g = GL.materialize(s, keys); if (g) { s.goals = g; await E.persist(st(), ['settings']); } }
   const mStart = (k) => T.keyOf(T.parseKey(k).y, T.parseKey(k).m, 1);
   const weekLbl = (k) => `Week of ${T.format(T.dayStart(k, z), z, { day: 'numeric', month: 'short' })}`;
   const monLbl = (k) => T.format(T.dayStart(k, z), z, { month: 'long', year: 'numeric' });
@@ -1991,6 +1998,35 @@ async function paperGoals(wk, end, per, items) {
   const all = a < T.addDays(wk, -7) || bEnd > end ? await collectItems([a, T.addDays(bEnd, -1)]) : items;
   const out = ordered.map((b) => ({ label: b.label, prog: GL.progress(s, b.key, all, b.from, b.to) })).filter((b) => b.prog.some((p) => p.goals.length || (p.cats.length && p.spent)));
   return { blocks: out.slice(0, per === 'year' ? 14 : 8), next: GL.forPeriod(s, end, paperEnd(end), per) };
+}
+// Categories in the newspaper: everything except the ones you leave out (leaving out a main category leaves out
+// its sub-categories too). "__none" = events and tasks without a category.
+function paperIncluded(s) {
+  const ex = new Set(s.paperCats?.exclude || []);
+  if (!ex.size) return () => true;
+  return (id) => { if (!id) return !ex.has('__none'); if (ex.has(id)) return false; const c = C.catById(s, id); return !(c?.parent && ex.has(c.parent)); };
+}
+function paperCatsLabel(s) {
+  const ex = s.paperCats?.exclude || [];
+  if (!ex.length) return 'all';
+  const n = (s.categories || []).length + 1;
+  return ex.length === 1 ? `all but ${ex[0] === '__none' ? 'uncategorized' : C.catById(s, ex[0])?.name || '1'}` : `${n - ex.length} of ${n}`;
+}
+async function paperCatsDialog() {
+  const s = set(), ex = new Set(s.paperCats?.exclude || []);
+  const r = await modal(`<form class="choice"><h2>Categories in the newspaper</h2>
+      <p class="muted small">Untick a category to leave its events and tasks out of the paper (time use, what got done, events, books). Unticking a main category leaves out its sub-categories too. Goal progress always counts everything.</p>
+      <div class="g-catlist">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" value="${esc(c.id)}" ${ex.has(c.id) ? '' : 'checked'}> <span class="sw-dot" style="background:${esc(c.color)}"></span> ${esc(C.catLabel(c))}</label>`).join('')}
+        <label class="chk"><input type="checkbox" value="__none" ${ex.has('__none') ? '' : 'checked'}> Events and tasks without a category</label></div>
+      <div class="actions"><button type="button" class="btn ghost pc-all">All</button><button type="button" class="btn ghost pc-none">None</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Apply</button></div></form>`,
+  (dlg, close) => {
+    $('.pc-all', dlg).onclick = () => $$('input[type=checkbox]', dlg).forEach((x) => (x.checked = true));
+    $('.pc-none', dlg).onclick = () => $$('input[type=checkbox]', dlg).forEach((x) => (x.checked = false));
+    $('form', dlg).onsubmit = (e) => { e.preventDefault(); close($$('input[type=checkbox]:not(:checked)', dlg).map((x) => x.value)); };
+  }, { cls: 'narrow' });
+  if (!r) return;
+  set().paperCats = { exclude: r };
+  await E.persist(st(), ['settings']); syncSharedSoon(); render();
 }
 function apiverveKey() { try { return localStorage.getItem('tempo:apiverveKey') || ''; } catch { return ''; } }
 const HORO_ORIGINS = { community: 'https://horoscope-app-api.vercel.app/*', apiverve: 'https://api.apiverve.com/*' };
@@ -2040,6 +2076,7 @@ async function renderGoalsView(seq) {
   const view = $('#view');
   if (!$('.goals', view)) setHTML(view, '<div class="goals"><p class="muted">Loading…</p></div>');
   const sec = GL.sections(s, today);
+  { const g = GL.materialize(s, sec.list.map((x) => x.key)); if (g) { s.goals = g; await E.persist(st(), ['settings']); syncSharedSoon(); } }
   const last = sec.list[sec.list.length - 1].to;
   const wk0 = T.startOfWeek(today, s.weekStart ?? 1);
   const items = await collectItems([T.addDays(wk0, -7), T.addDays(last, -1)]);
@@ -2076,14 +2113,14 @@ async function renderGoalsView(seq) {
         return `<div class="g-head" data-head="${p.head}">
           <div class="g-hh"><span class="g-hn">${p.icon} ${p.label}</span>${p.goals.length ? `<span class="muted small">${p.reached}/${p.goals.length}</span>` : ''}
             <button type="button" class="link g-cats" data-head="${p.head}" title="Which categories of events and tasks count towards ${p.label.toLowerCase()} goals (all periods)">${p.cats.length ? 'counts: ' + esc(p.cats.map(catName).join(', ')) : 'set categories that count'}</button>
-            <span class="g-time">${esc(tm)}</span></div>
+            <span class="g-time">${esc(tm)}</span><button type="button" class="g-plus" data-head="${p.head}" title="Add a ${p.label.toLowerCase()} goal" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}">+</button></div>
           ${bar}
           <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
             <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
             ${catBox(g.cats, p)}
-            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + (g.budget ? ' / ' : '') : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}</button>
+            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + (g.budget ? ' / ' : '') : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}</button>
             <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
-          <form class="g-add" data-head="${p.head}" data-cats="">${catBox([], p, true)}<input name="t" placeholder="Add a ${p.label.toLowerCase()} goal…" maxlength="200" autocomplete="off" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}"><input name="b" type="number" min="0" step="0.25" placeholder="h" title="Time budget in hours (optional)" class="g-bin"><button class="btn small" type="submit">Add</button></form>
+
         </div>`;
       }).join('')}
     </section>`;
@@ -2091,7 +2128,7 @@ async function renderGoalsView(seq) {
   const weeks = sec.list.filter((x) => x.kind === 'week'), months = sec.list.filter((x) => x.kind === 'month'), year = sec.list.find((x) => x.kind === 'year');
   const root = $('.goals', view) || view.appendChild(el('<div class="goals"></div>'));
   const y0 = root.scrollTop;
-  setHTML(root, `<p class="muted small g-intro">Goals under Work, Fitness and Personal. Rank them with ▲▼ (1 = most important), give them an optional time budget, and tick them off when reached. Time in the categories that count for each head (set once, used for every week, month and year) shows as progress. → moves a goal to another period. Trips on your calendar are listed as reminders.</p>
+  setHTML(root, `<p class="muted small g-intro">Goals under Work, Fitness and Personal: add one with <b>+</b> (optionally repeating every week or month). Rank them with ▲▼ (1 = most important), give them an optional time budget, and tick them off when reached. Time in the categories that count for each head (set once, used for every week, month and year) shows as progress. → moves a goal to another period. Trips on your calendar are listed as reminders.</p>
     <h2 class="g-h">Weeks</h2><div class="g-grid">${weeks.map(card).join('')}</div>
     <h2 class="g-h">Months <span class="g-mtoggle"><button type="button" data-m="3" class="${s.goalsMonths === 12 ? '' : 'on'}">Next 3</button><button type="button" data-m="12" class="${s.goalsMonths === 12 ? 'on' : ''}">Next 12</button></span></h2>
     ${sec.daysLeft <= 14 ? `<p class="muted small">${esc(monthName(sec.thisMonth))} has ${sec.daysLeft} day${sec.daysLeft === 1 ? '' : 's'} left — this week's and next week's goals cover it.</p>` : ''}
@@ -2103,24 +2140,7 @@ async function renderGoalsView(seq) {
   $$('.g-card', root).forEach((c) => {
     const key = c.dataset.key, x = sec.list.find((q) => q.key === key);
     const trips = GL.travelIn(items, x.kind === 'year' ? today : x.from, x.to, s);
-    $$('.g-add', c).forEach((f) => {
-      $('.g-catbox', f).onclick = async () => {
-        const head = GL.HEADS.find(([h]) => h === f.dataset.head);
-        const cur = f.dataset.cats ? f.dataset.cats.split(',') : [];
-        const r = await pickGoalCats(cur, head);
-        if (r == null) return;
-        f.dataset.cats = r.join(',');
-        setHTML($('.g-catbox', f), catBoxInner(r, head));
-        $('.g-catbox', f).classList.toggle('set', r.length > 0);
-        f.t.focus();
-      };
-      f.onsubmit = (e) => {
-        e.preventDefault(); const v = f.t.value.trim(); if (!v) return;
-        const b = parseFloat(f.b.value); app.goalFocus = `${key}|${f.dataset.head}`;
-        const cats = f.dataset.cats ? f.dataset.cats.split(',').filter(Boolean) : [];
-        saveGoals(GL.add(set(), key, v, { head: f.dataset.head, budget: b > 0 ? b * 60 : null, cats }), 'add goal');
-      };
-    });
+    $$('.g-plus', c).forEach((b) => (b.onclick = () => addGoalDialog(key, b.dataset.head, x)));
     $$('.g-trip-add', c).forEach((b) => (b.onclick = () => { const t = trips[+b.dataset.i]; saveGoals(GL.add(set(), key, `Prepare for ${t.title} (${GL.fmtTrip(t, s)})`, { head: 'personal' }), 'add goal'); }));
     $$('.g-carry', c).forEach((b) => (b.onclick = () => saveGoals(GL.moveTo(set(), b.dataset.from, b.dataset.id, key), 'move goal')));
     $('.g-carry-all', c)?.addEventListener('click', () => { let gs = set().goals || {}; for (const b of $$('.g-carry', c)) gs = GL.moveTo({ ...set(), goals: gs }, b.dataset.from, b.dataset.id, key); saveGoals(gs, 'move goals'); });
@@ -2130,7 +2150,24 @@ async function renderGoalsView(seq) {
       $('.g-done', r).onchange = (e) => saveGoals(GL.update(set(), key, id, { done: e.target.checked, doneAt: e.target.checked ? Date.now() : null }), e.target.checked ? 'goal reached' : 'goal reopened');
       $('.g-up', r).onclick = () => saveGoals(GL.move(set(), key, id, -1));
       $('.g-down', r).onclick = () => saveGoals(GL.move(set(), key, id, 1));
-      $('.g-del', r).onclick = () => { saveGoals(GL.remove(set(), key, id), 'remove goal'); toast('Goal removed'); };
+      $('.g-del', r).onclick = async () => {
+        const g = GL.list(set(), key).find((q) => q.id === id);
+        if (g?.repeatId && GL.repeatOf(set(), g)) {
+          const rp = GL.repeatOf(set(), g);
+          const v = await choose('Remove a repeating goal', `“${g.text}” repeats every ${rp.every}.`, [
+            { value: 'one', label: `Only this ${rp.every}`, desc: 'It comes back next time.' },
+            { value: 'stop', label: 'Stop repeating', desc: `Removes it from this and later ${rp.every}s (reached ones stay).`, danger: true },
+          ]);
+          if (!v) return;
+          const before = set().goalRepeats;
+          const res = GL.removeRepeating(set(), key, id, v === 'stop');
+          set().goalRepeats = res.goalRepeats;
+          await saveGoals(res.goals, v === 'stop' ? 'stop repeating goal' : 'remove goal');
+          const u = undoStack[undoStack.length - 1]; if (u) { const f0 = u.undo; u.undo = async () => { set().goalRepeats = before; await f0(); }; }
+          return;
+        }
+        saveGoals(GL.remove(set(), key, id), 'remove goal'); toast('Goal removed');
+      };
       $('.g-mv', r).onclick = async () => { const to = await choose('Move this goal to…', GL.list(set(), key).find((g) => g.id === id)?.text, targets(key)); if (to) { saveGoals(GL.moveTo(set(), key, id, to), 'move goal'); toast(`Moved to ${GL.keyLabel(set(), to)}`); } };
       $('.g-text', r).onclick = () => editGoal(key, id);
       $('.g-catbox', r).onclick = async () => {
@@ -2140,8 +2177,44 @@ async function renderGoalsView(seq) {
       };
     });
   });
-  if (app.goalFocus) { const [k, h] = app.goalFocus.split('|'); $(`.g-card[data-key="${CSS.escape(k)}"] .g-add[data-head="${h}"] input[name=t]`, root)?.focus(); app.goalFocus = null; }
+
 }
+// "+" on a head: add a goal (text, head, time budget, categories, and optionally repeat it every week / month).
+async function addGoalDialog(key, head0, x) {
+  const s = set();
+  const every = x.kind === 'week' ? 'week' : x.kind === 'month' ? 'month' : null;
+  let cats = [];
+  const r = await modal(`<form class="choice g-addform" novalidate><h2>New goal</h2>
+      <label class="field"><span>Goal</span><input name="t" maxlength="200" autocomplete="off" placeholder="e.g. Call friends" autofocus></label>
+      <div class="row">
+        <label class="field grow"><span>Under</span><select name="h">${GL.HEADS.map(([h, l, ic]) => `<option value="${h}" ${h === head0 ? 'selected' : ''}>${ic} ${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Time budget (h)</span><input name="b" type="number" min="0" step="0.25" placeholder="none" style="width:110px"></label>
+      </div>
+      <div class="field"><span>Counts towards it</span><div class="row"><span class="g-addbox"></span><span class="muted small g-addbox-note">the head's categories</span></div></div>
+      ${every ? `<label class="chk"><input type="checkbox" name="rep"> Repeat every ${every}</label>` : ''}
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Add goal</button></div></form>`,
+  (dlg, close) => {
+    const f = $('form', dlg);
+    const drawBox = () => {
+      const hd = GL.HEADS.find(([h]) => h === f.h.value);
+      setHTML($('.g-addbox', dlg), catBox(cats, { label: hd[1], cats: GL.headCats(s, hd[0]) }, true));
+      $('.g-addbox-note', dlg).textContent = cats.length ? cats.map((id) => C.fullLabel(s, C.catById(s, id))).join(', ') : `the ${hd[1]} categories`;
+      $('.g-addbox .g-catbox', dlg).onclick = async () => { const res = await pickGoalCats(cats, hd); if (res != null) { cats = res; drawBox(); } };
+    };
+    f.h.onchange = drawBox; drawBox();
+    f.onsubmit = (e) => { e.preventDefault(); const t = f.t.value.trim(); if (!t) { f.t.focus(); return; } const b = parseFloat(f.b.value); close({ text: t, head: f.h.value, budget: b > 0 ? b * 60 : null, cats, rep: !!f.rep?.checked }); };
+  }, { cls: 'narrow' });
+  if (!r) return;
+  if (r.rep && every) {
+    const before = set().goalRepeats;
+    set().goalRepeats = GL.addRepeat(set(), every, key, r);
+    const g = GL.materialize(set(), [key]);
+    await saveGoals(g || set().goals, 'add repeating goal');
+    const u = undoStack[undoStack.length - 1]; if (u) { const f0 = u.undo; u.undo = async () => { set().goalRepeats = before; await f0(); }; }
+    toast(`Added — repeats every ${every}`);
+  } else saveGoals(GL.add(set(), key, r.text, { head: r.head, budget: r.budget, cats: r.cats }), 'add goal');
+}
+
 // The icon box next to a goal: its own categories' icons, or a faint tag when it uses the head's categories.
 function catBoxInner(cats, head) {
   const s = set();
@@ -2196,11 +2269,20 @@ async function editGoal(key, id) {
       </div>
       <details ${own.size ? 'open' : ''}><summary class="small">Count only these categories for this goal (otherwise the head's)</summary>
         <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
+      ${(() => { const every = key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : null; return every ? `<label class="chk"><input type="checkbox" name="rep" ${GL.repeatOf(s, g) ? 'checked' : ''}> Repeat every ${every}</label>` : ''; })()}
       <label class="chk"><input type="checkbox" name="d" ${g.done ? 'checked' : ''}> Reached</label>
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
-  (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), done: f.d.checked }); }; }, { cls: 'narrow' });
+  (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), done: f.d.checked, rep: f.rep ? f.rep.checked : null }); }; }, { cls: 'narrow' });
   if (!r) return;
-  saveGoals(GL.update(set(), key, id, { text: r.text.slice(0, 200), head: r.head, budget: r.budget, cats: r.cats.length ? r.cats : null, done: r.done }), 'edit goal');
+  // repeat on / off (the copies already made stay)
+  const rp = GL.repeatOf(set(), g);
+  if (r.rep === false && rp) set().goalRepeats = GL.repeats(set()).filter((x) => x.id !== rp.id);
+  if (r.rep === true && !rp) {
+    const reps = GL.addRepeat(set(), key.startsWith('w:') ? 'week' : 'month', key, { text: r.text, head: r.head, budget: r.budget, cats: r.cats });
+    set().goalRepeats = reps; r.repeatId = reps[reps.length - 1].id;
+  }
+  if (r.rep === true && rp) set().goalRepeats = GL.repeats(set()).map((x) => (x.id === rp.id ? { ...x, text: r.text.slice(0, 200), head: r.head, budget: r.budget || undefined, cats: r.cats.length ? r.cats : undefined } : x));
+  saveGoals(GL.update(set(), key, id, { text: r.text.slice(0, 200), head: r.head, budget: r.budget, cats: r.cats.length ? r.cats : null, done: r.done, ...(r.repeatId ? { repeatId: r.repeatId } : r.rep === false ? { repeatId: null } : {}) }), 'edit goal');
 }
 
 // On the first day of the week, offer the review once.
@@ -2223,6 +2305,7 @@ async function checkGoalNotice() {
   if (snooze > now) return;
   goalNoticeOpen = true;
   try {
+    { const g = GL.materialize(s, [GL.weekKey(wk), GL.monthKey(mStart)]); if (g) { s.goals = g; await E.persist(st(), ['settings']); } }
     const isWeek = keys.some((k) => k.startsWith('w:')), isMonth = keys.some((k) => k.startsWith('m:'));
     const show = [GL.weekKey(wk), GL.monthKey(mStart)];
     const block = (k) => {

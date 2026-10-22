@@ -64,9 +64,9 @@ async def main():
         ss = await run([{'cmd': 'listSessions', 'from': '2026-10-22', 'to': '2026-10-29'}])
         print('   total after drop:', tot([x for x in ss[0]['result'] if 'Essay' in x['task']]))
         # 2. icons grouped, used ones hidden
-        await page.click('#btn-new-task'); await page.wait_for_selector('dialog .cat-host'); await page.click('dialog .cat-chip.add'); await page.wait_for_selector('dialog .ic-group')
+        await page.click('#btn-new-task'); await page.wait_for_selector('dialog .cat-host'); await page.click('dialog .cat-host .cat-cur'); await page.click('dialog .cat-chip.add'); await page.wait_for_selector('dialog .ic-group')
         print('2. icon groups:', await page.eval_on_selector_all('dialog .ic-gl', 'xs => xs.map(x => x.textContent)'), '| 💼 hidden:', not await page.query_selector('dialog .cat-new .ic-btn[data-ic="💼"]'), '| 💻 shown:', bool(await page.query_selector('dialog .cat-new .ic-btn[data-ic="💻"]')))
-        await page.screenshot(path=f'{OUT}/l2-icons.png'); await page.keyboard.press('Escape'); await page.wait_for_timeout(300)
+        await page.screenshot(path=f'{OUT}/l2-icons.png'); await page.keyboard.press('Escape'); await page.wait_for_timeout(200); await page.keyboard.press('Escape'); await page.wait_for_timeout(300)
         # 3-5. review tab
         await run([{'cmd': 'markEventDone', 'event': 'Dentist'}]); await page.wait_for_timeout(800)
         await page.click('#view-seg button[data-view=review]'); await page.wait_for_selector('.np-title')

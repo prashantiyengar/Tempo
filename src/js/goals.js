@@ -53,6 +53,40 @@ export function progress(s, key, items, fromKey, toKey, now = Date.now()) {
 export function add(s, key, text, { head = 'personal', budget = null, cats = null } = {}) {
   return { ...(s.goals || {}), [key]: [...list(s, key), { id: newId(), text: text.trim().slice(0, 200), done: false, at: Date.now(), head, ...(budget ? { budget: Math.round(budget) } : {}), ...(cats?.length ? { cats } : {}) }] };
 }
+// ---------- Repeating goals: a template in settings.goalRepeats, copied into each week / month it applies to ----------
+//   { id, every: 'week' | 'month', head, text, budget, cats, from: '<first key>', skip: ['<key>'…] }
+export const repeats = (s) => s.goalRepeats || [];
+export function addRepeat(s, every, fromKey, { text, head, budget = null, cats = null }) {
+  const r = { id: 'r' + Math.random().toString(36).slice(2, 9), every, from: fromKey, text: text.trim().slice(0, 200), head, ...(budget ? { budget: Math.round(budget) } : {}), ...(cats?.length ? { cats } : {}), skip: [] };
+  return [...repeats(s), r];
+}
+const keyEvery = (k) => (k.startsWith('w:') ? 'week' : k.startsWith('m:') ? 'month' : null);
+// Make sure each repeating goal has its copy in these periods. Returns new goals (or null when nothing changed).
+export function materialize(s, keys) {
+  let goals = null;
+  for (const k of keys) {
+    const every = keyEvery(k); if (!every) continue;
+    for (const r of repeats(s)) {
+      if (r.every !== every || k < r.from || (r.skip || []).includes(k)) continue;
+      const l = (goals || s.goals || {})[k] || [];
+      if (l.some((g) => g.repeatId === r.id)) continue;
+      goals = { ...(goals || s.goals || {}), [k]: [...l, { id: newId(), text: r.text, head: r.head, done: false, at: Date.now(), repeatId: r.id, ...(r.budget ? { budget: r.budget } : {}), ...(r.cats?.length ? { cats: r.cats } : {}) }] };
+    }
+  }
+  return goals;
+}
+// Remove one copy (this period only) or stop the repeat (this and later copies go).
+export function removeRepeating(s, key, id, stop) {
+  const g = list(s, key).find((x) => x.id === id);
+  if (!g?.repeatId) return { goals: remove(s, key, id), goalRepeats: repeats(s) };
+  if (!stop) return { goals: remove(s, key, id), goalRepeats: repeats(s).map((r) => (r.id === g.repeatId ? { ...r, skip: [...new Set([...(r.skip || []), key])] } : r)) };
+  const goals = {};
+  for (const [k, l] of Object.entries(s.goals || {})) goals[k] = k >= key ? l.filter((x) => x.repeatId !== g.repeatId || x.done) : l;
+  goals[key] = (goals[key] || []).filter((x) => x.id !== id);
+  return { goals, goalRepeats: repeats(s).filter((r) => r.id !== g.repeatId) };
+}
+export const repeatOf = (s, g) => (g?.repeatId ? repeats(s).find((r) => r.id === g.repeatId) || null : null);
+
 // Move a goal to another period (e.g. carry an unfinished one over); it goes to the end of that list.
 export function moveTo(s, fromKey, id, toKey) {
   const g = list(s, fromKey).find((x) => x.id === id);

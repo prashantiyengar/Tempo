@@ -1,6 +1,6 @@
 // Task categories (Work, Personal, …): a name and a color. A task's color follows its category.
 // Category colors come from Google Calendar's own palette, so sessions show the same color in Google.
-import { $$, esc, setHTML } from './ui.js';
+import { $$, esc, setHTML, modal } from './ui.js';
 import { nearestColorId } from './gcal.js';
 
 // Icons for categories, grouped by theme (the pickers show them under these headings).
@@ -117,7 +117,30 @@ export function refreshTaskCategories(settings, tasks) {
 
 // Chips to pick a category, with "+ New" to add one on the spot.
 // onChange(cat|null); onCreate(name, color) must return the new category (and save it).
-export function categoryPicker(host, { settings, selected, onChange, onCreate, allowNone = true }) {
+// Compact picker for forms: one box showing the chosen category; clicking it opens a popup with all of them.
+export function categoryPicker(host, opts) {
+  if (!opts.compact) return chipPicker(host, opts);
+  const { settings, onChange, allowNone = true } = opts;
+  let sel = opts.selected || null;
+  const draw = () => {
+    const c = catById(settings, sel);
+    setHTML(host, `<button type="button" class="cat-cur ${c ? 'set' : ''}" ${c ? `style="--c:${esc(c.color)}"` : ''} title="${c ? esc(fullLabel(settings, c)) + ' — click to change' : 'Pick a category'}">
+      ${c ? `<i></i>${c.icon || parentOf(settings, c)?.icon ? `<span class="cat-ic">${esc(c.icon || parentOf(settings, c)?.icon)}</span>` : ''}<span class="cat-cur-n">${esc(c.parent ? `${parentOf(settings, c)?.name || ''} › ${c.name}` : c.name)}</span>` : '<span class="cat-cur-none">🏷 Category</span>'}<span class="cat-cur-caret">▾</span></button>`);
+    host.querySelector('.cat-cur').onclick = async () => {
+      let chosen;
+      await modal(`<div class="choice cat-pop"><h2>Category</h2><div class="cat-pop-host"></div>
+            <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button></div></div>`, (dlg, close) => {
+          chipPicker(dlg.querySelector('.cat-pop-host'), { ...opts, selected: sel, allowNone, onChange: (x) => { chosen = { c: x }; close(); } });
+        }, { cls: 'narrow' });
+      const picked = chosen;
+      if (!picked) return;
+      sel = picked.c?.id || null; draw(); onChange(picked.c || null);
+    };
+  };
+  draw();
+  return { get value() { return catById(settings, sel); } };
+}
+function chipPicker(host, { settings, selected, onChange, onCreate, allowNone = true }) {
   let sel = selected || null;
   let adding = false;
   let newIcon = '', newParent = '';

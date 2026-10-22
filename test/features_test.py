@@ -38,9 +38,9 @@ async def main():
         # 2. New task with a NEW category created on the fly
         await page.click('#btn-new-task'); await page.wait_for_selector('dialog .task-form')
         await page.fill('dialog [name=title]', 'Guitar practice'); await page.fill('dialog [name=hours]', '3'); await page.fill('dialog [name=deadline]', '2026-10-23T17:00')
-        await page.click('dialog .cat-chip.add'); await page.fill('dialog .cat-name', 'Music')
+        await page.click('dialog .cat-host .cat-cur'); await page.click('dialog .cat-chip.add'); await page.fill('dialog .cat-name', 'Music')
         await page.click('dialog .cat-new .sw:nth-child(6)'); await page.click('dialog .cat-save'); await page.wait_for_timeout(200)
-        print('2. chips:', await page.eval_on_selector_all('dialog .cat-chip', 'e => e.map(x => x.textContent.trim() + (x.classList.contains("on") ? "*" : ""))'), '| color row hidden:', await page.eval_on_selector('dialog .color-field', 'e => e.style.display === "none"'))
+        print('2. chips:', await page.text_content('dialog .cat-host .cat-cur'), '| color row hidden:', await page.eval_on_selector('dialog .color-field', 'e => e.style.display === "none"'))
         await page.screenshot(path=f'{OUT}/f1-category-dialog.png')
         await page.click('dialog button[type=submit]'); await page.wait_for_timeout(2500)
         t = await page.evaluate("window.__tempo.app.state.tasks.find(t => t.title === 'Guitar practice')")
@@ -116,7 +116,7 @@ async def main():
         cols = await page.query_selector_all('.tg-col'); box = await cols[1].bounding_box(); hh = 48
         await page.mouse.move(box['x'] + 20, box['y'] + 18 * hh + 2); await page.mouse.down(); await page.mouse.move(box['x'] + 20, box['y'] + 19 * hh - 2, steps=6); await page.mouse.up()
         await page.wait_for_selector('.popover .qc'); await page.fill('.popover input[name=title]', 'Design review')
-        await page.click('.popover .qc-cat .cat-chip:has-text("Work")'); await page.screenshot(path=f'{OUT}/f9-quickadd-category.png')
+        await page.click('.popover .qc-cat .cat-cur'); await page.click('dialog .cat-chip:has-text("Work")'); await page.screenshot(path=f'{OUT}/f9-quickadd-category.png')
         await page.click('.popover button[type=submit]'); await page.wait_for_timeout(1500)
         dr = [e for evs in g.events.values() for e in evs.values() if e.get('summary') == 'Design review']
         print('11. new event category:', dr[0].get('extendedProperties', {}).get('private', {}).get('tempoCategory'), '| colorId', dr[0].get('colorId'))

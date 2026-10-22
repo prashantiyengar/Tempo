@@ -189,7 +189,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     f.monthMode.value = r0.monthMode;
     f.ends.value = r0.ends;
     let evCat = C.catById(s, ev ? C.eventCategoryId(ev, st.eventCats || {}) : init.categoryId);
-    C.categoryPicker($('.ev-cat-host', dlg), {
+    C.categoryPicker($('.ev-cat-host', dlg), { compact: true,
       settings: s, selected: evCat?.id,
       onChange: (c) => {
         evCat = c;
@@ -618,7 +618,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
     f.labels.value = r.labels || 'actual';
     let cat = C.catById(s, t.categoryId);
     const showColor = () => { $('.color-field', dlg).style.display = cat ? 'none' : ''; };
-    C.categoryPicker($('.cat-host', dlg), {
+    C.categoryPicker($('.cat-host', dlg), { compact: true,
       settings: s, selected: cat?.id,
       onChange: (c) => { cat = c; showColor(); update(); },
       onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; },
@@ -968,6 +968,7 @@ export function settingsDialog(ctx) {
         <fieldset class="box"><legend>Weekly review newspaper</legend>
           <label class="field"><span>Name of the newspaper</span><input name="paperName" value="${esc(s.paperName || 'Der Zeitplan')}" maxlength="40"></label>
           <label class="field"><span>Hours counted for time use</span><select name="paperScope">${[...Object.entries(A.SCOPES), ...(s.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${(s.paperScope || 'waking') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+          <div class="field"><span>Categories in the newspaper (untick to leave out)</span><div class="g-catlist paper-cats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="pc" value="${esc(c.id)}" ${(s.paperCats?.exclude || []).includes(c.id) ? '' : 'checked'}> ${esc(C.catLabel(c))}</label>`).join('')}<label class="chk"><input type="checkbox" class="pc" value="__none" ${(s.paperCats?.exclude || []).includes('__none') ? '' : 'checked'}> Without a category</label></div></div>
           <div class="field"><span>Picture sources (one is picked at random each time)</span><div class="pic-src-list"></div><button type="button" class="btn small add-pic-src">+ Add a source</button></div>
           <p class="muted small" style="margin:0">Wikimedia Commons: any search words (e.g. <i>Art Nouveau poster</i>) or a category name (e.g. <i>Photographs by Julia Margaret Cameron</i>). Art Institute of Chicago: search words (e.g. <i>Monet</i>). Image links: https addresses of pictures, one per line.</p>
         </fieldset>
@@ -1227,6 +1228,7 @@ export function settingsDialog(ctx) {
         sinceLastBuffer: Math.max(0, Math.min(15, Math.round(+f.sinceLastBuffer.value || 0))),
         tillNextBuffer: Math.max(0, Math.min(15, Math.round(+f.tillNextBuffer.value || 0))),
         paperName: f.paperName.value.trim().slice(0, 40) || 'Der Zeitplan', paperScope: f.paperScope.value,
+        paperCats: { exclude: $$('.paper-cats .pc:not(:checked)', dlg).map((x) => x.value) },
         picSources: picSrc.map((x) => ({ ...x, name: (x.name || '').trim() || 'Pictures', value: (x.value || '').trim() })),
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },

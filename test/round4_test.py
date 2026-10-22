@@ -64,7 +64,7 @@ async def main():
         # 3. Reading task on A, first session partly done: 7 of 15 pages, 20-min call at the start, squeeze
         await A.click('#btn-new-reading'); await A.wait_for_selector('dialog .task-form')
         await A.fill('dialog [name=title]', 'Pride and Prejudice'); await A.fill('dialog [name=pages]', '90'); await A.fill('dialog [name=startPage]', '47')
-        await A.fill('dialog [name=deadline]', '2026-10-30T17:00'); await A.click('dialog .cat-chip:has-text("Study")')
+        await A.fill('dialog [name=deadline]', '2026-10-30T17:00'); await A.click('dialog .cat-host .cat-cur'); await A.click('dialog .cat-chip:has-text("Study")')
         await A.click('dialog .task-form button[type=submit]'); await A.wait_for_timeout(3000)
         evs = lambda: sorted([e for e in g.task_events() if 'Pride' in e['summary']], key=dt)
         before = evs()

@@ -959,3 +959,17 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .np-termine { grid-column: 1 / -1; border-top: 1px solid var(--np-hair); }
 .np-termine .np-days { columns: 4 170px; column-gap: 22px; column-rule: 1px solid var(--np-hair); }
 @media print { body.review-mode .np-termine { grid-column: 1 / -1 !important; } body.review-mode .np-termine .np-days { columns: 4 !important; column-gap: 12px; } }
+/* compact category picker */
+.cat-cur { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 10px; border: 1px solid var(--line2); border-radius: 999px; background: var(--panel); color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; }
+.cat-cur:hover { border-color: var(--accent); }
+.cat-cur i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); flex: none; }
+.cat-cur-n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-cur-none { color: var(--muted); }
+.cat-cur-caret { color: var(--muted); font-size: 10px; }
+.cat-pop .cat-chips { gap: 6px; }
+/* goals: + per head */
+.g-plus { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 1px dashed var(--accent); background: transparent; color: var(--accent); font-size: 15px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0; }
+.g-plus:hover { background: var(--accent); color: var(--accent-ink); border-style: solid; }
+.g-rep { font-size: 11px; color: var(--accent); }
+.g-head .g-list:empty { display: none; }
+.paper-cats { max-height: 180px; columns: 2 180px; display: block; }
