@@ -20,6 +20,25 @@ function tzDatalist(id) {
   return `<datalist id="${id}">${T.allTimezones().map((z) => `<option value="${esc(z)}">`).join('')}</datalist>`;
 }
 
+// Collapsible sections ("▾"): closed by default, with a one-line summary of what's inside while closed.
+// (localStorage 'tempo:expandAll' = '1' opens them all.)
+const expandAll = () => { try { return localStorage.getItem('tempo:expandAll') === '1'; } catch { return false; } };
+export function sect(id, title, body, { cls = '', open = false } = {}) {
+  return `<details class="sect ${cls}" data-sect="${id}" ${open || expandAll() ? 'open' : ''}><summary><span class="sect-t">${title}</span><span class="sect-s"></span><span class="sect-caret" aria-hidden="true">▾</span></summary><div class="sect-b">${body}</div></details>`;
+}
+// summaries: { sectionId: () => 'text shown while closed' }. Returns a function that refreshes them.
+export function wireSects(root, summaries = {}) {
+  const upd = () => $$('details.sect', root).forEach((d) => {
+    const el = d.querySelector(':scope > summary .sect-s'), fn = summaries[d.dataset.sect];
+    if (el) el.textContent = fn ? String(fn() || '') : '';
+  });
+  $$('details.sect', root).forEach((d) => d.addEventListener('toggle', upd));
+  // a field that fails validation inside a closed section: open it so the browser can show the problem
+  root.addEventListener('invalid', (e) => { const d = e.target.closest?.('details.sect'); if (d && !d.open) d.open = true; }, true);
+  root.addEventListener('input', upd); root.addEventListener('change', upd); upd();
+  return upd;
+}
+
 function weekdayToggles(name, days) {
   return `<div class="wd-toggles">${[1, 2, 3, 4, 5, 6, 0].map((d) =>
     `<label class="wd"><input type="checkbox" name="${name}" value="${d}" ${days.includes(d) ? 'checked' : ''}><span>${WDN[d][0]}${WDN[d][1]}</span></label>`).join('')}</div>`;
@@ -103,15 +122,23 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         ${ctx.lastEventEnd ? '<button type="button" class="chip-btn since-last" title="Start when the previous event ended (looks back up to 12 hours, also into the day before)">⤒ Since last event</button>' : ''}
         ${ctx.nextEventStart ? '<button type="button" class="chip-btn till-next" title="End when the next event starts (looks ahead up to 12 hours)">⤓ Till next event</button>' : ''}
       </div>
-      <div class="row timed">
-        <label class="field grow"><span>Time zone</span>
-          <input name="tz" list="tzlist" value="${esc(evTz)}" spellcheck="false">
-        </label>
-        ${tzDatalist('tzlist')}
+      <div class="row catcol">
+        <div class="field grow"><span>Category</span><div class="ev-cat-host"></div></div>
+        <div class="field"><span>Color</span>
+          <div class="swatches small">
+            <label class="sw"><input type="radio" name="colorId" value="" ${!colorId ? 'checked' : ''}><i class="sw-cal" title="Calendar color"></i></label>
+            ${Object.entries(G.EVENT_COLORS).map(([id, c]) => `<label class="sw"><input type="radio" name="colorId" value="${id}" ${colorId === id ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}
+          </div>
+        </div>
       </div>
 
-      <fieldset class="box">
-        <legend>Repeat</legend>
+      ${sect('ev-notify', 'Notifications &amp; repeat', `
+        <div class="sub-h">Notifications</div>
+        <label class="field"><span>Profile</span><select name="nprofile">${N.profiles(s).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} — ${esc(N.describeProfile(p))}</option>`).join('')}<option value="">Custom</option></select></label>
+        <label class="chk google-only"><input type="checkbox" name="useDefault" ${rem.useDefault && !isNew ? 'checked' : ''}> Use calendar's default notifications</label>
+        <div class="rem-rows"></div>
+        <button type="button" class="btn small ghost add-rem">+ Add notification</button>
+        <div class="sub-h">Repeat</div>
         <div class="row">
           <select name="freq">
             <option value="">Does not repeat</option>
@@ -136,44 +163,35 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
           <input type="date" name="until" value="${r0.until}" class="ends-on">
           <input type="number" name="count" min="1" max="999" value="${r0.count}" class="ends-after num"><span class="ends-after">occurrences</span>
         </div>
-        <div class="muted small rec-desc"></div>
-      </fieldset>
+        <div class="muted small rec-desc"></div>`)}
 
-      <div class="grid2">
-        <label class="field"><span>Calendar</span>
-          <select name="calId" ${isNew ? '' : 'disabled'}>
-            ${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === calId ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}
-          </select>
-        </label>
-        <label class="field"><span>Show as</span>
-          <select name="transparency"><option value="opaque">Busy</option><option value="transparent" ${ev?.transparency === 'transparent' ? 'selected' : ''}>Free</option></select>
-        </label>
-        <label class="field"><span>Visibility</span>
-          <select name="visibility">
-            ${['default', 'public', 'private'].map((v) => `<option value="${v}" ${(ev?.visibility || 'default') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}
-          </select>
-        </label>
-        <div class="field full"><span>Category</span><div class="ev-cat-host"></div></div>
-        <div class="field"><span>Color</span>
-          <div class="swatches">
-            <label class="sw"><input type="radio" name="colorId" value="" ${!colorId ? 'checked' : ''}><i class="sw-cal" title="Calendar color"></i></label>
-            ${Object.entries(G.EVENT_COLORS).map(([id, c]) => `<label class="sw"><input type="radio" name="colorId" value="${id}" ${colorId === id ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}
-          </div>
+      ${sect('ev-more', 'Calendar, location &amp; more', `
+        <div class="row timed">
+          <label class="field grow"><span>Time zone</span>
+            <input name="tz" list="tzlist" value="${esc(evTz)}" spellcheck="false">
+          </label>
+          ${tzDatalist('tzlist')}
         </div>
-      </div>
+        <div class="grid3">
+          <label class="field"><span>Calendar</span>
+            <select name="calId" ${isNew ? '' : 'disabled'}>
+              ${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === calId ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}
+            </select>
+          </label>
+          <label class="field"><span>Show as</span>
+            <select name="transparency"><option value="opaque">Busy</option><option value="transparent" ${ev?.transparency === 'transparent' ? 'selected' : ''}>Free</option></select>
+          </label>
+          <label class="field"><span>Visibility</span>
+            <select name="visibility">
+              ${['default', 'public', 'private'].map((v) => `<option value="${v}" ${(ev?.visibility || 'default') === v ? 'selected' : ''}>${v[0].toUpperCase() + v.slice(1)}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <label class="field"><span>Location</span><input name="location" value="${esc(ev?.location || '')}" placeholder="Add location"></label>
+        <label class="field google-only"><span>Guests</span><input name="attendees" value="${esc((ev?.attendees || []).filter((a) => !a.self).map((a) => a.email).join(', '))}" placeholder="email@example.com, …"></label>
+        <label class="chk google-only"><input type="checkbox" name="meet" ${ev?.conferenceData ? 'checked disabled' : ''}> Add Google Meet video conferencing</label>`)}
 
-      <fieldset class="box">
-        <legend>Notifications</legend>
-        <label class="field"><span>Profile</span><select name="nprofile">${N.profiles(s).map((p) => `<option value="${esc(p.id)}">${esc(p.name)} — ${esc(N.describeProfile(p))}</option>`).join('')}<option value="">Custom</option></select></label>
-        <label class="chk google-only"><input type="checkbox" name="useDefault" ${rem.useDefault && !isNew ? 'checked' : ''}> Use calendar's default notifications</label>
-        <div class="rem-rows"></div>
-        <button type="button" class="btn small ghost add-rem">+ Add notification</button>
-      </fieldset>
-
-      <label class="field"><span>Location</span><input name="location" value="${esc(ev?.location || '')}" placeholder="Add location"></label>
-      <label class="field google-only"><span>Guests</span><input name="attendees" value="${esc((ev?.attendees || []).filter((a) => !a.self).map((a) => a.email).join(', '))}" placeholder="email@example.com, …"></label>
-      <label class="chk google-only"><input type="checkbox" name="meet" ${ev?.conferenceData ? 'checked disabled' : ''}> Add Google Meet video conferencing</label>
-      <label class="field"><span>Description</span><textarea name="description" rows="3" placeholder="Add description">${esc(ev?.description || '')}</textarea></label>
+      <label class="field"><span>Description</span><textarea name="description" rows="2" placeholder="Add description">${esc(ev?.description || '')}</textarea></label>
     </div>
     <footer class="actions">
       ${isNew ? '' : '<button type="button" class="btn danger ghost del">Delete</button>'}
@@ -329,6 +347,21 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       sync();
     });
     sync();
+    wireSects(dlg, {
+      'ev-notify': () => {
+        const g = (f.calId.value || calId) !== LOCAL_CAL;
+        const n = g && f.useDefault.checked ? 'Calendar default' : N.profileById(s, f.nprofile.value)?.name || ($$('.rem-row', dlg).length ? `${$$('.rem-row', dlg).length} custom` : 'None');
+        const rr = f.freq.value ? buildRec() : null;
+        return `🔔 ${n} · ${rr ? describe(rr) : 'Does not repeat'}`;
+      },
+      'ev-more': () => {
+        const cal = cals.find((c) => c.id === (f.calId.value || calId));
+        const g = (f.calId.value || calId) !== LOCAL_CAL;
+        const guests = g ? f.attendees.value.split(',').filter((x) => x.trim()).length : 0;
+        return [cal?.summary, f.transparency.value === 'transparent' ? 'Free' : 'Busy', f.visibility.value !== 'default' ? f.visibility.value[0].toUpperCase() + f.visibility.value.slice(1) : '',
+          f.location.value.trim() ? '📍 ' + f.location.value.trim() : '', guests ? `${guests} guest${guests > 1 ? 's' : ''}` : '', !f.allDay.checked && f.tz.value.trim() !== s.tz ? f.tz.value.trim() : ''].filter(Boolean).join(' · ');
+      },
+    });
 
     $('.del', dlg)?.addEventListener('click', () => close({ action: 'delete' }));
 
@@ -520,25 +553,12 @@ export function taskDialog(ctx, task = null, preset = {}) {
     </header>
     <div class="dlg-body">
       <input name="title" class="title-input" placeholder="${t.kind === 'reading' ? 'Book title' : 'Task name'}" value="${esc(t.title)}" autofocus>
-      <div class="field"><span>Category</span><div class="cat-host"></div></div>
-      ${(() => { const legacy = !t.notifyProfile && ((t.reminderMinutes ?? '') !== '' || (t.emailReminderMinutes ?? '') !== ''); const cur = legacy ? 'custom' : (t.notifyProfile || '');
-        return `<label class="field notify-field"><span>Notifications</span><select name="notify">
-          <option value="">Usual — ${esc(N.taskDefault(s)?.name || 'Default')} (${esc(N.describeProfile(N.taskDefault(s)))})</option>
-          ${N.profiles(s).map((p) => `<option value="${esc(p.id)}" ${cur === p.id ? 'selected' : ''}>${esc(p.name)} — ${esc(N.describeProfile(p))}</option>`).join('')}
-          <option value="none" ${cur === 'none' ? 'selected' : ''}>No reminders</option>
-          <option value="custom" ${cur === 'custom' ? 'selected' : ''}>Custom minutes…</option></select></label>`; })()}
+      <div class="row catcol">
+        <div class="field grow"><span>Category</span><div class="cat-host"></div></div>
+        <div class="field color-field"><span>Color</span><div class="swatches small">${TASK_COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${t.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
+      </div>
       ${prog ? `<div class="progress-line"><div class="bar"><i style="width:${prog.pct}%;background:${t.color}"></i></div><span class="muted small">${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)} done</span></div>` : ''}
 
-      <div class="grid3 only-generic">
-        <label class="field only-once"><span>Total time (hours)</span><input type="number" name="hours" min="0" step="0.25" value="${+(t.totalMinutes / 60).toFixed(2)}"></label>
-        <label class="field"><span>Repeats</span><select name="repEvery"><option value="">Doesn't repeat</option><option value="day" ${rep?.every === 'day' ? 'selected' : ''}>Every day</option><option value="week" ${rep?.every === 'week' ? 'selected' : ''}>Every week</option></select></label>
-        <label class="field only-rep"><span>Hours each <span class="rep-unit">${rep?.every === 'day' ? 'day' : 'week'}</span></span><input type="number" name="repHours" min="0.25" step="0.25" value="${rep ? +(rep.minutes / 60).toFixed(2) : 3}"></label>
-        <div class="field only-rep"><span>Ends</span><div class="row nowrap">
-          <select name="repEnd"><option value="count" ${!rep?.until ? 'selected' : ''}>After</option><option value="until" ${rep?.until ? 'selected' : ''}>On</option></select>
-          <input type="number" name="repCount" min="1" max="520" class="num rep-c" value="${rep?.count || 12}"><span class="rep-c rep-count-unit">${rep?.every === 'day' ? 'days' : 'weeks'}</span>
-          <input type="date" name="repUntil" class="rep-u" value="${rep?.until ? T.dayKey(rep.until, tz) : T.addDays(T.dayKey(now, tz), 84)}"></div></div>
-        <div class="field only-rep rep-days-f"><span>On these days</span>${weekdayToggles('repDays', rep?.days?.length ? rep.days : [0, 1, 2, 3, 4, 5, 6])}</div>
-      </div>
       <div class="grid3 only-reading">
         <label class="field"><span>Pages to read</span><input type="number" name="pages" min="1" value="${r.pages}"></label>
         <label class="field"><span>Start page</span><input type="number" name="startPage" min="1" value="${r.startPage}"></label>
@@ -550,29 +570,48 @@ export function taskDialog(ctx, task = null, preset = {}) {
           <select name="labels"><option value="actual">Actual page numbers</option><option value="relative">Relative (page 1-20…)</option></select>
         </label>
       </div>
-      <div class="calc muted small"></div>
 
       <div class="grid3">
+        <label class="field only-once only-generic"><span>Total time (hours)</span><input type="number" name="hours" min="0" step="0.25" value="${+(t.totalMinutes / 60).toFixed(2)}"></label>
         <div class="field only-once"><span>Deadline</span><input type="datetime-local" name="deadline" value="${t.deadline ? T.toDTInput(t.deadline, tz) : ''}" required>
           <div class="dl-presets"><button type="button" class="chip-btn" data-dl="day">End of work day</button><button type="button" class="chip-btn" data-dl="week">End of work week</button><button type="button" class="chip-btn" data-dl="2w">Within two weeks</button></div></div>
         <label class="field"><span>Don't start before</span><input type="datetime-local" name="earliest" value="${t.earliestStart ? T.toDTInput(t.earliestStart, tz) : ''}"></label>
         <label class="field"><span>Rank <em class="muted">(1 = most important)</em></span><input type="number" name="rank" min="1" max="99" value="${t.rank}"></label>
         <label class="field only-once"><span>Aim to finish early (days)</span><input type="number" name="margin" min="0" step="0.5" placeholder="${s.marginDays ? s.marginDays + ' (default)' : '0 — use the full time'}" value="${t.marginDays ?? ''}" title="Safety margin: plan to be done this many days before the deadline; the deadline itself stays the hard limit"></label>
       </div>
+      <div class="calc muted small"></div>
 
-      <fieldset class="box">
-        <legend>Project &amp; order</legend>
+      ${sect('t-notify', 'Notifications &amp; repeat', `
+        <div class="grid3">
+        ${(() => { const legacy = !t.notifyProfile && ((t.reminderMinutes ?? '') !== '' || (t.emailReminderMinutes ?? '') !== ''); const cur = legacy ? 'custom' : (t.notifyProfile || '');
+          return `<label class="field notify-field"><span>Notifications</span><select name="notify">
+            <option value="">Usual — ${esc(N.taskDefault(s)?.name || 'Default')} (${esc(N.describeProfile(N.taskDefault(s)))})</option>
+            ${N.profiles(s).map((p) => `<option value="${esc(p.id)}" ${cur === p.id ? 'selected' : ''}>${esc(p.name)} — ${esc(N.describeProfile(p))}</option>`).join('')}
+            <option value="none" ${cur === 'none' ? 'selected' : ''}>No reminders</option>
+            <option value="custom" ${cur === 'custom' ? 'selected' : ''}>Custom minutes…</option></select></label>`; })()}
+          <label class="field only-custom-notify"><span>Reminder (min before)</span><input type="number" name="reminder" min="-1" placeholder="${s.taskReminderMinutes} (default)" value="${t.reminderMinutes ?? ''}"></label>
+          <label class="field google-only-t only-custom-notify"><span>Email reminder (min before)</span><input type="number" name="emailReminder" min="-1" placeholder="${s.taskEmailReminderMinutes != null ? s.taskEmailReminderMinutes + ' (default)' : 'off (default)'}" value="${t.emailReminderMinutes ?? ''}"></label>
+        </div>
+        <div class="grid3 only-generic">
+          <label class="field"><span>Repeats</span><select name="repEvery"><option value="">Doesn't repeat</option><option value="day" ${rep?.every === 'day' ? 'selected' : ''}>Every day</option><option value="week" ${rep?.every === 'week' ? 'selected' : ''}>Every week</option></select></label>
+          <label class="field only-rep"><span>Hours each <span class="rep-unit">${rep?.every === 'day' ? 'day' : 'week'}</span></span><input type="number" name="repHours" min="0.25" step="0.25" value="${rep ? +(rep.minutes / 60).toFixed(2) : 3}"></label>
+          <div class="field only-rep"><span>Ends</span><div class="row nowrap">
+            <select name="repEnd"><option value="count" ${!rep?.until ? 'selected' : ''}>After</option><option value="until" ${rep?.until ? 'selected' : ''}>On</option></select>
+            <input type="number" name="repCount" min="1" max="520" class="num rep-c" value="${rep?.count || 12}"><span class="rep-c rep-count-unit">${rep?.every === 'day' ? 'days' : 'weeks'}</span>
+            <input type="date" name="repUntil" class="rep-u" value="${rep?.until ? T.dayKey(rep.until, tz) : T.addDays(T.dayKey(now, tz), 84)}"></div></div>
+          <div class="field only-rep rep-days-f"><span>On these days</span>${weekdayToggles('repDays', rep?.days?.length ? rep.days : [0, 1, 2, 3, 4, 5, 6])}</div>
+        </div>`, { open: !!rep })}
+
+      ${sect('t-project', 'Project &amp; order', `
         <div class="grid3">
           <label class="field"><span>Part of project</span><select name="projectId"><option value="">— none —</option>${projects.map((p) => `<option value="${esc(p.id)}" ${t.projectId === p.id ? 'selected' : ''}>${esc(p.name)}${p.sequential ? ' (steps in order)' : ''}</option>`).join('')}<option value="__new">+ New project…</option></select></label>
           <label class="field new-proj"><span>Project name</span><input name="projName" placeholder="e.g. Thesis"></label>
           <label class="chk new-proj"><input type="checkbox" name="projSeq" checked> Steps run in order (each starts when the previous is done)</label>
         </div>
         ${others.length ? `<details class="after-box" ${t.after?.length ? 'open' : ''}><summary>Starts only after… ${t.after?.length ? `<b>(${t.after.length})</b>` : ''}</summary>
-          <div class="after-list">${others.map((o) => `<label class="chk"><input type="checkbox" name="after" value="${esc(o.id)}" ${t.after?.includes(o.id) ? 'checked' : ''}> ${esc(o.title)}</label>`).join('')}</div></details>` : ''}
-      </fieldset>
+          <div class="after-list">${others.map((o) => `<label class="chk"><input type="checkbox" name="after" value="${esc(o.id)}" ${t.after?.includes(o.id) ? 'checked' : ''}> ${esc(o.title)}</label>`).join('')}</div></details>` : ''}`)}
 
-      <fieldset class="box">
-        <legend>Sessions</legend>
+      ${sect('t-sessions', 'Sessions', `
         <div class="grid3">
           <label class="field"><span>Session length (min)</span><input type="number" name="chunk" min="5" step="5" placeholder="${s.chunkMinutes} (default)" value="${t.chunkMinutes ?? ''}"></label>
           <label class="field"><span>Shortest session (min)</span><input type="number" name="minChunk" min="5" step="5" placeholder="${s.minChunkMinutes ? s.minChunkMinutes + ' (default)' : '= session length'}" value="${t.minChunkMinutes ?? ''}"></label>
@@ -580,14 +619,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
           <label class="field"><span>Break between (min)</span><input type="number" name="break" min="0" step="5" placeholder="${s.breakMinutes} (default)" value="${t.breakMinutes ?? ''}"></label>
           <label class="field"><span>Wiggle room (min)</span><input type="number" name="wiggle" min="0" step="5" placeholder="${s.wiggleMinutes ?? 15} (default)" value="${t.wiggleMinutes ?? ''}" title="Also use free slots up to this much shorter than the session length"></label>
           ${ctx.taskCalendars().length > 1 ? `<label class="field"><span>Google calendar</span><select name="calendarId">${ctx.taskCalendars().map((c) => `<option value="${esc(c.id)}" ${c.id === (t.calendarId || ctx.defaultTaskCal()) ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select></label>` : ''}
-          <label class="field only-custom-notify"><span>Reminder (min before)</span><input type="number" name="reminder" min="-1" placeholder="${s.taskReminderMinutes} (default)" value="${t.reminderMinutes ?? ''}"></label>
-          <label class="field google-only-t only-custom-notify"><span>Email reminder (min before)</span><input type="number" name="emailReminder" min="-1" placeholder="${s.taskEmailReminderMinutes != null ? s.taskEmailReminderMinutes + ' (default)' : 'off (default)'}" value="${t.emailReminderMinutes ?? ''}"></label>
-          <div class="field color-field"><span>Color</span><div class="swatches">${TASK_COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${t.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
-        </div>
-      </fieldset>
+        </div>`)}
 
-      <fieldset class="box">
-        <legend>When to schedule</legend>
+      ${sect('t-when', 'When to schedule', `
         <div class="when-opts">
           <label class="chk"><input type="radio" name="bmode" value="default" ${!t.bounds && !t.periodId ? 'checked' : ''}> Work hours <span class="muted small">(${s.bounds.start}–${s.bounds.end}, ${describeDays(s.bounds.days)})</span></label>
           ${(s.periods || []).map((p) => `<label class="chk"><input type="radio" name="bmode" value="period:${esc(p.id)}" ${!t.bounds && t.periodId === p.id ? 'checked' : ''}> ${esc(p.name)} <span class="muted small">(${esc(describeRules(p.rules))})</span></label>`).join('')}
@@ -598,8 +632,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
           ${weekdayToggles('bdays', b.days)}
         </div>
         <p class="muted small" style="margin:0">Add or change periods such as “After hours” in Settings → Scheduling.</p>
-        <label class="chk"><input type="checkbox" name="ignoreBounds" ${t.ignoreBounds ? 'checked' : ''}> Ignore day bounds — also use time after my official day (${s.overflowBounds.start}–${s.overflowBounds.end}, any day)</label>
-      </fieldset>
+        <label class="chk"><input type="checkbox" name="ignoreBounds" ${t.ignoreBounds ? 'checked' : ''}> Ignore day bounds — also use time after my official day (${s.overflowBounds.start}–${s.overflowBounds.end}, any day)</label>`)}
 
       <label class="field"><span>Notes</span><textarea name="notes" rows="2">${esc(t.notes || '')}</textarea></label>
       <div class="preview"></div>
@@ -696,7 +729,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
       $('.custom-bounds', dlg).style.display = f.bmode.value === 'custom' ? '' : 'none';
       const repOn = kind === 'generic' && !!f.repEvery.value;
       $$('.only-rep', dlg).forEach((e) => (e.style.display = repOn ? '' : 'none'));
-      $$('.only-once', dlg).forEach((e) => (e.style.display = repOn ? 'none' : ''));
+      $$('.only-once', dlg).forEach((e) => (e.style.display = repOn || (kind !== 'generic' && e.classList.contains('only-generic')) ? 'none' : ''));
       $('.rep-days-f', dlg).style.display = repOn && f.repEvery.value === 'day' ? '' : 'none';
       $$('.rep-c', dlg).forEach((e) => (e.style.display = f.repEnd.value === 'count' ? '' : 'none'));
       $$('.rep-u', dlg).forEach((e) => (e.style.display = f.repEnd.value === 'until' ? '' : 'none'));
@@ -740,6 +773,27 @@ export function taskDialog(ctx, task = null, preset = {}) {
     f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(update, 120); });
     f.addEventListener('change', update);
     update();
+    wireSects(dlg, {
+      't-notify': () => {
+        const o = f.notify.selectedOptions[0];
+        const n = f.notify.value === 'custom' ? 'Custom' : f.notify.value === 'none' ? 'No reminders' : f.notify.value ? (o?.textContent || '').split(' — ')[0] : `Usual (${N.taskDefault(s)?.name || 'Default'})`;
+        const rp = f.kind.value === 'generic' && f.repEvery.value ? `${f.repEvery.value === 'day' ? 'Every day' : 'Every week'} · ${+f.repHours.value || 0} h` : "Doesn't repeat";
+        return `🔔 ${n} · ${rp}`;
+      },
+      't-project': () => {
+        const v = f.projectId.value, after = $$('input[name=after]:checked', dlg).length;
+        return [v === '__new' ? `New: ${f.projName.value.trim() || 'Project'}` : v ? projects.find((x) => x.id === v)?.name : 'No project', after ? `after ${after} task${after > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ');
+      },
+      't-sessions': () => {
+        const p = S.params(read(), s);
+        return [`${p.chunk} min sessions`, `${f.break.value === '' ? s.breakMinutes : +f.break.value} min breaks`, f.maxDay.value ? `max ${f.maxDay.value} min/day` : ''].filter(Boolean).join(' · ');
+      },
+      't-when': () => {
+        const v = f.bmode.value;
+        const w = v === 'custom' ? `${f.bStart.value}–${f.bEnd.value}` : v.startsWith('period:') ? ((s.periods || []).find((x) => 'period:' + x.id === v)?.name || 'Period') : `Work hours (${s.bounds.start}–${s.bounds.end})`;
+        return w + (f.ignoreBounds.checked ? ' · may run past day bounds' : '');
+      },
+    });
 
     $('.del', dlg)?.addEventListener('click', () => close({ delete: true }));
     f.addEventListener('submit', async (e) => {
@@ -823,63 +877,49 @@ export function settingsDialog(ctx) {
     <div class="dlg-body">
       <section data-pane="0">
         <label class="field"><span>Display time zone</span><input name="tz" list="tzlist2" value="${esc(s.tz)}" spellcheck="false"></label>${tzDatalist('tzlist2')}
-        <div class="grid3">
+        ${sect('s-display', 'Calendar display', `<div class="grid3">
           <label class="field"><span>Week view shows</span><select name="weekView"><option value="calendar">Calendar week</option><option value="rolling" ${s.weekView === 'rolling' ? 'selected' : ''}>Today + next 6 days</option></select></label>
           <label class="field"><span>Week starts on</span><select name="weekStart"><option value="1">Monday</option><option value="0" ${s.weekStart === 0 ? 'selected' : ''}>Sunday</option><option value="6" ${s.weekStart === 6 ? 'selected' : ''}>Saturday</option></select></label>
           <label class="field"><span>Time format</span><select name="h12"><option value="0">24-hour</option><option value="1" ${s.h12 ? 'selected' : ''}>12-hour</option></select></label>
           <label class="field"><span>Hour height (px)</span><input type="number" name="hourHeight" min="28" max="120" value="${s.hourHeight}"></label>
           <label class="field"><span>Drag snapping (min)</span><select name="snapMinutes">${[5, 10, 15, 30, 60].map((v) => `<option ${v === s.snapMinutes ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        </div>`)}
+        ${sect('s-events', 'New events', `<div class="grid3">
           <label class="field"><span>Default event length (min)</span><input type="number" name="defaultEventMinutes" min="5" step="5" value="${s.defaultEventMinutes}"></label>
           <label class="field"><span>“Since last event” starts this many minutes after it (0–15)</span><input type="number" name="sinceLastBuffer" min="0" max="15" step="1" value="${s.sinceLastBuffer || 0}"></label>
           <label class="field"><span>“Till next event” ends this many minutes before it (0–15)</span><input type="number" name="tillNextBuffer" min="0" max="15" step="1" value="${s.tillNextBuffer ?? s.sinceLastBuffer ?? 0}"></label>
-          <fieldset class="box"><legend>Analysis (full 24 hours)</legend>
-            <label class="chk"><input type="checkbox" name="sleepAssume" ${s.sleepAssume !== false ? 'checked' : ''}> Count this time as sleep on nights with nothing else in it</label>
-            <div class="row"><input type="time" name="sleepStart" value="${esc(s.sleepStart || '23:00')}" step="900"> <span class="muted">to</span> <input type="time" name="sleepEnd" value="${esc(s.sleepEnd || '07:00')}" step="900"></div>
-            <label class="field"><span>Counts as category</span><select name="sleepCategory">${A.sleepCatOptions(s)}</select></label>
-          </fieldset>
-          <fieldset class="box wx-box"><legend>Weather</legend>
-            <label class="chk"><input type="checkbox" name="wxOn" ${wx.on ? 'checked' : ''}> Show the forecast at the top of each of the next 14 days</label>
-            <div class="row wx-find-row"><input name="wxPlace" placeholder="City, e.g. Berlin" value="${esc(wx.name || '')}" autocomplete="off"><button type="button" class="btn small wx-find">Find</button><button type="button" class="btn small ghost wx-here">📍 My location</button></div>
-            <div class="wx-results small">${wx.lat != null ? `Forecast for <b>${esc(wx.name || 'your location')}</b>` : '<span class="muted">Choose a place first.</span>'}</div>
-            <label class="field"><span>Temperature in</span><select name="wxUnit"><option value="C" ${wx.unit !== 'F' ? 'selected' : ''}>°C — Celsius</option><option value="F" ${wx.unit === 'F' ? 'selected' : ''}>°F — Fahrenheit</option></select></label>
-            <p class="muted small" style="margin:0">Forecasts from Open-Meteo (free, no account). Only the place's coordinates are sent.</p>
-          </fieldset>
-        </div>
+        </div>`)}
+        ${sect('s-sleep', 'Analysis — assumed sleep', `
+          <label class="chk"><input type="checkbox" name="sleepAssume" ${s.sleepAssume !== false ? 'checked' : ''}> Count this time as sleep on nights with nothing else in it (Analysis covers the full 24 hours)</label>
+          <div class="row"><input type="time" name="sleepStart" value="${esc(s.sleepStart || '23:00')}" step="900"> <span class="muted">to</span> <input type="time" name="sleepEnd" value="${esc(s.sleepEnd || '07:00')}" step="900"></div>
+          <label class="field"><span>Counts as category</span><select name="sleepCategory">${A.sleepCatOptions(s)}</select></label>`)}
+        ${sect('s-weather', 'Weather', `
+          <label class="chk"><input type="checkbox" name="wxOn" ${wx.on ? 'checked' : ''}> Show the forecast at the top of each of the next 14 days</label>
+          <div class="row wx-find-row"><input name="wxPlace" placeholder="City, e.g. Berlin" value="${esc(wx.name || '')}" autocomplete="off"><button type="button" class="btn small wx-find">Find</button><button type="button" class="btn small ghost wx-here">📍 My location</button></div>
+          <div class="wx-results small">${wx.lat != null ? `Forecast for <b>${esc(wx.name || 'your location')}</b>` : '<span class="muted">Choose a place first.</span>'}</div>
+          <label class="field"><span>Temperature in</span><select name="wxUnit"><option value="C" ${wx.unit !== 'F' ? 'selected' : ''}>°C — Celsius</option><option value="F" ${wx.unit === 'F' ? 'selected' : ''}>°F — Fahrenheit</option></select></label>
+          <p class="muted small" style="margin:0">Forecasts from Open-Meteo (free, no account). Only the place's coordinates are sent.</p>`, { cls: 'wx-box' })}
       </section>
       <section data-pane="1" hidden>
-        <fieldset class="box"><legend>Default day bounds</legend>
-          <div class="row"><input type="time" name="bStart" value="${s.bounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="bEnd" value="${s.bounds.end}" step="900"></div>
+        ${sect('s-hours', 'Work hours', `<div class="row"><input type="time" name="bStart" value="${s.bounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="bEnd" value="${s.bounds.end}" step="900"></div>
           ${weekdayToggles('bdays', s.bounds.days)}
           <label class="field"><span>When I change these hours or a time period</span><select name="hoursChange">
             <option value="ask" ${(s.hoursChange || 'ask') === 'ask' ? 'selected' : ''}>Ask me</option>
             <option value="move" ${s.hoursChange === 'move' ? 'selected' : ''}>Move planned sessions to fit the new hours</option>
             <option value="keep" ${s.hoursChange === 'keep' ? 'selected' : ''}>Keep planned sessions where they are (only new planning uses the new hours)</option>
-          </select></label>
-        </fieldset>
-        <fieldset class="box"><legend>Time periods</legend>
-          <p class="muted small" style="margin:0">Extra windows a task can be scheduled in instead of the work hours above, e.g. “After hours” on Mon, Wed and Thu evenings plus weekends. Each period can have several rules.</p>
+          </select></label>`)}
+        ${sect('s-periods', 'Time periods', `<p class="muted small" style="margin:0">Extra windows a task can be scheduled in instead of the work hours above, e.g. “After hours” on Mon, Wed and Thu evenings plus weekends. Each period can have several rules.</p>
           <div class="periods-list"></div>
-          <button type="button" class="btn small add-period">+ Add period</button>
-        </fieldset>
-        <fieldset class="box"><legend>When a task ignores day bounds, use</legend>
-          <div class="row"><input type="time" name="oStart" value="${s.overflowBounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="oEnd" value="${s.overflowBounds.end}" step="900"></div>
-          ${weekdayToggles('odays', s.overflowBounds.days)}
-        </fieldset>
-        <div class="grid3">
+          <button type="button" class="btn small add-period">+ Add period</button>`)}
+        ${sect('s-sessions', 'Task sessions', `<div class="grid3">
           <label class="field"><span>Default session length (min)</span><input type="number" name="chunkMinutes" min="5" step="5" value="${s.chunkMinutes}"></label>
           <label class="field"><span>Shortest session (min) — used only to meet a deadline</span><input type="number" name="minChunkMinutes" min="5" step="5" value="${s.minChunkMinutes ?? ''}" placeholder="= session length"></label>
           <label class="field"><span>Break between sessions (min)</span><input type="number" name="breakMinutes" min="0" step="5" value="${s.breakMinutes}"></label>
           <label class="field"><span>Wiggle room (min) — also use free slots this much shorter than a session</span><input type="number" name="wiggleMinutes" min="0" step="5" value="${s.wiggleMinutes ?? 15}"></label>
-        </div>
-        <fieldset class="box"><legend>Limits</legend>
-          <div class="grid3">
-            <label class="field"><span>Ask before creating more than … sessions / repeats</span><input type="number" name="sessionWarn" min="0" value="${s.sessionWarn ?? 20}"></label>
-            <label class="field"><span>Never create more than … sessions / repeats</span><input type="number" name="sessionMax" min="0" value="${s.sessionMax ?? 50}"></label>
-            <label class="field"><span>Furthest ahead a task or repeating event may run (days, 0 = no limit)</span><input type="number" name="maxSpanDays" min="0" value="${s.maxSpanDays ?? 365}"></label>
-          </div>
-        </fieldset>
-        <fieldset class="box"><legend>Planning</legend>
-          <div class="grid3">
+        </div>`)}
+        ${sect('s-overflow', 'When a task ignores day bounds', `<div class="row"><input type="time" name="oStart" value="${s.overflowBounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="oEnd" value="${s.overflowBounds.end}" step="900"></div>
+          ${weekdayToggles('odays', s.overflowBounds.days)}`)}
+        ${sect('s-planning', 'Planning', `<div class="grid3">
             <label class="field"><span>Most task time per day, all tasks together (min, 0 = no cap)</span><input type="number" name="dailyCapMinutes" min="0" step="15" value="${s.dailyCapMinutes || 0}"></label>
             <label class="field"><span>Default safety margin — aim to finish … days before a deadline</span><input type="number" name="marginDays" min="0" step="0.5" value="${s.marginDays || 0}"></label>
             <label class="field"><span>Travel buffer around events with a place (min, 0 = off)</span><input type="number" name="travelMinutes" min="0" step="5" value="${s.travelMinutes ?? 15}"></label>
@@ -889,12 +929,14 @@ export function settingsDialog(ctx) {
           <div class="field"><span>Times of day (for category preferences)</span>
             <div class="tod-grid">${['morning', 'afternoon', 'evening'].map((k) => `<span class="tod-l">${k[0].toUpperCase() + k.slice(1)}</span><input type="time" name="tp_${k}_0" value="${tp[k][0]}" step="900"><span class="muted">to</span><input type="time" name="tp_${k}_1" value="${tp[k][1]}" step="900">`).join('')}</div></div>
           <label class="chk"><input type="checkbox" name="learnSpeed" ${s.learnSpeed !== false ? 'checked' : ''}> Learn my reading speed from the pages I report, and adjust reading plans</label>
-        </fieldset>
-        <label class="chk"><input type="checkbox" name="assumePastDone" ${s.assumePastDone ? 'checked' : ''}> Assume past sessions were done (mark them undone to reschedule)</label>
-        <label class="chk"><input type="checkbox" name="allDayBlocks" ${s.allDayBlocks ? 'checked' : ''}> All-day events block task time</label>
-        <fieldset class="box"><legend>Calendars that count as busy</legend>
-          ${allCals.map((c) => `<label class="chk"><input type="checkbox" name="busy" value="${esc(c.id)}" ${busySet.has(c.id) ? 'checked' : ''}> ${esc(c.summary)}</label>`).join('')}
-        </fieldset>
+          <label class="chk"><input type="checkbox" name="assumePastDone" ${s.assumePastDone ? 'checked' : ''}> Assume past sessions were done (mark them undone to reschedule)</label>
+        <label class="chk"><input type="checkbox" name="allDayBlocks" ${s.allDayBlocks ? 'checked' : ''}> All-day events block task time</label>`)}
+        ${sect('s-limits', 'Limits', `<div class="grid3">
+            <label class="field"><span>Ask before creating more than … sessions / repeats</span><input type="number" name="sessionWarn" min="0" value="${s.sessionWarn ?? 20}"></label>
+            <label class="field"><span>Never create more than … sessions / repeats</span><input type="number" name="sessionMax" min="0" value="${s.sessionMax ?? 50}"></label>
+            <label class="field"><span>Furthest ahead a task or repeating event may run (days, 0 = no limit)</span><input type="number" name="maxSpanDays" min="0" value="${s.maxSpanDays ?? 365}"></label>
+          </div>`)}
+        ${sect('s-busy', 'Calendars that count as busy', `${allCals.map((c) => `<label class="chk"><input type="checkbox" name="busy" value="${esc(c.id)}" ${busySet.has(c.id) ? 'checked' : ''}> ${esc(c.summary)}</label>`).join('')}`)}
       </section>
       <section data-pane="2" hidden>
         <div class="conn-card">
@@ -915,43 +957,37 @@ export function settingsDialog(ctx) {
           <label class="field"><span>OAuth client ID (Web application)</span><input name="clientId" value="${esc(auth.clientId || '')}" placeholder="1234-abc.apps.googleusercontent.com" class="mono" spellcheck="false"></label>
           <div class="row"><button type="button" class="btn small connect">Connect with this client ID</button></div>
         </details>
-        <label class="chk"><input type="checkbox" name="syncTasksToGoogle" ${s.syncTasksToGoogle ? 'checked' : ''}> Write task sessions to Google Calendar</label>
+        ${sect('s-gtasks', 'Task sessions in Google Calendar', `        <label class="chk"><input type="checkbox" name="syncTasksToGoogle" ${s.syncTasksToGoogle ? 'checked' : ''}> Write task sessions to Google Calendar</label>
         <label class="field"><span>Calendar for task sessions and new events</span>
           <div class="join"><select name="taskCalendarId"><option value="">Primary calendar</option>${cals.filter((c) => !c.primary).map((c) => `<option value="${esc(c.id)}" ${s.taskCalendarId === c.id ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
           <button type="button" class="btn small create-cal" ${auth.connected ? '' : 'disabled'}>Create “Tempo Tasks”</button></div></label>
-        <button type="button" class="btn small ghost cleanup" ${auth.connected ? '' : 'disabled'}>Remove stray task events from Google</button>
+        <button type="button" class="btn small ghost cleanup" ${auth.connected ? '' : 'disabled'}>Remove stray task events from Google</button>`)}
       </section>
       <section data-pane="3" hidden>
-        <label class="chk"><input type="checkbox" name="notifyTasks" ${s.notifyTasks ? 'checked' : ''}> Desktop notifications for task sessions</label>
-        <label class="chk"><input type="checkbox" name="notifyLocal" ${s.notifyLocal ? 'checked' : ''}> Desktop notifications for local events</label>
-        <label class="chk"><input type="checkbox" name="notifyGoogle" ${s.notifyGoogle ? 'checked' : ''}> Desktop notifications for Google events too (Google also notifies on its own)</label>
-        <fieldset class="box"><legend>Notification profiles</legend>
-          <p class="muted small" style="margin:0">A profile is a set of reminders. Pick one for each event or task; emails are sent by Google${auth.connected ? ` to ${esc(auth.email || 'your Google address')}` : ' (connect Google Calendar)'}. Up to ${N.MAX_RULES} reminders per profile.</p>
+        ${sect('s-nprof', 'Notification profiles', `<p class="muted small" style="margin:0">A profile is a set of reminders. Pick one for each event or task; emails are sent by Google${auth.connected ? ` to ${esc(auth.email || 'your Google address')}` : ' (connect Google Calendar)'}. Up to ${N.MAX_RULES} reminders per profile.</p>
           <div class="nprof-list"></div>
           <button type="button" class="btn small add-nprof">+ Add profile</button>
           <div class="grid2">
             <label class="field"><span>New events use</span><select name="eventProfile" class="nprof-sel"></select></label>
             <label class="field"><span>Task sessions use</span><select name="taskProfile" class="nprof-sel"></select></label>
-          </div>
-        </fieldset>
-        <button type="button" class="btn small ghost test-notif">Send a test notification</button>
-        <fieldset class="box">
-          <legend>Email notifications (sent by Google)</legend>
-          ${auth.connected ? `
+          </div>`)}
+        ${sect('s-desktop', 'Desktop notifications', `<label class="chk"><input type="checkbox" name="notifyTasks" ${s.notifyTasks ? 'checked' : ''}> Desktop notifications for task sessions</label>
+        <label class="chk"><input type="checkbox" name="notifyLocal" ${s.notifyLocal ? 'checked' : ''}> Desktop notifications for local events</label>
+        <label class="chk"><input type="checkbox" name="notifyGoogle" ${s.notifyGoogle ? 'checked' : ''}> Desktop notifications for Google events too (Google also notifies on its own)</label>
+        <button type="button" class="btn small ghost test-notif">Send a test notification</button>`)}
+        ${sect('s-email', 'Email notifications (sent by Google)', `${auth.connected ? `
           <label class="chk"><input type="checkbox" name="agendaEmail" ${agendaOn ? 'checked' : ''}> Daily agenda email every morning (${esc(agendaCal?.summary || 'primary calendar')})</label>
           <p class="muted small">Google emails ${esc(auth.email || 'your Google address')}. Use a profile with emails (like Important) to get reminder emails for an event or task.</p>`
-          : '<p class="muted small">Connect Google Calendar to get email reminders for task sessions and a daily agenda email.</p>'}
-        </fieldset>
+          : '<p class="muted small">Connect Google Calendar to get email reminders for task sessions and a daily agenda email.</p>'}`)}
       </section>
       <section data-pane="5" hidden>
         <p class="muted small">Give tasks a category to color-code them and to group time in Analysis. A category's icon is added to its sessions' titles (also in Google Calendar). You can also add categories directly in the task dialog.</p>
         <label class="chk"><input type="checkbox" name="askCategory" ${s.askCategory !== false ? 'checked' : ''}> When I create a task without a category, ask me for one</label>
         <div class="cats-list"></div>
         <button type="button" class="btn small add-cat">+ Add category</button>
-        <fieldset class="box"><legend>Projects</legend>
+        ${sect('s-projects', 'Projects', `
           <p class="muted small" style="margin:0">Group tasks into a project in the task dialog. When steps run in order, each task starts only after the previous one is done.</p>
-          <div class="proj-list"></div>
-        </fieldset>
+          <div class="proj-list"></div>`)}
       </section>
       <section data-pane="6" hidden>
         <p class="muted small">Show calendars from other accounts next to your Google calendar. Their events count as busy time for task planning (untick “busy” to ignore a calendar). They're read-only here: create and edit events in your main Google account. Sign-ins for these accounts stay on this device.</p>
@@ -965,17 +1001,13 @@ export function settingsDialog(ctx) {
         <div class="acct-form"></div>
       </section>
       <section data-pane="7" hidden>
-        <fieldset class="box"><legend>Weekly review newspaper</legend>
-          <label class="field"><span>Name of the newspaper</span><input name="paperName" value="${esc(s.paperName || 'Der Zeitplan')}" maxlength="40"></label>
-          <label class="field"><span>Hours counted for time use</span><select name="paperScope">${[...Object.entries(A.SCOPES), ...(s.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${(s.paperScope || 'waking') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-          <div class="field"><span>Categories in the newspaper (untick to leave out)</span><div class="g-catlist paper-cats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="pc" value="${esc(c.id)}" ${(s.paperCats?.exclude || []).includes(c.id) ? '' : 'checked'}> ${esc(C.catLabel(c))}</label>`).join('')}<label class="chk"><input type="checkbox" class="pc" value="__none" ${(s.paperCats?.exclude || []).includes('__none') ? '' : 'checked'}> Without a category</label></div></div>
-          <div class="field"><span>Picture sources (one is picked at random each time)</span><div class="pic-src-list"></div><button type="button" class="btn small add-pic-src">+ Add a source</button></div>
-          <p class="muted small" style="margin:0">Wikimedia Commons: any search words (e.g. <i>Art Nouveau poster</i>) or a category name (e.g. <i>Photographs by Julia Margaret Cameron</i>). Art Institute of Chicago: search words (e.g. <i>Monet</i>). Image links: https addresses of pictures, one per line.</p>
-        </fieldset>
-        <fieldset class="box"><legend>Goal reminder</legend>
-          <label class="chk"><input type="checkbox" name="goalNotice" ${s.goalNotice !== false ? 'checked' : ''}> On the first day of a new week or month, show my goals</label>
-          <label class="field"><span>From (time of day)</span><input type="time" name="goalNoticeAt" value="${esc(s.goalNoticeAt || '09:00')}" step="900"></label>
-        </fieldset>
+        ${sect('s-paper', 'Weekly review newspaper', `<label class="field"><span>Name of the newspaper</span><input name="paperName" value="${esc(s.paperName || 'Der Zeitplan')}" maxlength="40"></label>
+          <label class="field"><span>Hours counted for time use</span><select name="paperScope">${[...Object.entries(A.SCOPES), ...(s.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${(s.paperScope || 'waking') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`)}
+        ${sect('s-papercats', 'Categories in the newspaper', `<div class="field"><span>Categories in the newspaper (untick to leave out)</span><div class="g-catlist paper-cats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="pc" value="${esc(c.id)}" ${(s.paperCats?.exclude || []).includes(c.id) ? '' : 'checked'}> ${esc(C.catLabel(c))}</label>`).join('')}<label class="chk"><input type="checkbox" class="pc" value="__none" ${(s.paperCats?.exclude || []).includes('__none') ? '' : 'checked'}> Without a category</label></div></div>`)}
+        ${sect('s-pics', 'Newspaper pictures', `<div class="field"><span>Picture sources (one is picked at random each time)</span><div class="pic-src-list"></div><button type="button" class="btn small add-pic-src">+ Add a source</button></div>
+          <p class="muted small" style="margin:0">Wikimedia Commons: any search words (e.g. <i>Art Nouveau poster</i>) or a category name (e.g. <i>Photographs by Julia Margaret Cameron</i>). Art Institute of Chicago: search words (e.g. <i>Monet</i>). Image links: https addresses of pictures, one per line.</p>`)}
+        ${sect('s-goalrem', 'Goal reminder', `<label class="chk"><input type="checkbox" name="goalNotice" ${s.goalNotice !== false ? 'checked' : ''}> On the first day of a new week or month, show my goals</label>
+          <label class="field"><span>From (time of day)</span><input type="time" name="goalNoticeAt" value="${esc(s.goalNoticeAt || '09:00')}" step="900"></label>`)}
       </section>
       <section data-pane="4" hidden>
         <p class="muted small">Tasks, settings and local events live in this browser's extension storage. Back them up or move them to another browser:</p>
@@ -991,6 +1023,31 @@ export function settingsDialog(ctx) {
     const f = $('form', dlg);
     const headH = () => dlg.style.setProperty('--sf-head', ($('.dlg-head', dlg)?.offsetHeight || 48) + 'px');
     headH(); requestAnimationFrame(headH);
+    const chk = (n) => !!f[n]?.checked, val = (n) => f[n]?.value ?? '';
+    const days = (n) => describeDays($$(`input[name=${n}]:checked`, dlg).map((c) => +c.value));
+    const optText = (n) => f[n]?.selectedOptions?.[0]?.textContent || '';
+    wireSects(dlg, {
+      's-display': () => `${optText('weekView')} · starts ${optText('weekStart')} · ${optText('h12')}`,
+      's-events': () => `${val('defaultEventMinutes')} min · since/till buffers ${val('sinceLastBuffer') || 0}/${val('tillNextBuffer') || 0} min`,
+      's-sleep': () => (chk('sleepAssume') ? `${val('sleepStart')}–${val('sleepEnd')} · ${optText('sleepCategory')}` : 'Off'),
+      's-weather': () => (chk('wxOn') ? `${(val('wxPlace') || 'No place chosen').split(',')[0]} · °${val('wxUnit')}` : 'Off'),
+      's-hours': () => `${val('bStart')}–${val('bEnd')}, ${days('bdays')}`,
+      's-periods': () => periods.map((x) => x.name).filter(Boolean).join(', ') || 'None',
+      's-sessions': () => `${val('chunkMinutes')} min sessions · ${val('breakMinutes')} min breaks · wiggle ${val('wiggleMinutes')} min`,
+      's-overflow': () => `${val('oStart')}–${val('oEnd')}, ${days('odays')}`,
+      's-planning': () => [+val('dailyCapMinutes') ? `max ${T.fmtDur(+val('dailyCapMinutes'))}/day` : 'No daily cap', +val('marginDays') ? `margin ${val('marginDays')} d` : '', `travel ${val('travelMinutes') || 0} min`].filter(Boolean).join(' · '),
+      's-limits': () => `ask above ${val('sessionWarn')} · never above ${val('sessionMax')}`,
+      's-busy': () => `${$$('input[name=busy]:checked', dlg).length} of ${allCals.length} calendars`,
+      's-gtasks': () => (chk('syncTasksToGoogle') ? `On · ${optText('taskCalendarId')}` : 'Off'),
+      's-nprof': () => nprofiles.map((x) => x.name).join(', '),
+      's-desktop': () => [chk('notifyTasks') && 'tasks', chk('notifyLocal') && 'local events', chk('notifyGoogle') && 'Google events'].filter(Boolean).join(', ') || 'Off',
+      's-email': () => (!auth.connected ? 'Connect Google Calendar first' : chk('agendaEmail') ? 'Daily agenda on' : 'Daily agenda off'),
+      's-projects': () => (projects.length ? `${projects.length} project${projects.length > 1 ? 's' : ''}` : 'None yet'),
+      's-paper': () => val('paperName'),
+      's-papercats': () => { const n = $$('.pc', dlg).filter((c) => !c.checked).length; return n ? `${n} left out` : 'All included'; },
+      's-pics': () => `${picSrc.length} source${picSrc.length === 1 ? '' : 's'}`,
+      's-goalrem': () => (chk('goalNotice') ? `From ${val('goalNoticeAt')}` : 'Off'),
+    });
     $$('.tabs button', dlg).forEach((b) => b.addEventListener('click', () => {
       $$('.tabs button', dlg).forEach((x) => x.classList.toggle('on', x === b));
       $$('[data-pane]', dlg).forEach((p) => (p.hidden = p.dataset.pane !== b.dataset.tab));

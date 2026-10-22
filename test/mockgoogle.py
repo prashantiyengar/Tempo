@@ -1,5 +1,6 @@
 # In-memory fake of the Google Calendar API, served through Playwright request routing.
 import json, re, itertools, urllib.parse
+import expand_sections  # noqa: F401  (opens collapsed dialog sections for older tests)
 class MockGoogle:
     def __init__(self, fail_insert=False):
         self.cals = {'primary': {'id': 'me@example.com', 'summary': 'me@example.com', 'primary': True, 'accessRole': 'owner', 'backgroundColor': '#039be5', 'timeZone': 'Europe/Berlin', 'defaultReminders': [{'method':'popup','minutes':10}]},
