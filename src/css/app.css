@@ -973,3 +973,9 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .g-rep { font-size: 11px; color: var(--accent); }
 .g-head .g-list:empty { display: none; }
 .paper-cats { max-height: 180px; columns: 2 180px; display: block; }
+/* bottom bar: seven tabs must fit on narrow phones */
+@media (max-width: 900px) {
+  .bottombar button { min-width: 0; padding-left: 0; padding-right: 0; }
+  .bottombar button b { width: 100%; max-width: 40px; }
+  .bottombar button span { font-size: 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

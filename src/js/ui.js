@@ -41,6 +41,8 @@ export function modal(html, setup, { cls = '' } = {}) {
     let done = false;
     const close = (v) => { if (done) return; done = true; dlg.close(); dlg.remove(); resolve(v); };
     dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(undefined); });
+    // ignore the phone's "ghost" click that follows the tap which opened this dialog
+    guardGhost(dlg);
     dlg.addEventListener('mousedown', (e) => { if (e.target === dlg) close(undefined); });
     $$('[data-close]', dlg).forEach((b) => b.addEventListener('click', () => close(undefined)));
     setup?.(dlg, close);
@@ -71,12 +73,26 @@ export function confirmBox(title, message, okLabel = 'OK', danger = false) {
   return choose(title, message, [{ value: true, label: okLabel, danger }]);
 }
 
+// A click only counts if the press that started it happened after `el` appeared. The tap that opened a sheet or
+// dialog on a phone is followed by emulated mouse events at the same spot; without this they'd hit whatever button
+// is now under the finger (the category chip, ✕, the backdrop…).
+function guardGhost(el, ms = 800) {
+  const opened = performance.now();
+  let pressed = false;
+  el.addEventListener('pointerdown', () => { pressed = true; }, true);
+  const block = (e) => { if (!pressed && performance.now() - opened < ms) { e.stopPropagation(); e.preventDefault(); } };
+  for (const t of ['mousedown', 'mouseup', 'click']) el.addEventListener(t, block, true);
+}
+
 export function popover(anchorRect, html, setup) {
   closePopover();
   const p = el(`<div class="popover" role="dialog">${html}</div>`);
   document.body.appendChild(p);
   setup?.(p, closePopover);
   addDateShortcuts(p);
+  // On phones the tap that opened this is followed by a "ghost" click at the same spot, which would land on whatever
+  // button of the sheet is under the finger (e.g. the category chip, or ✕). Ignore clicks in the first moment.
+  guardGhost(p); openedAt = performance.now(); pressedSinceOpen = false;
   // Place it after its contents are built, and again whenever it grows (More options, notes, a toast row…),
   // so the whole popup always stays on screen. If it is taller than the window it scrolls inside.
   const place = () => {
@@ -100,7 +116,15 @@ export function popover(anchorRect, html, setup) {
   });
   return p;
 }
-function outside(e) { const p = $('.popover'); if (p && !p.contains(e.target) && !e.target.closest('dialog')) closePopover(); }
+let openedAt = 0;
+function outside(e) {
+  const p = $('.popover');
+  // a ghost mousedown from the tap that opened the popover doesn't count as "tapping outside"
+  if (!pressedSinceOpen && performance.now() - openedAt < 800) return;
+  if (p && !p.contains(e.target) && !e.target.closest('dialog')) closePopover();
+}
+let pressedSinceOpen = false;
+globalThis.document?.addEventListener('pointerdown', () => { pressedSinceOpen = true; }, true);
 function escKey(e) { if (e.key === 'Escape' && !document.querySelector('dialog[open]')) closePopover(); }
 export function closePopover() {
   $$('.popover').forEach((p) => { p._ro?.disconnect(); p._unplace?.(); p.remove(); });
