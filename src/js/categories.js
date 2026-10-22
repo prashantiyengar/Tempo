@@ -57,14 +57,35 @@ export function wireSwatches(host, onPick) {
 
 export const catById = (settings, id) => (id ? (settings.categories || []).find((c) => c.id === id) || null : null);
 
+// ---------- Sub-categories (one level: a category can sit inside a main category) ----------
+export const parentOf = (settings, c) => (c?.parent ? catById(settings, c.parent) : null);
+export const childrenOf = (settings, id) => (settings.categories || []).filter((c) => c.parent === id);
+export const mainOf = (settings, c) => parentOf(settings, c) || c;
+// Main categories, each followed by its sub-categories.
+export function ordered(settings) {
+  const all = settings.categories || [], out = [];
+  for (const c of all) if (!c.parent || !all.some((p) => p.id === c.parent)) { out.push(c); for (const k of all) if (k.parent === c.id) out.push(k); }
+  return out;
+}
+// "Work › Meetings" (with icons) for sub-categories.
+export const fullLabel = (settings, c) => { const p = parentOf(settings, c); return p ? `${catLabel(p)} › ${catLabel(c)}` : catLabel(c); };
+// A set of category ids plus all their sub-categories (counting "Work" also counts "Work › Meetings").
+export function withSubs(settings, ids) {
+  const set = new Set(ids || []);
+  for (const c of settings.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
+  return [...set];
+}
+// Main categories that can take sub-categories (not themselves inside another).
+export const mainCats = (settings, exceptId = null) => (settings.categories || []).filter((c) => !c.parent && c.id !== exceptId);
+
 export function applyCategory(task, cat) {
   if (!cat) return { ...task, categoryId: null, categoryName: null, categoryColor: null, categoryIcon: null };
   return { ...task, categoryId: cat.id, categoryName: cat.name, categoryColor: cat.color, categoryIcon: cat.icon || null, color: cat.color };
 }
 
-export function newCategory(settings, name, color, icon = '') {
+export function newCategory(settings, name, color, icon = '', parent = null) {
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || 'cat';
-  const cat = { id: `${base}-${Math.random().toString(36).slice(2, 6)}`, name: name.trim(), color, icon: cleanIcon(icon) };
+  const cat = { id: `${base}-${Math.random().toString(36).slice(2, 6)}`, name: name.trim(), color, icon: cleanIcon(icon), ...(parent && catById(settings, parent) ? { parent } : {}) };
   settings.categories = [...(settings.categories || []), cat];
   return cat;
 }
@@ -99,17 +120,18 @@ export function refreshTaskCategories(settings, tasks) {
 export function categoryPicker(host, { settings, selected, onChange, onCreate, allowNone = true }) {
   let sel = selected || null;
   let adding = false;
-  let newIcon = '';
+  let newIcon = '', newParent = '';
   let newColor = CAT_COLORS.find((c) => !(settings.categories || []).some((x) => x.color === c)) || CAT_COLORS[0];
   const draw = () => {
     setHTML(host, `
       <div class="cat-chips">
         ${allowNone ? `<button type="button" class="cat-chip none ${!sel ? 'on' : ''}" data-cat="">None</button>` : ''}
-        ${(settings.categories || []).map((c) => `<button type="button" class="cat-chip ${sel === c.id ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}"><i></i>${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`).join('')}
+        ${ordered(settings).map((c) => `<button type="button" class="cat-chip ${c.parent ? 'sub' : ''} ${sel === c.id ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}" title="${esc(fullLabel(settings, c))}"><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`).join('')}
         <button type="button" class="cat-chip add" data-add="1">+ New</button>
       </div>
       ${adding ? `<div class="cat-new">
-        <div class="row"><input class="cat-icon" placeholder="🙂" maxlength="8" aria-label="Icon" value="${esc(newIcon)}"><input class="cat-name" placeholder="New category, e.g. Leisure" maxlength="30"></div>
+        <div class="row"><input class="cat-icon" placeholder="🙂" maxlength="8" aria-label="Icon" value="${esc(newIcon)}"><input class="cat-name" placeholder="New category, e.g. Leisure" maxlength="30">
+          ${mainCats(settings).length ? `<select class="cat-parent" aria-label="Inside"><option value="">Main category</option>${mainCats(settings).map((c) => `<option value="${esc(c.id)}" ${newParent === c.id ? 'selected' : ''}>inside ${esc(catLabel(c))}</option>`).join('')}</select>` : ''}</div>
         <div class="icon-grid grouped">${iconGridHTML(settings, { keep: newIcon })}</div>
         ${swatchesHTML('catcolor', newColor)}
         <div class="row"><button type="button" class="btn small primary cat-save">Add</button><button type="button" class="btn small ghost cat-cancel">Cancel</button></div>
@@ -121,12 +143,13 @@ export function categoryPicker(host, { settings, selected, onChange, onCreate, a
       wireSwatches(host.querySelector('.cat-new'), (c) => { newColor = c; });
       const iconIn = host.querySelector('.cat-icon');
       iconIn.oninput = () => { newIcon = iconIn.value; };
+      host.querySelector('.cat-parent')?.addEventListener('change', (e) => { newParent = e.target.value; });
       $$('.ic-btn', host).forEach((b) => (b.onclick = () => { newIcon = iconIn.value = b.dataset.ic; $$('.ic-btn', host).forEach((x) => x.classList.toggle('on', x === b)); }));
       const save = async () => {
         const n = name.value.trim();
         if (!n) { name.focus(); return; }
-        const cat = await onCreate(n, newColor, cleanIcon(newIcon));
-        newIcon = '';
+        const cat = await onCreate(n, newColor, cleanIcon(newIcon), newParent || null);
+        newIcon = ''; newParent = '';
         adding = false; sel = cat.id; draw(); onChange(cat);
       };
       host.querySelector('.cat-save').onclick = save;

@@ -36,6 +36,19 @@ function load() {
 }
 function save(v) { mem = v; try { localStorage.setItem(KEY, JSON.stringify(v)); } catch { /* storage full or blocked */ } }
 
+// Weather of past days is kept (per device), so days that have passed still show what the weather was.
+const HIST = 'tempo:wxHistory';
+let hist = null;
+function loadHist() { if (!hist) { try { hist = JSON.parse(localStorage.getItem(HIST) || '{}'); } catch { hist = {}; } } return hist; }
+function saveHist(todayKey, days, place) {
+  const h = loadHist();
+  for (const [k, d] of Object.entries(days)) if (k <= todayKey && d.max != null) h[k] = { ...d, place: place || h[k]?.place || '' };
+  const keys = Object.keys(h).sort();
+  for (const k of keys.slice(0, Math.max(0, keys.length - 800))) delete h[k];
+  try { localStorage.setItem(HIST, JSON.stringify(h)); } catch { /* storage full or blocked */ }
+}
+export const history = () => loadHist();
+
 export function forecast(s) {
   if (!enabled(s)) return null;
   const c = load();
@@ -50,11 +63,12 @@ export function refresh(s, { force = false } = {}) {
   if (!force && c && c.loc === locKey(s.weather) && Date.now() - c.at < FRESH) return Promise.resolve(false);
   if (inflight) return inflight;
   const q = new URLSearchParams({ latitude: (+s.weather.lat).toFixed(3), longitude: (+s.weather.lon).toFixed(3),
-    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max', timezone: 'auto', forecast_days: '16' });
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum', timezone: 'auto', forecast_days: '16', past_days: '31' });
   inflight = fetch(`${API}?${q}`).then((r) => (r.ok ? r.json() : Promise.reject(new Error('Weather ' + r.status)))).then((j) => {
     const d = j.daily || {}, days = {};
-    (d.time || []).forEach((k, i) => { days[k] = { code: d.weather_code?.[i], max: d.temperature_2m_max?.[i], min: d.temperature_2m_min?.[i], rain: d.precipitation_probability_max?.[i] }; });
+    (d.time || []).forEach((k, i) => { days[k] = { code: d.weather_code?.[i], max: d.temperature_2m_max?.[i], min: d.temperature_2m_min?.[i], rain: d.precipitation_probability_max?.[i], mm: d.precipitation_sum?.[i] }; });
     save({ loc: locKey(s.weather), at: Date.now(), days });
+    saveHist(T.dayKey(Date.now(), s.tz), days, (s.weather.name || '').split(',')[0]);
     return true;
   }).catch((e) => { console.warn('Tempo: weather unavailable', e); return false; }).finally(() => { inflight = null; });
   return inflight;
@@ -64,15 +78,19 @@ export const temp = (c, unit) => (c == null || !Number.isFinite(+c) ? '–' : `$
 
 // Small label for one day (only for today … 13 days ahead).
 export function dayHTML(s, key, todayKey, { month = false } = {}) {
-  const days = forecast(s);
-  if (!days || key < todayKey || key > T.addDays(todayKey, DAYS - 1)) return '';
-  const d = days[key]; if (!d) return '';
+  if (!s?.weather?.on) return '';
+  const past = key < todayKey;
+  let d;
+  if (past) d = loadHist()[key];
+  else { const days = forecast(s); if (!days || key > T.addDays(todayKey, DAYS - 1)) return ''; d = days[key]; }
+  if (!d) return '';
   const u = s.weather.unit || 'C', { icon, text } = describeCode(d.code);
-  const tip = `${text} · ${temp(d.max, u)} / ${temp(d.min, u)}${d.rain != null ? ` · rain ${d.rain}%` : ''}${s.weather.name ? ` · ${s.weather.name}` : ''}`;
+  const where = past ? d.place : (s.weather.name || '').split(',')[0];
+  const tip = `${past ? 'Weather that day: ' : ''}${text} · ${temp(d.max, u)} / ${temp(d.min, u)}${past ? (d.mm != null ? ` · ${(+d.mm).toFixed(+d.mm < 10 ? 1 : 0)} mm rain` : '') : d.rain != null ? ` · rain ${d.rain}%` : ''}${where ? ` · ${where}` : ''}`;
   const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   return month
-    ? `<span class="wx wx-m" title="${esc(tip)}"><span class="wx-i">${icon}</span>${temp(d.max, u)}</span>`
-    : `<span class="wx" title="${esc(tip)}"><span class="wx-i">${icon}</span><span class="wx-hi">${temp(d.max, u)}</span><span class="wx-lo">${temp(d.min, u)}</span></span>`;
+    ? `<span class="wx wx-m ${past ? 'past' : ''}" title="${esc(tip)}"><span class="wx-i">${icon}</span>${temp(d.max, u)}</span>`
+    : `<span class="wx ${past ? 'past' : ''}" title="${esc(tip)}"><span class="wx-i">${icon}</span><span class="wx-hi">${temp(d.max, u)}</span><span class="wx-lo">${temp(d.min, u)}</span></span>`;
 }
 
 export async function geocode(name) {

@@ -77,7 +77,7 @@ async def main():
         print('   horoscope:', (await page.text_content('.np-side .np-h3 >> nth=1')), '|', (await page.text_content('.np-side .np-small >> nth=1'))[:120])
         await page.screenshot(path=f'{OUT}/l3-paper.png', full_page=True)
         await page.check('[data-np=all]'); await page.wait_for_timeout(800)
-        print('   all events:', await page.eval_on_selector_all('.np-feuil h4 + .np-list li', 'xs => xs.map(x => x.innerText)'), '|', await page.text_content('.np-feuil .np-small.np-mute') if await page.query_selector('.np-feuil .np-small.np-mute') else '')
+        print('   all events:', await page.eval_on_selector_all('.np-termine .np-plain li', 'xs => xs.map(x => x.innerText)'), '|', await page.text_content('.np-termine .np-small.np-mute') if await page.query_selector('.np-termine .np-small.np-mute') else '')
         await page.select_option('[data-np=sign]', 'scorpio'); await page.wait_for_timeout(500)
         print('   sign saved:', await page.evaluate('window.__tempo.app.state.settings.zodiac'), '|', await page.text_content('.np-side .np-h3 >> nth=1'))
         await page.click('#btn-prev'); await page.wait_for_timeout(600); print('   previous week:', await page.text_content('#range-title'))

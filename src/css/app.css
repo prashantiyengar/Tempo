@@ -938,3 +938,24 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .gn-snooze { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
 .gn-snooze input { width: 56px; padding: 4px 6px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .np-per select { width: auto !important; max-width: 200px; }
+/* sub-categories */
+.cat-row.sub { margin-left: 26px; border-left: 2px solid var(--line2); padding-left: 8px; }
+.cat-par { max-width: 160px; font-size: 12px; }
+.cat-chip.sub { font-size: 11.5px; }
+.cat-sub { color: var(--muted); margin-right: 2px; }
+.cat-new .cat-parent { max-width: 170px; }
+/* goal category box */
+.g-catbox { flex: none; display: inline-flex; align-items: center; gap: 1px; min-width: 26px; height: 24px; padding: 0 3px; border: 1px dashed var(--line2); border-radius: 6px; background: var(--panel); cursor: pointer; font-size: 13px; }
+.g-catbox.set { border-style: solid; border-color: var(--line2); }
+.g-catbox:hover { border-color: var(--accent); }
+.g-cb-none { opacity: .45; font-size: 12px; margin: 0 auto; }
+.g-cb-ic { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; background: color-mix(in srgb, var(--c) 22%, transparent); font-size: 11.5px; }
+.g-cb-more { font-size: 10px; color: var(--muted); }
+.g-add .g-catbox { height: 30px; }
+.g-pick { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0; }
+.g-catlist .chk.sub { margin-left: 20px; }
+.wx.past { opacity: .6; }
+/* newspaper: events across the page */
+.np-termine { grid-column: 1 / -1; border-top: 1px solid var(--np-hair); }
+.np-termine .np-days { columns: 4 170px; column-gap: 22px; column-rule: 1px solid var(--np-hair); }
+@media print { body.review-mode .np-termine { grid-column: 1 / -1 !important; } body.review-mode .np-termine .np-days { columns: 4 !important; column-gap: 12px; } }

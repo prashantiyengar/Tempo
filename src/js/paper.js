@@ -140,6 +140,9 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
   const evRows = [...byDay.entries()].map(([k, list]) => `<div class="np-day"><div class="np-dayh">${esc(T.format(T.dayStart(k, z), z, period === 'week' ? { weekday: 'long', day: 'numeric' } : { weekday: 'short', day: 'numeric', month: 'short' }))}</div>
     <ul class="np-list np-plain">${list.map((e) => `<li><span class="np-mute">${e.allDay ? 'all day' : esc(T.fmtTime(e.start, z, s.h12))}</span> ${e.evDone ? '✓ ' : ''}${esc(e.title)}</li>`).join('')}</ul></div>`).join('');
 
+  // the period's events get their own section across the page
+  const wideTermine = !!s.reviewAllEvents;
+  const termineBody = `${evRows ? `<div class="np-days">${evRows}</div>` : '<p class="np-small">No events.</p>'}${r.allEvents.length > MAXEV ? `<p class="np-small np-mute">…and ${r.allEvents.length - MAXEV} more.</p>` : ''}${r.skippedFrequent ? `<p class="np-small np-mute">Left out: ${plural(r.skippedFrequent, 'event')} repeating daily or 3+ times a week.</p>` : ''}`;
   const hz = horoscope(r, s, use, signId);
   // ---- goal progress: blocks (e.g. this week, this month), each with Work / Fitness / Personal
   const blocks = goals.blocks || [];
@@ -202,8 +205,9 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
       <section class="np-feuil">
         <span class="np-kicker">Feuilleton</span>
         ${books}
-        ${s.reviewAllEvents ? `<h4 class="np-h4">Termine ${P.de}</h4>${evRows ? `<div class="np-days">${evRows}</div>` : '<p class="np-small">No events.</p>'}${r.allEvents.length > MAXEV ? `<p class="np-small np-mute">…and ${r.allEvents.length - MAXEV} more.</p>` : ''}${r.skippedFrequent ? `<p class="np-small np-mute">Left out: ${plural(r.skippedFrequent, 'event')} repeating daily or 3+ times a week.</p>` : ''}` : ''}
+        ${s.reviewAllEvents && !wideTermine ? `<h4 class="np-h4">Termine ${P.de}</h4>${termineBody}` : ''}
       </section>
+      ${wideTermine ? `<section class="np-termine"><span class="np-kicker">Termine ${P.de}</span>${termineBody}</section>` : ''}
       <section class="np-goals">
         <span class="np-kicker">Ziele · Goal progress</span>
         ${goalsHTML}

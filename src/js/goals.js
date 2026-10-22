@@ -19,8 +19,10 @@ export const goalCats = (s, g) => (g.cats?.length ? g.cats : headCats(s, headOf(
 export const withHeadCats = (s, head, cats) => ({ ...(s.goalHeads || {}), [head]: { ...((s.goalHeads || {})[head] || {}), cats } });
 
 // Time spent (before now) and planned (after now) in [from, to) on events and task sessions in these categories.
-export function timeIn(items, cats, from, to, now = Date.now()) {
+export function timeIn(items, cats, from, to, now = Date.now(), settings = null) {
+  // counting a main category also counts its sub-categories
   const set = new Set(cats || []);
+  if (settings) for (const c of settings.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
   let done = 0, planned = 0;
   if (!set.size) return { done, planned };
   for (const it of items) {
@@ -41,9 +43,9 @@ export function progress(s, key, items, fromKey, toKey, now = Date.now()) {
   return HEADS.map(([h, label, icon]) => {
     const goals = list(s, key).filter((g) => headOf(g) === h);
     const budget = goals.reduce((a, g) => a + (+g.budget || 0), 0);
-    const t = timeIn(items, headCats(s, h), from, to, now);
+    const t = timeIn(items, headCats(s, h), from, to, now, s);
     return { head: h, label, icon, goals, reached: goals.filter((g) => g.done).length, budget, spent: t.done, planned: t.planned, cats: headCats(s, h),
-      perGoal: goals.filter((g) => g.cats?.length).map((g) => ({ id: g.id, ...timeIn(items, g.cats, from, to, now) })) };
+      perGoal: goals.filter((g) => g.cats?.length).map((g) => ({ id: g.id, ...timeIn(items, g.cats, from, to, now, s) })) };
   });
 }
 

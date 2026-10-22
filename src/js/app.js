@@ -897,7 +897,7 @@ function quickCreate(rect, sel, onClose) {
     C.categoryPicker($('.qc-cat', p), {
       settings: set(), selected: null,
       onChange: (c) => { qcCat = c; },
-      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
+      onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; },
     });
     $('.till-next', p)?.addEventListener('click', async () => {
       const r = await nextEventStart({ ref: sel.start });
@@ -914,7 +914,7 @@ function quickCreate(rect, sel, onClose) {
         if (cat) title = cat.name;
         else {
           saving = true;
-          const a = await D.askTitle(set(), { what: 'event', onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; } });
+          const a = await D.askTitle(set(), { what: 'event', onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; } });
           saving = false;
           if (!a) { f.title.focus(); return; }
           title = a.title; cat = a.cat || cat;
@@ -1105,7 +1105,7 @@ async function askCategoryOnce(task) {
     C.categoryPicker($('.cat-host', dlg), {
       settings: set(), selected: null, allowNone: false,
       onChange: (c) => { picked = c; close('ok'); },
-      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
+      onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; },
     });
     $('.never', dlg).onclick = () => close('never');
   }, { cls: 'narrow' });
@@ -1125,7 +1125,7 @@ async function pickCategory(task) {
     C.categoryPicker($('.cat-host', dlg), {
       settings: set(), selected: task.categoryId,
       onChange: (c) => { picked = c; close('ok'); },
-      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
+      onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; },
     });
   }, { cls: 'narrow' });
   if (r !== 'ok') return;
@@ -1146,7 +1146,7 @@ async function pickEventCategory(it) {
     C.categoryPicker($('.cat-host', dlg), {
       settings: set(), selected: it.catId,
       onChange: (c) => { picked = c; chosen = true; close(); },
-      onCreate: async (name, color, icon) => { const c = C.newCategory(set(), name, color, icon); await E.persist(st(), ['settings']); return c; },
+      onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; },
     });
   }, { cls: 'narrow' });
   if (!chosen) return;
@@ -1904,12 +1904,12 @@ async function renderPaperView(seq) {
   const actx = { settings: s, gmeta: st().gmeta, calColor };
   const groups = {};
   const occ = items.filter((it) => A.isOccupying(it, s) && it.end > from && it.start < to).map((it) => {
-    const g = A.groupOf(it, 'category', actx); groups[g.key] ||= g;
+    const g = A.groupOf(it, 'maincat', actx); groups[g.key] ||= g;
     return { start: it.start, end: it.end, group: g.key, prio: it.kind === 'chunk' ? 1 : 0, title: it.title, kind: it.kind, uid: it.key };
   });
   const scope = s.paperScope && (A.SCOPES[s.paperScope] || (s.periods || []).some((p) => 'period:' + p.id === s.paperScope)) ? s.paperScope : 'waking';
   const upTo = Math.min(to, Math.max(from + T.DAY, r.isCurrent ? T.dayStart(T.addDays(T.dayKey(Date.now(), z), 1), z) : to));
-  if (scope === 'full' && s.sleepAssume !== false) { const sl = A.assumedSleep(occ, from, upTo, s); if (sl.blocks.length) { const sg = A.sleepGroup(s, 'category'); occ.push(...A.sleepItems(sl, sg)); groups[sg.key] ||= sg; } }
+  if (scope === 'full' && s.sleepAssume !== false) { const sl = A.assumedSleep(occ, from, upTo, s); if (sl.blocks.length) { const sg = A.sleepGroup(s, 'maincat'); occ.push(...A.sleepItems(sl, sg)); groups[sg.key] ||= sg; } }
   const data = A.compute(occ, A.scopeWindows(scope, from, upTo, s), z);
   let busiest = null;
   for (const [k, d] of Object.entries(data.days)) { const used = d.available - d.free - (d.gaps || 0); if (used > 0 && (!busiest || used > busiest.m)) busiest = { k, m: used }; }
@@ -2080,10 +2080,10 @@ async function renderGoalsView(seq) {
           ${bar}
           <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
             <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
-            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + (g.budget ? ' / ' : '') : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.cats?.length ? ` <span class="g-gcats" title="Counts: ${esc(g.cats.map(catName).join(', '))}">${g.cats.map((id) => `<i style="background:${esc(C.catById(s, id)?.color || '#9aa0aa')}"></i>`).join('')}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}</button>
+            ${catBox(g.cats, p)}
+            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + (g.budget ? ' / ' : '') : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}</button>
             <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
-          <form class="g-add" data-head="${p.head}"><input name="t" placeholder="Add a ${p.label.toLowerCase()} goal…" maxlength="200" autocomplete="off" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}"><input name="b" type="number" min="0" step="0.25" placeholder="h" title="Time budget in hours (optional)" class="g-bin"><button type="button" class="icon-btn sm g-catbtn" title="Categories that count for this goal (optional — otherwise the head's)">🏷</button><button class="btn small" type="submit">Add</button>
-            <div class="g-addcats" hidden><span class="muted small">Counts for this goal:</span>${(s.categories || []).map((c) => `<button type="button" class="cat-chip g-ac" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}"><i></i>${esc(C.catLabel(c))}</button>`).join('')}</div></form>
+          <form class="g-add" data-head="${p.head}" data-cats="">${catBox([], p, true)}<input name="t" placeholder="Add a ${p.label.toLowerCase()} goal…" maxlength="200" autocomplete="off" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}"><input name="b" type="number" min="0" step="0.25" placeholder="h" title="Time budget in hours (optional)" class="g-bin"><button class="btn small" type="submit">Add</button></form>
         </div>`;
       }).join('')}
     </section>`;
@@ -2104,12 +2104,20 @@ async function renderGoalsView(seq) {
     const key = c.dataset.key, x = sec.list.find((q) => q.key === key);
     const trips = GL.travelIn(items, x.kind === 'year' ? today : x.from, x.to, s);
     $$('.g-add', c).forEach((f) => {
-      $('.g-catbtn', f).onclick = () => { const box = $('.g-addcats', f); box.hidden = !box.hidden; $('.g-catbtn', f).classList.toggle('on', !box.hidden); };
-      $$('.g-ac', f).forEach((b) => (b.onclick = () => b.classList.toggle('on')));
+      $('.g-catbox', f).onclick = async () => {
+        const head = GL.HEADS.find(([h]) => h === f.dataset.head);
+        const cur = f.dataset.cats ? f.dataset.cats.split(',') : [];
+        const r = await pickGoalCats(cur, head);
+        if (r == null) return;
+        f.dataset.cats = r.join(',');
+        setHTML($('.g-catbox', f), catBoxInner(r, head));
+        $('.g-catbox', f).classList.toggle('set', r.length > 0);
+        f.t.focus();
+      };
       f.onsubmit = (e) => {
         e.preventDefault(); const v = f.t.value.trim(); if (!v) return;
         const b = parseFloat(f.b.value); app.goalFocus = `${key}|${f.dataset.head}`;
-        const cats = $$('.g-ac.on', f).map((x) => x.dataset.cat);
+        const cats = f.dataset.cats ? f.dataset.cats.split(',').filter(Boolean) : [];
         saveGoals(GL.add(set(), key, v, { head: f.dataset.head, budget: b > 0 ? b * 60 : null, cats }), 'add goal');
       };
     });
@@ -2125,16 +2133,48 @@ async function renderGoalsView(seq) {
       $('.g-del', r).onclick = () => { saveGoals(GL.remove(set(), key, id), 'remove goal'); toast('Goal removed'); };
       $('.g-mv', r).onclick = async () => { const to = await choose('Move this goal to…', GL.list(set(), key).find((g) => g.id === id)?.text, targets(key)); if (to) { saveGoals(GL.moveTo(set(), key, id, to), 'move goal'); toast(`Moved to ${GL.keyLabel(set(), to)}`); } };
       $('.g-text', r).onclick = () => editGoal(key, id);
+      $('.g-catbox', r).onclick = async () => {
+        const g = GL.list(set(), key).find((q) => q.id === id);
+        const res = await pickGoalCats(g.cats || [], GL.HEADS.find(([h]) => h === GL.headOf(g)));
+        if (res != null) saveGoals(GL.update(set(), key, id, { cats: res.length ? res : null }), 'goal categories');
+      };
     });
   });
   if (app.goalFocus) { const [k, h] = app.goalFocus.split('|'); $(`.g-card[data-key="${CSS.escape(k)}"] .g-add[data-head="${h}"] input[name=t]`, root)?.focus(); app.goalFocus = null; }
 }
+// The icon box next to a goal: its own categories' icons, or a faint tag when it uses the head's categories.
+function catBoxInner(cats, head) {
+  const s = set();
+  const list = (cats || []).map((id) => C.catById(s, id)).filter(Boolean);
+  if (!list.length) return '<span class="g-cb-none">🏷</span>';
+  return list.slice(0, 3).map((c) => `<span class="g-cb-ic" style="--c:${esc(c.color)}">${esc(c.icon || C.parentOf(s, c)?.icon || c.name.slice(0, 1))}</span>`).join('') + (list.length > 3 ? `<span class="g-cb-more">+${list.length - 3}</span>` : '');
+}
+function catBox(cats, p, add = false) {
+  const s = set(), names = (cats || []).map((id) => C.fullLabel(s, C.catById(s, id))).filter(Boolean);
+  const title = names.length ? `Counts: ${names.join(', ')} — click to change` : `Counts the ${p.label} categories${p.cats.length ? ` (${p.cats.map((id) => C.catLabel(C.catById(s, id)) || 'No category').join(', ')})` : ''} — click to pick categories for this goal`;
+  return `<button type="button" class="g-catbox ${names.length ? 'set' : ''}" title="${esc(title)}" aria-label="${add ? 'Categories for the new goal' : 'Categories for this goal'}">${catBoxInner(cats, p)}</button>`;
+}
+// Popup: which categories count for one goal. Returns the chosen ids ([] = use the head's), or null if cancelled.
+async function pickGoalCats(current, head) {
+  const s = set(), [hid, label, icon] = head, hc = GL.headCats(s, hid), cur = new Set(current || []);
+  return modal(`<form class="choice"><h2>Categories for this goal</h2>
+      <p class="muted small">Time in events and task sessions of these categories counts towards the goal. Picking a main category includes its sub-categories.</p>
+      <div class="g-pick">${C.ordered(s).map((c) => `<button type="button" class="cat-chip ${c.parent ? 'sub' : ''} ${cur.has(c.id) ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}" title="${esc(C.fullLabel(s, c))}"><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`).join('')}</div>
+      <p class="muted small">None picked = use the ${icon} ${esc(label)} categories${hc.length ? ` (${esc(hc.map((id) => C.catLabel(C.catById(s, id)) || 'No category').join(', '))})` : ' (none set yet)'}.</p>
+      <div class="actions"><button type="button" class="btn ghost g-pick-clear">Use ${esc(label)}'s</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Apply</button></div></form>`,
+  (dlg, close) => {
+    $$('.g-pick .cat-chip', dlg).forEach((b) => (b.onclick = () => b.classList.toggle('on')));
+    $('.g-pick-clear', dlg).onclick = () => close([]);
+    $('form', dlg).onsubmit = (e) => { e.preventDefault(); close($$('.g-pick .cat-chip.on', dlg).map((b) => b.dataset.cat)); };
+  }, { cls: 'narrow' }).then((r) => (r === undefined ? null : r));
+}
+
 // Categories that count towards a head (one setting for every week, month and year).
 async function editHeadCats(head) {
   const s = set(), [, label, icon] = GL.HEADS.find(([h]) => h === head), cur = new Set(GL.headCats(s, head));
   const r = await modal(`<form class="choice"><h2>${icon} What counts as ${esc(label.toLowerCase())}?</h2>
       <p class="muted small">Time in events and task sessions of these categories shows as progress on your ${esc(label.toLowerCase())} goals — in every week, month and the year.</p>
-      <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" value="${esc(c.id)}" ${cur.has(c.id) ? 'checked' : ''}> <span class="sw-dot" style="background:${esc(c.color)}"></span> ${esc(C.catLabel(c))}</label>`).join('')}
+      <div class="g-catlist">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" value="${esc(c.id)}" ${cur.has(c.id) ? 'checked' : ''}> <span class="sw-dot" style="background:${esc(c.color)}"></span> ${esc(C.catLabel(c))}</label>`).join('')}
         <label class="chk"><input type="checkbox" value="__none" ${cur.has('__none') ? 'checked' : ''}> Events and tasks without a category</label></div>
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
   (dlg, close) => { $('form', dlg).onsubmit = (e) => { e.preventDefault(); close($$('input[type=checkbox]:checked', dlg).map((x) => x.value)); }; }, { cls: 'narrow' });

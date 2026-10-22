@@ -112,17 +112,20 @@ export function assumedSleep(occ, from, to, s) {
 // Which group assumed sleep is counted in: the category you picked (when grouping by category), otherwise its own.
 export function sleepGroup(s, by) {
   const c = s.sleepCategory && (s.categories || []).find((x) => x.id === s.sleepCategory);
-  if (c && by === 'category') return { key: 'cat:' + c.id, label: `${c.icon ? c.icon + ' ' : ''}${c.name}`, color: c.color };
+  if (c && (by === 'category' || by === 'maincat')) return groupOf({ kind: 'event', catId: c.id, ev: {} }, by, { settings: s });
   return c ? { ...SLEEP_GROUP, color: c.color } : SLEEP_GROUP;
 }
 export const sleepItems = (sl, group = SLEEP_GROUP) => sl.blocks.map((x) => ({ start: x.start, end: x.end, group: group.key, prio: 2, title: 'Sleep (assumed)', kind: 'sleep', uid: 'sleep:' + x.start }));
 
 export function groupOf(it, by, ctx) {
   const s = ctx.settings;
-  if (by === 'category') {
+  if (by === 'category' || by === 'maincat') {
     const id = it.kind === 'chunk' ? it.task.categoryId : it.catId;
-    const c = (s.categories || []).find((x) => x.id === id);
-    if (c) return { key: 'cat:' + c.id, label: `${c.icon ? c.icon + ' ' : ''}${c.name}`, color: c.color };
+    let c = (s.categories || []).find((x) => x.id === id);
+    const p = c?.parent ? (s.categories || []).find((x) => x.id === c.parent) : null;
+    if (c && p && by === 'maincat') c = p; // roll sub-categories up into their main category
+    const lbl = (x) => `${x.icon ? x.icon + ' ' : ''}${x.name}`;
+    if (c) return { key: 'cat:' + c.id, label: p && by === 'category' ? `${lbl(p)} › ${lbl(c)}` : lbl(c), color: c.color };
     return it.kind === 'chunk' ? { key: 'cat:none-t', label: 'Uncategorized tasks', color: '#c0c4cc' } : { key: 'cat:none-e', label: 'Uncategorized events', color: '#9aa0aa' };
   }
   if (by === 'type') return it.kind === 'chunk' ? { key: 'tasks', label: 'Task sessions', color: '#8a5cf6' } : { key: 'events', label: 'Calendar events', color: '#5b7c99' };
@@ -259,7 +262,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
     return `<tr><td><details class="an-det"><summary><span class="sw-dot" style="background:${m.color}"></span>${name}<span class="muted small an-count">${n} item${n === 1 ? '' : 's'} ▾</span></summary>${titleList(keys)}</details></td>
       <td class="num">${fmtH(T0[k] || 0)}</td><td class="num">${pct(T0[k] || 0, totals.available)}%</td><td class="num">${pct(T0[k] || 0, occupied)}%</td></tr>`;
   }).join('');
-  const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' ? 'Category' : opts.by === 'type' ? 'Type' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
+  const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' || opts.by === 'maincat' ? 'Category' : opts.by === 'type' ? 'Type' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
     <tbody>${rows}${totals.gaps ? `<tr class="gap-row"><td><span class="gap-sw"></span> Short gaps between items <span class="muted small">(≤ ${GAP_MAX} min, not free)</span></td><td class="num">${fmtH(totals.gaps)}</td><td class="num">${pct(totals.gaps, totals.available)}%</td><td class="num">—</td></tr>` : ''}<tr class="free-row"><td><span class="sw-dot free-sw"></span>Free</td><td class="num">${fmtH(totals.free)}</td><td class="num">${pct(totals.free, totals.available)}%</td><td class="num">—</td></tr></tbody>
     <tfoot><tr><td>Total in scope</td><td class="num">${fmtH(totals.available)}</td><td class="num">100%</td><td></td></tr></tfoot></table>`;
 
@@ -270,7 +273,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
           ${[['next7', 'Next 7 days'], ['next30', 'Next 30 days'], ['week', 'This week'], ['nextweek', 'Next week'], ['month', 'This month'], ['nextmonth', 'Next month'], ['custom', 'Custom…']].map(([v, l]) => `<option value="${v}" ${opts.period === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         ${opts.period === 'custom' ? `<label class="field"><span>From</span><input type="date" data-o="from" value="${opts.from || ''}"></label><label class="field"><span>To</span><input type="date" data-o="to" value="${opts.to || ''}"></label>` : ''}
         <label class="field"><span>Hours</span><select data-o="scope">${[...Object.entries(SCOPES), ...(settings.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${opts.scope === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-        <label class="field"><span>Group by</span><select data-o="by">${[['category', 'Category'], ['color', 'Color'], ['source', 'Task or calendar'], ['type', 'Events vs tasks']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Group by</span><select data-o="by">${[['category', 'Category'], ['maincat', 'Main categories'], ['color', 'Color'], ['source', 'Task or calendar'], ['type', 'Events vs tasks']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <span class="grow"></span>
         <button class="btn small ghost" data-o="csv">Download CSV</button>
       </div>

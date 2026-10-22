@@ -62,8 +62,8 @@ async def main():
         await page.goto('http://localhost:8808/app.html'); await page.wait_for_selector('.tg-col'); await page.wait_for_function('window.tempo'); await page.wait_for_timeout(1000)
         await page.click('#view-seg button[data-view=goals]'); await page.wait_for_selector('.g-card')
         f = '.g-card:first-child .g-add[data-head=personal]'
-        await page.fill(f + ' input[name=t]', 'Climb twice'); await page.fill(f + ' input[name=b]', '4'); await page.click(f + ' .g-catbtn'); await page.click(f + ' .g-ac[data-cat=sport]'); await page.press(f + ' input[name=t]', 'Enter'); await page.wait_for_timeout(400)
-        print('2. goal with own category:', re.sub(r'\s+', ' ', await page.inner_text('.g-card:first-child .g-head[data-head=personal] .g-row')), '| dots:', len(await page.query_selector_all('.g-card:first-child .g-head[data-head=personal] .g-gcats i')))
+        await page.fill(f + ' input[name=t]', 'Climb twice'); await page.fill(f + ' input[name=b]', '4'); await page.click(f + ' .g-catbox'); await page.click('dialog .g-pick .cat-chip[data-cat=sport]'); await page.click('dialog button.primary'); await page.press(f + ' input[name=t]', 'Enter'); await page.wait_for_timeout(400)
+        print('2. goal with own category:', re.sub(r'\s+', ' ', await page.inner_text('.g-card:first-child .g-head[data-head=personal] .g-row')), '| box:', await page.inner_text('.g-card:first-child .g-head[data-head=personal] .g-row .g-catbox'))
         print('   stored cats:', await page.evaluate("Object.values(window.__tempo.app.state.settings.goals)[0][0].cats"))
         # 3. settings: name, hours, sources (built-in off, Commons search + AIC)
         await page.click('#btn-settings'); await page.click('dialog .tabs button[data-tab="7"]')

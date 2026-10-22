@@ -543,7 +543,7 @@ export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bou
   'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
   'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'later', 'weather'];
-const normCat = ({ id, name, color, icon, prefer }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}) });
+const normCat = ({ id, name, color, icon, prefer, parent }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}), ...(parent ? { parent } : {}) });
 function sharedOf(s) {
   const o = {};
   for (const k of SHARED_KEYS) if (s[k] !== undefined) o[k] = k === 'categories' ? (s.categories || []).map(normCat) : s[k];

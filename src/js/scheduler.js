@@ -232,7 +232,8 @@ export function intersect(a, b) {
 // Preferred time of day for the task's category (e.g. Study → morning), as day-bounds style rules.
 export function preferredWindow(task, s) {
   const cat = (s.categories || []).find((c) => c.id === task.categoryId);
-  const key = task.prefer || cat?.prefer;
+  const parent = cat?.parent ? (s.categories || []).find((c) => c.id === cat.parent) : null;
+  const key = task.prefer || cat?.prefer || parent?.prefer; // a sub-category without its own preference uses its main category's
   const w = key && (s.timePrefs || DEFAULT_SETTINGS.timePrefs)[key];
   return w ? { start: w[0], end: w[1], days: [0, 1, 2, 3, 4, 5, 6] } : null;
 }

@@ -196,7 +196,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         const id = c ? G.nearestColorId(c.color) : '';
         const r = dlg.querySelector(`input[name=colorId][value="${id}"]`); if (r) r.checked = true;
       },
-      onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; },
+      onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; },
     });
     const remBox = $('.rem-rows', dlg);
     const addRem = (o = { method: 'popup', minutes: s.defaultReminder }) => {
@@ -340,7 +340,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       if (!title && (isNew || ev?.summary)) {
         if (evCat) title = evCat.name;
         else {
-          const a = await askTitle(s, { what: 'event', onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; } });
+          const a = await askTitle(s, { what: 'event', onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; } });
           if (!a) { f.summary.focus(); return; }
           title = a.title; if (a.cat) evCat = a.cat;
         }
@@ -621,7 +621,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
     C.categoryPicker($('.cat-host', dlg), {
       settings: s, selected: cat?.id,
       onChange: (c) => { cat = c; showColor(); update(); },
-      onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; },
+      onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; },
     });
     showColor();
     // Deadline shortcuts, based on the task's own day bounds if set, otherwise the default ones
@@ -748,7 +748,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
       if (!f.title.value.trim()) {
         if (cat) f.title.value = cat.name;
         else {
-          const a = await askTitle(s, { what: f.kind.value === 'reading' ? 'reading plan' : 'task', onCreate: async (name, color, icon) => { const c = C.newCategory(s, name, color, icon); await ctx.saveSettings(); return c; } });
+          const a = await askTitle(s, { what: f.kind.value === 'reading' ? 'reading plan' : 'task', onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; } });
           if (!a) { f.title.focus(); return; }
           f.title.value = a.title; if (a.cat) cat = a.cat;
         }
@@ -1105,12 +1105,14 @@ export function settingsDialog(ctx) {
     $('.add-nprof', dlg).onclick = () => { nprofiles.push({ id: N.newProfileId('profile'), name: 'New profile', rules: [{ method: 'popup', minutes: 10 }] }); drawProfiles(); };
     $('.add-period', dlg).onclick = () => { periods.push({ id: 'p-' + Math.random().toString(36).slice(2, 8), name: 'New period', rules: [{ days: [1, 2, 3, 4, 5], start: s.bounds.end, end: '21:00' }] }); drawPeriods(); };
     const drawCats = () => {
-      setHTML($('.cats-list', dlg), cats.map((c, i) => `<div class="cat-row" data-i="${i}">
+      const order = C.ordered({ categories: cats }).map((c) => cats.indexOf(c));
+      setHTML($('.cats-list', dlg), order.map((i) => [cats[i], i]).map(([c, i]) => `<div class="cat-row ${c.parent ? 'sub' : ''}" data-i="${i}">
         <span class="sw-dot big" style="background:${esc(c.color)}"></span>
         <details class="ic-pick"><summary class="cat-icbtn" title="Icon" aria-label="Choose icon">${esc(c.icon || '＋')}</summary>
           <div class="icon-grid grouped"><div class="row"><input class="cat-icin" placeholder="Type or paste" maxlength="8" value="${esc(c.icon || '')}"><button type="button" class="ic-btn none" data-ic="">No icon</button></div>${C.iconGridHTML({ categories: cats }, { keep: c.icon || '', exceptId: c.id })}</div></details>
         <select class="cat-pref" title="Preferred time of day" aria-label="Preferred time of day">${[['', 'Any time'], ['morning', 'Mornings'], ['afternoon', 'Afternoons'], ['evening', 'Evenings']].map(([v, l]) => `<option value="${v}" ${(c.prefer || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
         <input class="cat-nm" value="${esc(c.name)}" maxlength="30" aria-label="Category name">
+        <select class="cat-par" title="Main category or inside another" aria-label="Inside" ${cats.some((k) => k.parent === c.id) ? 'disabled' : ''}><option value="">Main category</option>${C.mainCats({ categories: cats }, c.id).map((p) => `<option value="${esc(p.id)}" ${c.parent === p.id ? 'selected' : ''}>inside ${esc(C.catLabel(p))}</option>`).join('')}</select>
         ${C.swatchesHTML('cc' + i, c.color)}
         <button type="button" class="icon-btn cat-del" title="Delete category" aria-label="Delete category">✕</button></div>`).join('') || '<p class="muted small">No categories yet.</p>');
       $$('.cat-row', dlg).forEach((row) => {
@@ -1129,7 +1131,8 @@ export function settingsDialog(ctx) {
         $('.cat-icin', row).oninput = (e) => setIc(e.target.value);
         $$('.ic-btn', row).forEach((b) => (b.onclick = () => { setIc(b.dataset.ic); $('.cat-icin', row).value = cats[i].icon; $('.ic-pick', row).open = false; }));
         C.wireSwatches(row, (col) => { cats[i].color = col; $('.sw-dot', row).style.background = col; });
-        $('.cat-del', row).onclick = () => { cats.splice(i, 1); drawCats(); };
+        $('.cat-par', row).onchange = (e) => { cats[i].parent = e.target.value || undefined; drawCats(); };
+        $('.cat-del', row).onclick = () => { const id = cats[i].id; cats.splice(i, 1); for (const k of cats) if (k.parent === id) delete k.parent; drawCats(); };
       });
     };
     drawCats();

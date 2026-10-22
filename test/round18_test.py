@@ -67,7 +67,7 @@ async def main():
         print('   archive open:', await page.eval_on_selector('.np-archive', 'd => d.open'), '|', await page.eval_on_selector_all('.np-archive li a', 'xs => xs.map(x => x.textContent)'))
         # 4. period: month
         await page.select_option('[data-np=period]', 'month'); await page.wait_for_timeout(1500)
-        print('4. month:', await page.text_content('#range-title'), '|', await page.text_content('.np-ears'), '| Termine heading:', await page.eval_on_selector_all('.np-feuil .np-h4', 'xs => xs.map(x => x.textContent)'))
+        print('4. month:', await page.text_content('#range-title'), '|', await page.text_content('.np-ears'), '| Termine heading:', await page.eval_on_selector_all('.np-termine .np-kicker', 'xs => xs.map(x => x.textContent)'))
         print('   days in month view:', len(await page.query_selector_all('.np-dayh')), '| has 6 Oct:', any('6' in x for x in await page.eval_on_selector_all('.np-dayh', 'xs => xs.map(x => x.textContent)')))
         await page.click('#btn-prev'); await page.wait_for_timeout(800); print('   prev:', await page.text_content('#range-title'))
         await page.click('#btn-today'); await page.wait_for_timeout(800)
