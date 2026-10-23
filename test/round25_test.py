@@ -120,7 +120,7 @@ async def run(p, name, kw):
     await tap('dialog[open] .tabs button[data-tab="1"]'); await page.wait_for_timeout(200)
     sch = await page.eval_on_selector_all('dialog[open] section[data-pane="1"] details.sect', 'ds => ds.map(d => [d.dataset.sect, d.open, d.querySelector(".sect-s").textContent])')
     print(name, 'settings/scheduling:', sch)
-    check(f'{name}: scheduling grouped', len(sch) == 7 and not any(o for _, o, _ in sch) and '–' in sch[0][2])
+    check(f'{name}: scheduling grouped', len(sch) == 8 and not any(o for _, o, _ in sch) and '–' in sch[0][2])
     await page.screenshot(path=f'{OUT}/z-{name}-settings-sched.png')
     await tap('dialog[open] details[data-sect=s-sessions] > summary'); await page.wait_for_timeout(150)
     await page.fill('dialog[open] [name=chunkMinutes]', '50')

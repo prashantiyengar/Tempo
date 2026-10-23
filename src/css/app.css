@@ -1003,3 +1003,54 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .settings-form section[data-pane] { display: flex; flex-direction: column; gap: 10px; }
 .settings-form section[data-pane][hidden] { display: none; }
 @media (max-width: 600px) { .sect-s { font-size: 11px; } .sect > summary { padding: 9px 10px; } }
+
+/* From / To on their own lines, with the ± buttons underneath each */
+.tline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tline .t-l { flex: none; width: 40px; font-size: 12.5px; font-weight: 600; color: var(--ink2); }
+.tline input[type=date], .tline input[type=time], .tline input[type=datetime-local] { min-width: 0; }
+.tline .t-len { margin-left: auto; }
+.row.t-adj { padding-left: 48px; margin-top: -4px; gap: 6px; }
+.t-adj .chip-btn { cursor: pointer; }
+.task-form .dl-presets { padding-left: 48px; margin-top: -4px; }
+.qc-t .nudges { width: 100%; padding-left: 41px; box-sizing: border-box; }
+@media (max-width: 600px) {
+  .row.t-adj, .task-form .dl-presets { padding-left: 0; }
+  .tline .t-len { margin-left: 48px; width: 100%; }
+}
+@media (max-width: 600px) {
+  .tline { gap: 6px; }
+  .tline .t-l { width: 36px; }
+  .tline input[type=datetime-local], .tline input[type=date] { flex: 1 1 140px; width: auto; }
+  .tline > .muted.small:not(.t-len) { width: 100%; padding-left: 42px; margin-top: -4px; }
+}
+
+/* Leave days */
+.tg-dayhead button.wd { background: none; border: 0; padding: 1px 6px; border-radius: 6px; cursor: pointer; font: inherit; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.tg-dayhead button.wd:hover { background: var(--off); color: var(--ink2); }
+.leave-tag { border: 0; cursor: pointer; font: inherit; font-size: 10.5px; font-weight: 600; line-height: 1.3; padding: 1px 7px; border-radius: 999px; margin-top: 2px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.leave-tag.lv-vacation { background: color-mix(in srgb, #0f9d76 16%, var(--panel)); color: #0b7a5c; }
+.leave-tag.lv-sick { background: color-mix(in srgb, #c27c0e 18%, var(--panel)); color: #9a6008; }
+.leave-tag.m { padding: 0 4px; margin: 0 0 0 4px; font-size: 11px; background: transparent; }
+.tg-col.on-leave { background-image: repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, #0f9d76 7%, transparent) 10px 20px); }
+.tg-col.on-leave.lv-sick { background-image: repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, #c27c0e 8%, transparent) 10px 20px); }
+.m-cell.on-leave { background: color-mix(in srgb, #0f9d76 6%, var(--panel)); }
+.m-cell.on-leave.lv-sick { background: color-mix(in srgb, #c27c0e 7%, var(--panel)); }
+.leave-pop .btn { margin: 0 4px 4px 0; }
+.choice-btn.primary { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+.choice-btn.primary strong { color: var(--accent); }
+@media (prefers-color-scheme: dark) { .leave-tag.lv-vacation { color: #5fd3ad; } .leave-tag.lv-sick { color: #f0b350; } }
+@media (max-width: 600px) { .leave-tag:not(.m) { font-size: 9.5px; padding: 0 4px; } }
+
+/* The newspaper spins into view when you open Review (like a front page in an old film) */
+@keyframes np-spin-in {
+  0% { transform: perspective(1400px) rotate(-900deg) scale(.04); opacity: 0; filter: blur(2px); }
+  55% { opacity: 1; filter: blur(0); }
+  80% { transform: perspective(1400px) rotate(8deg) scale(1.04); }
+  100% { transform: perspective(1400px) rotate(0) scale(1); opacity: 1; }
+}
+.np.np-spin { animation: np-spin-in 1.15s cubic-bezier(.2, .7, .25, 1) both; transform-origin: 50% 35%; will-change: transform, opacity; }
+.np-wrap:has(.np-spin) { overflow: hidden; }
+@media (prefers-reduced-motion: reduce) { .np.np-spin { animation: none; } }
+@media print { .np.np-spin { animation: none !important; } }
+.np-comment { font-size: .95em; line-height: 1.45; margin: .4em 0 .8em; padding-top: .45em; border-top: 1px solid var(--np-hair); }
+.np-comment b { font-variant: small-caps; letter-spacing: .03em; }

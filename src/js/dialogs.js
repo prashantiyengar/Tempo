@@ -107,19 +107,25 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       <div class="row when">
         <label class="chk"><input type="checkbox" name="allDay" ${allDay ? 'checked' : ''}> All day</label>
       </div>
-      <div class="row dt">
+      <div class="tline">
+        <span class="t-l">From</span>
         <input type="date" name="sDate" value="${sKey}" required>
         <input type="time" name="sTime" value="${sTime}" step="60" class="timed">
-        <span class="muted">to</span>
-        <input type="time" name="eTime" value="${eTime}" step="60" class="timed">
-        <input type="date" name="eDate" value="${eKey}" required data-quick="off">
+        <button type="button" class="now-btn st-now timed" title="Start now (keeps the length)">Now</button>
       </div>
-      <div class="row timed dur-row">
-        <span class="muted small">Length <b class="dur-now"></b></span>
-        ${nudgesHTML('dur-add')}
-        <button type="button" class="now-btn st-now" title="Start now (keeps the length)">Start now</button>
-        <button type="button" class="now-btn en-now" title="End now">End now</button>
+      <div class="row timed t-adj">
+        ${nudgesHTML('st-add')}
         ${ctx.lastEventEnd ? '<button type="button" class="chip-btn since-last" title="Start when the previous event ended (looks back up to 12 hours, also into the day before)">⤒ Since last event</button>' : ''}
+      </div>
+      <div class="tline">
+        <span class="t-l">To</span>
+        <input type="date" name="eDate" value="${eKey}" required data-quick="off">
+        <input type="time" name="eTime" value="${eTime}" step="60" class="timed">
+        <button type="button" class="now-btn en-now timed" title="End now">Now</button>
+        <span class="muted small timed t-len">Length <b class="dur-now"></b></span>
+      </div>
+      <div class="row timed t-adj dur-row">
+        ${nudgesHTML('dur-add')}
         ${ctx.nextEventStart ? '<button type="button" class="chip-btn till-next" title="End when the next event starts (looks ahead up to 12 hours)">⤓ Till next event</button>' : ''}
       </div>
       <div class="row catcol">
@@ -324,6 +330,12 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       if (!r.found) { note(esc(r.note)); return; }
       setEnd(r.end); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); note(esc(r.note));
     });
+    // From: move the start; the end stays unless the event would get shorter than 5 minutes
+    $$('.st-add', dlg).forEach((b) => (b.onclick = () => {
+      const keepEnd = endMs(), ns = startMs() + +b.dataset.add * T.MIN;
+      const a = T.toDTInput(ns, zoneOf()); f.sDate.value = a.slice(0, 10); f.sTime.value = a.slice(11, 16);
+      setEnd(Math.max(keepEnd, ns + 5 * T.MIN)); showDur(); sync();
+    }));
     $$('.dur-add', dlg).forEach((b) => (b.onclick = () => {
       const add = +b.dataset.add;
       // + adds to the end; − shortens, but never below 5 minutes
@@ -448,10 +460,12 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
 
 export const TASK_COLORS_PUBLIC = TASK_COLORS;
 // compact −/+ time buttons (same as the quick-create box)
-const nudgesHTML = (cls) => {
-  const b = (m, l) => `<button type="button" class="${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`;
-  return `<span class="nudges"><span class="nudge">${b(-60, '−1h')}${b(-30, '−30')}${b(-10, '−10')}${b(-5, '−5')}</span><span class="nudge">${b(5, '+5')}${b(15, '+15')}${b(30, '+30')}${b(60, '+1h')}</span></span>`;
-};
+const NUDGE_MIN = [[-60, '−1h'], [-30, '−30'], [-10, '−10'], [-5, '−5'], [5, '+5'], [15, '+15'], [30, '+30'], [60, '+1h']];
+const NUDGE_DAY = [[-1440, '−1d'], [-60, '−1h'], [-15, '−15'], [15, '+15'], [60, '+1h'], [1440, '+1d']];
+function nudgesHTML(cls, steps = NUDGE_MIN) {
+  const b = ([m, l]) => `<button type="button" class="${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`;
+  return `<span class="nudges"><span class="nudge">${steps.filter((x) => x[0] < 0).map(b).join('')}</span><span class="nudge">${steps.filter((x) => x[0] > 0).map(b).join('')}</span></span>`;
+}
 // Limits check for a task created outside the dialog (quick add).
 export async function checkTaskLimits(ctx, nt) {
   const s = ctx.state.settings;
@@ -573,12 +587,22 @@ export function taskDialog(ctx, task = null, preset = {}) {
 
       <div class="grid3">
         <label class="field only-once only-generic"><span>Total time (hours)</span><input type="number" name="hours" min="0" step="0.25" value="${+(t.totalMinutes / 60).toFixed(2)}"></label>
-        <div class="field only-once"><span>Deadline</span><input type="datetime-local" name="deadline" value="${t.deadline ? T.toDTInput(t.deadline, tz) : ''}" required>
-          <div class="dl-presets"><button type="button" class="chip-btn" data-dl="day">End of work day</button><button type="button" class="chip-btn" data-dl="week">End of work week</button><button type="button" class="chip-btn" data-dl="2w">Within two weeks</button></div></div>
-        <label class="field"><span>Don't start before</span><input type="datetime-local" name="earliest" value="${t.earliestStart ? T.toDTInput(t.earliestStart, tz) : ''}"></label>
         <label class="field"><span>Rank <em class="muted">(1 = most important)</em></span><input type="number" name="rank" min="1" max="99" value="${t.rank}"></label>
         <label class="field only-once"><span>Aim to finish early (days)</span><input type="number" name="margin" min="0" step="0.5" placeholder="${s.marginDays ? s.marginDays + ' (default)' : '0 — use the full time'}" value="${t.marginDays ?? ''}" title="Safety margin: plan to be done this many days before the deadline; the deadline itself stays the hard limit"></label>
       </div>
+      <div class="tline">
+        <span class="t-l">From</span>
+        <input type="datetime-local" name="earliest" value="${t.earliestStart ? T.toDTInput(t.earliestStart, tz) : ''}" title="Don't start before">
+        <span class="muted small">don't start before (optional)</span>
+      </div>
+      <div class="row t-adj">${nudgesHTML('es-add', NUDGE_DAY)}<button type="button" class="chip-btn es-clear">Any time</button></div>
+      <div class="tline only-once">
+        <span class="t-l">To</span>
+        <input type="datetime-local" name="deadline" value="${t.deadline ? T.toDTInput(t.deadline, tz) : ''}" required title="Deadline">
+        <span class="muted small">deadline</span>
+      </div>
+      <div class="row t-adj only-once">${nudgesHTML('dl-add', NUDGE_DAY)}</div>
+      <div class="dl-presets only-once"><button type="button" class="chip-btn" data-dl="day">End of work day</button><button type="button" class="chip-btn" data-dl="week">End of work week</button><button type="button" class="chip-btn" data-dl="2w">Within two weeks</button></div>
       <div class="calc muted small"></div>
 
       ${sect('t-notify', 'Notifications &amp; repeat', `
@@ -632,6 +656,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
           ${weekdayToggles('bdays', b.days)}
         </div>
         <p class="muted small" style="margin:0">Add or change periods such as “After hours” in Settings → Scheduling.</p>
+        <label class="chk"><input type="checkbox" name="onLeave" ${t.onLeave ? 'checked' : ''}> Also schedule on my leave days (vacation / sick leave)</label>
         <label class="chk"><input type="checkbox" name="ignoreBounds" ${t.ignoreBounds ? 'checked' : ''}> Ignore day bounds — also use time after my official day (${s.overflowBounds.start}–${s.overflowBounds.end}, any day)</label>`)}
 
       <label class="field"><span>Notes</span><textarea name="notes" rows="2">${esc(t.notes || '')}</textarea></label>
@@ -665,6 +690,12 @@ export function taskDialog(ctx, task = null, preset = {}) {
       update();
     }));
     if (!ctx.taskCalendars().length) $$('.google-only-t', dlg).forEach((e) => (e.style.display = 'none'));
+    // ± buttons under From (don't start before) and To (deadline)
+    const nudgeDT = (inp, add, from) => { const v = T.fromDTInput(inp.value, tz) ?? from(); inp.value = T.toDTInput(Math.max(Date.now() - T.DAY * 365, v + add * T.MIN), tz); inp.dispatchEvent(new Event('change', { bubbles: true })); };
+    const roundNow = () => Math.ceil(Date.now() / (15 * T.MIN)) * 15 * T.MIN;
+    $$('.es-add', dlg).forEach((b) => (b.onclick = () => nudgeDT(f.earliest, +b.dataset.add, roundNow)));
+    $$('.dl-add', dlg).forEach((b) => (b.onclick = () => { $$('[data-dl]', dlg).forEach((x) => x.classList.remove('on')); nudgeDT(f.deadline, +b.dataset.add, () => T.fromDTInput(f.earliest.value, tz) ?? roundNow()); }));
+    $('.es-clear', dlg).onclick = () => { f.earliest.value = ''; f.earliest.dispatchEvent(new Event('change', { bubbles: true })); };
 
     const read = () => {
       const kind = f.kind.value;
@@ -687,9 +718,10 @@ export function taskDialog(ctx, task = null, preset = {}) {
         ...(() => {
           const pid = f.bmode.value.startsWith('period:') ? f.bmode.value.slice(7) : null;
           const per = pid && (s.periods || []).find((x) => x.id === pid);
-          return per ? { periodId: per.id, periodName: per.name, periodRules: per.rules } : { periodId: null, periodName: null, periodRules: null };
+          return per ? { periodId: per.id, periodName: per.name, periodRules: per.rules, periodLeave: !!per.onLeave } : { periodId: null, periodName: null, periodRules: null, periodLeave: null };
         })(),
         ignoreBounds: f.ignoreBounds.checked,
+        onLeave: f.onLeave.checked || undefined,
         notes: f.notes.value,
         calendarId: f.calendarId ? f.calendarId.value : t.calendarId,
         marginDays: num(f.margin.value),
@@ -791,7 +823,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
       't-when': () => {
         const v = f.bmode.value;
         const w = v === 'custom' ? `${f.bStart.value}–${f.bEnd.value}` : v.startsWith('period:') ? ((s.periods || []).find((x) => 'period:' + x.id === v)?.name || 'Period') : `Work hours (${s.bounds.start}–${s.bounds.end})`;
-        return w + (f.ignoreBounds.checked ? ' · may run past day bounds' : '');
+        return w + (f.ignoreBounds.checked ? ' · may run past day bounds' : '') + (f.onLeave.checked ? ' · also on leave days' : '');
       },
     });
 
@@ -867,6 +899,7 @@ export function settingsDialog(ctx) {
   let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
   let projects = (s.projects || []).map((p) => ({ ...p }));
   let wx = { unit: W.defaultUnit(s.tz), ...(s.weather || {}) };
+  let leave = { ...(s.leave || {}) };
   let picSrc = (s.picSources?.length ? s.picSources : XT.DEFAULT_SOURCES).map((x) => ({ ...x }));
   let nprofiles = N.profiles(s).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) }));
   const tp = s.timePrefs || S.DEFAULT_SETTINGS.timePrefs;
@@ -908,6 +941,9 @@ export function settingsDialog(ctx) {
             <option value="move" ${s.hoursChange === 'move' ? 'selected' : ''}>Move planned sessions to fit the new hours</option>
             <option value="keep" ${s.hoursChange === 'keep' ? 'selected' : ''}>Keep planned sessions where they are (only new planning uses the new hours)</option>
           </select></label>`)}
+        ${sect('s-leave', 'Leave days', `<p class="muted small" style="margin:0">Days off: task sessions are not planned on them (unless a task or its time period includes leave days). You can also click the weekday name above a day in the calendar.</p>
+          <div class="leave-list"></div>
+          <div class="row leave-add"><input type="date" name="lvFrom"> <span class="muted">to</span> <input type="date" name="lvTo"> <select name="lvKind">${Object.entries(S.LEAVE_KINDS).map(([k, v]) => `<option value="${k}">${v.icon} ${v.label}</option>`).join('')}</select><button type="button" class="btn small lv-add">Add</button></div>`)}
         ${sect('s-periods', 'Time periods', `<p class="muted small" style="margin:0">Extra windows a task can be scheduled in instead of the work hours above, e.g. “After hours” on Mon, Wed and Thu evenings plus weekends. Each period can have several rules.</p>
           <div class="periods-list"></div>
           <button type="button" class="btn small add-period">+ Add period</button>`)}
@@ -1026,7 +1062,8 @@ export function settingsDialog(ctx) {
     const chk = (n) => !!f[n]?.checked, val = (n) => f[n]?.value ?? '';
     const days = (n) => describeDays($$(`input[name=${n}]:checked`, dlg).map((c) => +c.value));
     const optText = (n) => f[n]?.selectedOptions?.[0]?.textContent || '';
-    wireSects(dlg, {
+    const updSects = wireSects(dlg, {
+      's-leave': () => { const today = T.dayKey(Date.now(), s.tz); const up = Object.keys(leave).filter((k) => k >= today && S.LEAVE_KINDS[leave[k]]).sort(); return up.length ? `${up.length} upcoming day${up.length > 1 ? 's' : ''} · next ${T.format(T.dayStart(up[0], s.tz), s.tz, { day: 'numeric', month: 'short' })}` : 'None upcoming'; },
       's-display': () => `${optText('weekView')} · starts ${optText('weekStart')} · ${optText('h12')}`,
       's-events': () => `${val('defaultEventMinutes')} min · since/till buffers ${val('sinceLastBuffer') || 0}/${val('tillNextBuffer') || 0} min`,
       's-sleep': () => (chk('sleepAssume') ? `${val('sleepStart')}–${val('sleepEnd')} · ${optText('sleepCategory')}` : 'Off'),
@@ -1070,11 +1107,12 @@ export function settingsDialog(ctx) {
           <input type="time" class="r-start" value="${r.start}" step="900"> <span class="muted">to</span> <input type="time" class="r-end" value="${r.end}" step="900">
           <div class="wd-toggles">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label class="wd"><input type="checkbox" class="r-day" value="${d}" ${r.days.includes(d) ? 'checked' : ''}><span>${DAYN[d].slice(0, 2)}</span></label>`).join('')}</div>
           <button type="button" class="icon-btn r-del" title="Remove rule" aria-label="Remove rule">✕</button></div>`).join('')}
-        <button type="button" class="link per-add-rule">+ Add rule</button></div>`).join('') || '<p class="muted small">No periods.</p>');
+        <div class="row"><button type="button" class="link per-add-rule">+ Add rule</button><span class="grow"></span><label class="chk small"><input type="checkbox" class="per-leave" ${p.onLeave ? 'checked' : ''}> Includes leave days</label></div></div>`).join('') || '<p class="muted small">No periods.</p>');
       $$('.period', dlg).forEach((el2) => {
         const p = periods[+el2.dataset.i];
         $('.per-name', el2).oninput = (e) => { p.name = e.target.value; };
         $('.per-del', el2).onclick = () => { periods.splice(+el2.dataset.i, 1); drawPeriods(); };
+        $('.per-leave', el2).onchange = (e) => { p.onLeave = e.target.checked; };
         $('.per-add-rule', el2).onclick = () => { p.rules.push({ days: [6, 0], start: '10:00', end: '18:00' }); drawPeriods(); };
         $$('.per-rule', el2).forEach((rw) => {
           const r = p.rules[+rw.dataset.j];
@@ -1086,6 +1124,23 @@ export function settingsDialog(ctx) {
       });
     };
     drawPeriods();
+    // Leave days: shown as ranges of consecutive days of the same kind
+    const drawLeave = () => {
+      const keys = Object.keys(leave).filter((k) => S.LEAVE_KINDS[leave[k]]).sort();
+      const ranges = [];
+      for (const k of keys) { const r = ranges[ranges.length - 1]; if (r && r.kind === leave[k] && T.addDays(r.to, 1) === k) r.to = k; else ranges.push({ from: k, to: k, kind: leave[k] }); }
+      const fmt = (k) => T.format(T.dayStart(k, s.tz), s.tz, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+      setHTML($('.leave-list', dlg), ranges.map((r, i) => `<div class="row lv-row" data-i="${i}"><span>${S.LEAVE_KINDS[r.kind].icon} <b>${S.LEAVE_KINDS[r.kind].label}</b> · ${esc(fmt(r.from))}${r.to !== r.from ? ` – ${esc(fmt(r.to))}` : ''}</span><span class="grow"></span><button type="button" class="icon-btn lv-del" aria-label="Remove">✕</button></div>`).join('') || '<p class="muted small" style="margin:0">No leave days.</p>');
+      $$('.lv-row', dlg).forEach((row) => { $('.lv-del', row).onclick = () => { const r = ranges[+row.dataset.i]; for (let k = r.from; k <= r.to; k = T.addDays(k, 1)) delete leave[k]; drawLeave(); updSects(); }; });
+    };
+    drawLeave();
+    $('.lv-add', dlg).onclick = () => {
+      const a = f.lvFrom.value, b = f.lvTo.value || a;
+      if (!a) { f.lvFrom.focus(); return; }
+      const [x, y] = a <= b ? [a, b] : [b, a];
+      for (let k = x, i = 0; k <= y && i < 400; k = T.addDays(k, 1), i++) leave[k] = f.lvKind.value;
+      f.lvFrom.value = ''; f.lvTo.value = ''; drawLeave(); updSects();
+    };
     const drawProfiles = () => {
       const unitSel = (m) => { const [u, v] = N.unitOf(+m); return [v, `<select class="np-unit">${['minutes', 'hours', 'days'].map((x) => `<option ${x === u ? 'selected' : ''}>${x}</option>`).join('')}</select>`]; };
       setHTML($('.nprof-list', dlg), nprofiles.map((p, i) => `<div class="nprof" data-i="${i}">
@@ -1307,6 +1362,7 @@ export function settingsDialog(ctx) {
         hoursChange: f.hoursChange.value,
         categories: cats.map((c) => ({ ...c, name: c.name.trim() || 'Untitled' })),
         askCategory: f.askCategory.checked,
+        leave,
         periods: periods.map((p) => ({ ...p, name: p.name.trim() || 'Untitled period', rules: p.rules.filter((r) => r.days.length && r.start && r.end) })),
         _agendaEmail: f.agendaEmail ? { want: f.agendaEmail.checked, was: agendaOn, calId: agendaCal?.id } : null,
       };

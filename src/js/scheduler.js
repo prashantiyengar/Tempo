@@ -116,6 +116,27 @@ export function periodRules(task, s) {
   return rules?.length ? rules : null;
 }
 
+// Leave days ("on leave", "sick leave"): settings.leave = { 'YYYY-MM-DD': 'vacation' | 'sick' }. Task sessions avoid them,
+// unless the task says it may use them or its time period includes leave days.
+export const LEAVE_KINDS = { vacation: { icon: '🏖', label: 'On leave' }, sick: { icon: '🤒', label: 'Sick leave' } };
+export const leaveOf = (s, key) => (s?.leave && LEAVE_KINDS[s.leave[key]] ? s.leave[key] : null);
+export function usesLeaveDays(task, s) {
+  if (task.onLeave) return true;
+  if (task.periodId && !task.bounds && !task.ignoreBounds) {
+    const p = (s.periods || []).find((x) => x.id === task.periodId);
+    return !!(p ? p.onLeave : task.periodLeave);
+  }
+  return false;
+}
+export function leaveBlocks(s, from, to) {
+  const out = [];
+  for (const k of Object.keys(s?.leave || {})) {
+    if (!leaveOf(s, k)) continue;
+    const a = T.dayStart(k, s.tz), b = T.dayStart(T.addDays(k, 1), s.tz);
+    if (b > from && a < to) out.push({ start: a, end: b });
+  }
+  return merge(out);
+}
 const dur = (c) => Math.round((c.end - c.start) / T.MIN);
 // 'waived' = a done session the user removed without redoing the work: it counts as covered but takes no time.
 const takesTime = (c) => c.status !== 'waived';
@@ -256,7 +277,7 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366, gUse
   const from = Math.max(ceilTo(now, 5 * T.MIN), task.earliestStart || 0);
   const deadline = task.deadline || from + 30 * T.DAY;
   const soft = Math.max(from, deadline - marginDays(task, settings) * T.DAY);
-  const busy = merge([...occupied, ...(task.skipped || [])]);
+  const busy = merge([...occupied, ...(task.skipped || []), ...(usesLeaveDays(task, settings) ? [] : leaveBlocks(settings, now - T.DAY, now + 800 * T.DAY))]);
   const frozenTT = (task.frozen || []).filter(takesTime);
   const free = (a, b) => (b > a ? subtract(windows(a, b, p.bounds, tz), busy) : []);
   // Smart allocation: normally full-length sessions, but a free slot up to `wiggle` minutes shorter is used as well
@@ -437,14 +458,16 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
       lastPlan = { shortfall: r.shortfall, suggestedDeadline: r.suggestedDeadline, fitsIgnoringBounds: r.fitsIgnoringBounds, remaining: r.remaining, at: now, late: r.late, finish: r.finish, waitingFor: waitFor.length ? waitFor.map((w) => w.id) : undefined };
     }
     // Keep chunk ids / google ids stable by ordinal (per period for repeating tasks) so syncing patches instead of re-creating.
+    // (never reuse the id or Google event of a session that is now fixed — done or pinned)
+    const fixedIds = new Set((t0.frozen || []).map((c) => c.id)), fixedG = new Set((t0.frozen || []).map((c) => c.gid).filter(Boolean));
     const used = new Set();
-    const pool = (pk) => prev.filter((c) => (c.pk || null) === (pk || null) && !used.has(c.id));
+    const pool = (pk) => prev.filter((c) => (c.pk || null) === (pk || null) && !used.has(c.id) && !fixedIds.has(c.id) && !(c.gid && fixedG.has(c.gid)));
     const withIds = planned.map((c) => {
       const old = pool(c.pk)[0];
       if (old) used.add(old.id);
       return { ...c, id: old?.id || newId('c'), gid: old?.gid, syncHash: old?.syncHash };
     });
-    const orphanGids = [...(t0.orphanGids || []), ...prev.filter((c) => !used.has(c.id)).map((c) => c.gid).filter(Boolean)];
+    const orphanGids = [...(t0.orphanGids || []), ...prev.filter((c) => !used.has(c.id)).map((c) => c.gid).filter((g) => g && !fixedG.has(g))];
     const nt = { ...t0, planned: withIds, orphanGids, lastPlan };
     byId.set(t0.id, nt);
     occupied = merge([...occupied, ...withIds.map(pad)]);
@@ -565,6 +588,34 @@ export function markDone(task, chunkId, { actualMin = null } = {}) {
     planned: (task.planned || []).filter((x) => x.id !== chunkId),
     frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), { ...c, status: 'done', auto: false, overdue: undefined, syncHash: null, credit: undefined, partial: undefined, squeeze: undefined }],
   };
+}
+
+// "Task finished here": this session is done and covers everything that was still left (for reading: up to the
+// last page); the sessions not yet done are removed. A repeating task ends with this session.
+export function completeAt(task, chunkId, now = Date.now()) {
+  const me = sessions(task).find((x) => x.id === chunkId);
+  if (!me) return task;
+  const t = markDone(task, chunkId);
+  const goes = (c) => c.id !== chunkId && (c.status === undefined || (c.status === 'pinned' && c.end > now) || (c.status === 'done' && c.auto && c.start > me.start));
+  const gone = [...(t.planned || []), ...(t.frozen || []).filter(goes)];
+  const orphanGids = [...(t.orphanGids || []), ...gone.map((c) => c.gid).filter(Boolean)];
+  let frozen = (t.frozen || []).filter((c) => !goes(c));
+  if (task.repeat) {
+    const repeat = { ...task.repeat, until: me.end }; delete repeat.count;
+    frozen = frozen.filter((c) => c.start <= me.start || c.status !== 'pinned');
+    return { ...t, planned: [], frozen, orphanGids, repeat, deadline: me.end, completedAt: now };
+  }
+  const others = frozen.filter((c) => c.id !== chunkId).reduce((a, c) => a + work(c, task), 0);
+  const need = Math.max(0, totalMinutes(task) - others);
+  frozen = frozen.map((c) => {
+    if (c.id !== chunkId) return c;
+    if (task.kind === 'reading') {
+      const pph = pagesPerHour(task.reading || {});
+      return { ...c, pagesDone: Math.ceil((need / 60) * pph * 100) / 100, credit: undefined, syncHash: null };
+    }
+    return { ...c, credit: Math.ceil(need * 100) / 100, syncHash: null };
+  });
+  return { ...t, planned: [], frozen, orphanGids, completedAt: now };
 }
 
 export function skipSession(task, chunkId) {

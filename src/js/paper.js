@@ -4,6 +4,7 @@
 import * as T from './tz.js';
 import * as W from './weather.js';
 import { esc } from './ui.js';
+import * as PH from './phrases.js';
 
 const fmtH = (m) => { const v = m / 60; return v >= 10 ? `${Math.round(v)} hours` : v >= 1 ? `${(Math.round(v * 10) / 10)} hours` : `${Math.round(m)} minutes`; };
 const dur = (m) => T.fmtDur(Math.round(m));
@@ -109,30 +110,41 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
   const topName = top ? top.label : '';
   const many = /[^s]s$/i.test(topName.trim()); // "Uncategorized tasks take…", "Work takes…"
   const v = (one, more) => (many ? more : one);
+  const say = (tpl, vars = {}) => PH.say(rand, tpl, { noun: P.noun, ...vars });
+  const K = (k) => say(PH.KICKERS[k], { de: P.de });
+  const verbs = { rules: v('rules', 'rule'), dominates: v('dominates', 'dominate'), takes: v('takes', 'take'), edges: v('edges', 'edge'), leads: v('leads', 'lead') };
+  const scopeW = awake < use.occupied ? 'the waking' : 'all';
   const lead = !top
-    ? { kicker: 'Zeitgeschehen', h: pick(rand, [`A quiet ${P.noun} on the calendar`, 'Calm before the storm?', `The ${P.noun} the calendar took a break`]), sub: 'Hardly anything was scheduled — the editors suspect a holiday, or an unusually good hiding place.' }
+    ? { kicker: K('lead'), h: say(PH.LEAD_QUIET), sub: say(PH.LEAD_QUIET_SUB) }
     : share >= 45
-      ? { kicker: 'Zeitgeschehen', h: pick(rand, [`${topName} ${v('rules', 'rule')} the ${P.noun}`, `All eyes on ${topName}`, `${topName} ${v('takes', 'take')} the lion's share`]), sub: `${share}% of ${awake < use.occupied ? "the waking" : "all"} occupied time went to ${topName} — ${fmtH(top.m)} in total.` }
-      : { kicker: 'Zeitgeschehen', h: second ? pick(rand, [`Neck and neck: ${topName} ${v('edges', 'edge')} out ${second.label}`, `A balanced ${P.noun}, led by ${topName}`]) : `${topName} ${v('leads', 'lead')} the ${P.noun}`, sub: `${fmtH(top.m)} for ${topName}${second ? `, ${fmtH(second.m)} for ${second.label}` : ''}.` };
-  const busyTxt = use.busiest ? ` The busiest day was ${T.format(T.dayStart(use.busiest.k, z), z, { weekday: 'long' })}, with ${fmtH(use.busiest.m)} spoken for.` : '';
+      ? { kicker: K('lead'), h: say(PH.LEAD_DOMINANT, { top: topName, ...verbs }), sub: say(PH.LEAD_DOMINANT_SUB, { share, scope: scopeW, top: topName, hours: fmtH(top.m) }) }
+      : { kicker: K('lead'), h: second ? say(PH.LEAD_BALANCED, { top: topName, second: second.label, ...verbs }) : say(PH.LEAD_SINGLE, { top: topName, ...verbs }),
+        sub: say(PH.LEAD_BALANCED_SUB, { top: topName, hours: fmtH(top.m), and2: second ? `, ${fmtH(second.m)} for ${second.label}` : '' }) };
+  const busyTxt = use.busiest ? ' ' + say(PH.BUSIEST, { day: T.format(T.dayStart(use.busiest.k, z), z, { weekday: 'long' }), hours: fmtH(use.busiest.m) }) : '';
   const leadBody = top
-    ? `Of ${fmtH(use.available)} ${esc(use.scope)}, ${fmtH(use.occupied)} were occupied and ${fmtH(use.free)} stayed free.${busyTxt} ${use.groups.length > 2 ? `Further down the ranking: ${use.groups.slice(2, 5).map((g) => `${esc(g.label)} (${dur(g.m)})`).join(', ')}.` : ''}`
+    ? `Of ${fmtH(use.available)} ${esc(use.scope)}, ${fmtH(use.occupied)} were occupied and ${fmtH(use.free)} stayed free.${esc(busyTxt)} ${use.groups.length > 2 ? esc(say(PH.RUNNERS, { list: use.groups.slice(2, 5).map((g) => `${g.label} (${dur(g.m)})`).join(', ') })) : ''}`
     : `Of ${fmtH(use.available)} ${esc(use.scope)}, almost everything stayed free.`;
+  // ---- commentary: stock analysis phrases chosen by what the numbers say
+  const freePct = use.available > 0 ? Math.round((use.free / use.available) * 100) : null;
+  const readMin = r.reading.reduce((a, x) => a + (x.minutes || 0), 0);
+  const commentParts = [];
+  if (freePct != null && use.occupied) commentParts.push(say(freePct >= 50 ? PH.FREE_HIGH : freePct >= 25 ? PH.FREE_MID : PH.FREE_LOW, { free: freePct }));
+  if (r.sum.completion != null) commentParts.push(say(r.sum.completion >= 85 ? PH.COMPLETION.high : r.sum.completion >= 50 ? PH.COMPLETION.mid : PH.COMPLETION.low, { pct: r.sum.completion }));
+  if (pagesTotal && readMin >= 20) commentParts.push(say(PH.READING_PACE, { pph: Math.round((pagesTotal / readMin) * 60) }));
+  if (commentParts.length) commentParts.push(say(PH.COMMENT_CLOSE));
+  const commentHTML = commentParts.length ? `<p class="np-comment"><b>${esc(K('comment'))}.</b> ${esc(commentParts.join(' '))}</p>` : '';
   const maxG = Math.max(1, ...use.groups.map((g) => g.m));
 
   // ---- business section: getting things done
   const comp = r.sum.completion;
-  const bizH = !sessions && !finished.length ? 'Production halted — or just not recorded'
-    : comp != null && comp >= 85 ? pick(rand, ['Record output: plans delivered almost to the letter', 'Productivity soars', `A banner ${P.noun} for getting things done`])
-      : comp != null && comp < 50 ? pick(rand, ['Output slumps as plans slip', `Turbulent ${P.noun} on the to-do markets`, 'Analysts see room for improvement'])
-        : pick(rand, ['Solid results, a few slips', 'Steady growth in finished work', 'Mostly on track']);
+  const bizH = say(!sessions && !finished.length ? PH.BIZ.none : comp != null && comp >= 85 ? PH.BIZ.high : comp != null && comp < 50 ? PH.BIZ.low : PH.BIZ.mid);
   const bizBody = `${plural(sessions, 'task session')} done${r.sum.partial ? ` (${r.sum.partial} of them partly)` : ''}${comp != null ? `, ${comp}% of what was planned` : ''}. ${finished.length ? `${plural(finished.length, 'item')} finished for good.` : 'Nothing was finished for good — yet.'} ${r.sum.slipped ? `${plural(r.sum.slipped, 'session')} slipped: ${r.sum.skipped} deleted, ${r.sum.undone} marked undone, ${r.sum.moved} pushed later.` : 'Nothing slipped.'}`;
 
   // ---- culture: books & events
   const books = r.reading.length
-    ? `<h3 class="np-h3">${esc(pick(rand, [`Reader devours ${pagesTotal} pages`, `${pagesTotal} pages later`, `Bookworm alert: ${pagesTotal} pages`]))}</h3>
+    ? `<h3 class="np-h3">${esc(say(PH.BOOKS, { pages: pagesTotal }))}</h3>
        <ul class="np-list">${r.reading.map((x) => `<li><i>${esc(x.t.title)}</i> — <b>${x.pages} pages</b>${x.minutes ? ` in ${dur(x.minutes)}` : ''}${x.total ? ` <span class="np-mute">(of ${x.total})</span>` : ''}</li>`).join('')}</ul>`
-    : `<h3 class="np-h3">The library stayed quiet</h3><p class="np-small">No reading sessions ${P.this}. Add a reading plan with 📖 and this column fills itself.</p>`;
+    : `<h3 class="np-h3">${esc(say(PH.NO_BOOKS))}</h3><p class="np-small">No reading sessions ${P.this}. Add a reading plan with 📖 and this column fills itself.</p>`;
   // events grouped by day
   const MAXEV = period === 'week' ? 30 : 60;
   const byDay = new Map();
@@ -147,11 +159,10 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
   // ---- goal progress: blocks (e.g. this week, this month), each with Work / Fitness / Personal
   const blocks = goals.blocks || [];
   const allG = (blocks[0]?.prog || []).flatMap((p) => p.goals), reached = allG.filter((g) => g.done).length;
-  const gHead = !blocks.some((b) => b.prog.some((p) => p.goals.length)) ? 'No goals on record'
-    : !allG.length ? 'Goal progress'
-      : reached === allG.length ? pick(rand, [`Mission accomplished: all ${allG.length} goals reached`, 'A clean sweep of goals'])
-        : reached * 2 >= allG.length ? `${reached} of ${allG.length} goals reached`
-          : pick(rand, [`Goals in sight: ${reached} of ${allG.length} reached`, `Work in progress: ${reached} of ${allG.length} goals`]);
+  const gHead = !blocks.some((b) => b.prog.some((p) => p.goals.length)) ? say(PH.GOALS.none)
+    : !allG.length ? say(PH.GOALS.progress)
+      : reached === allG.length ? say(PH.GOALS.all, { n: allG.length })
+        : say(reached * 2 >= allG.length ? PH.GOALS.most : PH.GOALS.few, { k: reached, n: allG.length });
   const bar = (p) => p.budget ? `<span class="np-gbar"><i style="width:${Math.min(100, (p.spent / p.budget) * 100)}%"></i></span>` : '';
   const headRow = (p) => (!p.goals.length && !p.spent) ? '' : `<div class="np-ghead"><div class="np-ghh"><b>${p.icon} ${esc(p.label)}</b> <span class="np-mute">${p.goals.length ? `${p.reached}/${p.goals.length} goals` : 'no goals'}${p.cats.length ? ` · ${dur(p.spent)}${p.budget ? ` of ${dur(p.budget)}` : ''}` : ''}</span>${bar(p)}</div>
     ${p.goals.length ? `<ol class="np-goal-list">${p.goals.slice(0, 5).map((g) => `<li class="${g.done ? 'np-gdone' : ''}">${g.done ? '✓' : '○'} ${esc(g.text)}</li>`).join('')}${p.goals.length > 5 ? `<li class="np-mute">…${p.goals.length - 5} more</li>` : ''}</ol>` : ''}</div>`;
@@ -173,64 +184,65 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
     </header>
     <div class="np-grid">
       <section class="np-lead">
-        <span class="np-kicker">${lead.kicker}</span>
+        <span class="np-kicker">${esc(lead.kicker)}</span>
         <h2 class="np-h1">${esc(lead.h)}</h2>
         <p class="np-sub">${esc(lead.sub)}</p>
         <div class="np-cols"><p class="np-drop">${leadBody}</p>
+          ${commentHTML}
           ${use.groups.length ? `<figure class="np-fig"><figcaption>Where the hours went</figcaption>${use.groups.slice(0, 6).map((g) => `<div class="np-bar"><span>${esc(g.label)}</span><i style="width:${(g.m / maxG) * 100}%;--c:${esc(g.color)}"></i><b>${dur(g.m)}</b></div>`).join('')}</figure>` : ''}
         </div>
       </section>
       <aside class="np-side">
-        <span class="np-kicker">Wetter</span>
-        <h3 class="np-h3">${esc(pick(rand, ['The week ahead, from the sky', 'Outlook', 'Umbrella or sunglasses?']))}</h3>
+        <span class="np-kicker">${esc(K('weather'))}</span>
+        <h3 class="np-h3">${esc(say(PH.WEATHER_H))}</h3>
         ${weatherBox(s, now)}
         <hr>
-        <span class="np-kicker">Horoskop</span>
+        <span class="np-kicker">${esc(K('horoscope'))}</span>
         <h3 class="np-h3">${hz.sign[2]} ${esc(hz.sign[1])}</h3>
         <p class="np-small">${esc(hz.text)}</p>
         <div class="np-horo-live"></div>
         <label class="np-sign">Your sign: <select data-np="sign"><option value="">${esc(signOfDate(T.dayKey(now, z))[1])} (season)</option>${SIGNS.map((x) => `<option value="${x[0]}" ${signId === x[0] ? 'selected' : ''}>${x[2]} ${x[1]}</option>`).join('')}</select></label>
       </aside>
       <section class="np-biz">
-        <span class="np-kicker">Wirtschaft</span>
+        <span class="np-kicker">${esc(K('biz'))}</span>
         <h3 class="np-h2">${esc(bizH)}</h3>
         <p>${esc(bizBody)}</p>
         ${finished.length ? `<h4 class="np-h4">Finished ${P.this}</h4><ul class="np-list np-check">${finished.slice(0, 12).map((x) => `<li>✓ ${esc(x.title)}${x.kind === 'event' ? ' <span class="np-mute">(event)</span>' : ''}</li>`).join('')}${finished.length > 12 ? `<li class="np-mute">…and ${finished.length - 12} more</li>` : ''}</ul>` : ''}
       </section>
       <section class="np-pic-s">
-        <span class="np-kicker">Aus dem Archiv</span>
+        <span class="np-kicker">${esc(K('pic'))}</span>
         <div class="np-pic"><p class="np-small np-mute">Fetching a picture…</p></div>
         <div class="np-pic-tools"><button type="button" class="link np-pic-new">Another picture</button><span ${pics.length ? '' : 'hidden'}> · <button type="button" class="link np-pic-hist">Picture archive (${pics.length})</button></span></div>
       </section>
       <section class="np-feuil">
-        <span class="np-kicker">Feuilleton</span>
+        <span class="np-kicker">${esc(K('feuil'))}</span>
         ${books}
         ${s.reviewAllEvents && !wideTermine ? `<h4 class="np-h4">Termine ${P.de}</h4>${termineBody}` : ''}
       </section>
-      ${wideTermine ? `<section class="np-termine"><span class="np-kicker">Termine ${P.de}</span>${termineBody}</section>` : ''}
+      ${wideTermine ? `<section class="np-termine"><span class="np-kicker">${esc(K('termine'))}</span>${termineBody}</section>` : ''}
       <section class="np-goals">
-        <span class="np-kicker">Ziele · Goal progress</span>
+        <span class="np-kicker">${esc(K('goals'))}</span>
         ${goalsHTML}
       </section>
       <section class="np-words">
-        <span class="np-kicker">Gedanke des Tages</span>
+        <span class="np-kicker">${esc(K('words'))}</span>
         ${extras.quote ? `<blockquote class="np-quote">“${esc(extras.quote.text)}”<cite>— ${esc(extras.quote.by)}</cite></blockquote>` : ''}
         <button type="button" class="link np-quote-new">Another thought</button>
         <hr>
-        <span class="np-kicker">Zum Schmunzeln</span>
+        <span class="np-kicker">${esc(K('joke'))}</span>
         ${extras.joke ? `<p class="np-joke">${esc(extras.joke.text)}</p>${extras.joke.link ? `<p class="np-small np-mute">From <a href="${esc(extras.joke.link)}" target="_blank" rel="noopener">${esc(extras.joke.source)}</a></p>` : ''}` : ''}
         <button type="button" class="link np-joke-new">Another joke</button>
       </section>
       <section class="np-out">
-        <span class="np-kicker">Ausblick</span>
-        <h3 class="np-h3">${r.risks.filter((x) => !x.soft).length ? esc(pick(rand, ['Storm warning for the to-do list', 'Deadlines loom'])) : esc(pick(rand, ['Clear skies ahead', 'Next week looks manageable']))}</h3>
+        <span class="np-kicker">${esc(K('out'))}</span>
+        <h3 class="np-h3">${esc(say(r.risks.filter((x) => !x.soft).length ? PH.OUT_RISK : PH.OUT_CLEAR))}</h3>
         ${r.risks.length ? `<ul class="np-list">${r.risks.slice(0, 6).map((x) => `<li class="${x.soft ? '' : 'np-bad'}"><b>${esc(x.t.title)}</b> — ${esc(x.why)} <button class="link rv-open" data-task="${esc(x.t.id)}">open</button></li>`).join('')}</ul>` : '<p class="np-small">Nothing looks at risk.</p>'}
         <div class="np-load">${days.map((k) => { const m = r.load[k] || 0; return `<div><i style="height:${(m / maxL) * 100}%" title="${dur(m)}"></i><span>${esc(T.format(T.dayStart(k, z), z, { weekday: 'narrow' }))}</span></div>`; }).join('')}</div>
         <p class="np-small np-mute">Task time planned per day next week.</p>
       </section>
       <section class="np-corr">
-        <span class="np-kicker">Korrekturen</span>
-        ${r.slips.length ? `<p class="np-small">In our planning ${P.this === 'this week' ? 'of the week' : 'of ' + P.this.replace('this ', 'the ').replace('these', 'the')}, the following ${r.slips.length === 1 ? 'item' : 'items'} did not appear as printed: ${r.slips.slice(-6).map((x) => `“${esc(x.title || 'a session')}” ${kindTxt[x.kind]}${x.by ? ` by ${dur(x.by)}` : ''}`).join('; ')}. We regret the error.</p>` : '<p class="np-small">No corrections this week. The editors are insufferable about it.</p>'}
+        <span class="np-kicker">${esc(K('corr'))}</span>
+        ${r.slips.length ? `<p class="np-small">${esc(say(PH.CORR_INTRO, { period: P.this === 'this week' ? 'the week' : P.this.replace('this ', 'the ').replace('these', 'the'), items: r.slips.length === 1 ? 'item' : 'items' }))} ${r.slips.slice(-6).map((x) => `“${esc(x.title || 'a session')}” ${kindTxt[x.kind]}${x.by ? ` by ${dur(x.by)}` : ''}`).join('; ')}. ${esc(say(PH.CORR_OUTRO))}</p>` : `<p class="np-small">${esc(say(PH.CORR_NONE))}</p>`}
         ${r.sum.overrun ? `<p class="np-small">Also: ${plural(r.sum.overrun, 'session')} ran over time.</p>` : ''}
       </section>
     </div>

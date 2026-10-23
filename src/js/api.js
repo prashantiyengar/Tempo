@@ -40,6 +40,7 @@ export function createApi(h) {
     }
     err(`Can't read the time "${s}". Use "YYYY-MM-DD HH:MM", an ISO time, "now", "today 14:00", "tomorrow 9am" or "friday 17:00".`);
   }
+  const parseDay = (v) => { const ms = when(v, { defaultTime: '12:00' }); return ms == null ? null : T.dayKey(ms, tz()); };
   const range = (a) => {
     const from = when(a.from) ?? T.dayStart(T.dayKey(Date.now(), tz()), tz());
     const to = when(a.to, { end: true }) ?? from + 7 * T.DAY;
@@ -228,15 +229,15 @@ export function createApi(h) {
     listCalendars: { about: 'Calendars you can add events to.', run: () => (h.st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)).map((c) => ({ id: c.id, name: c.summary, primary: !!c.primary })) },
     listGoals: { about: 'Ranked goals: this week, next week, this month, the next months, and the next 12 months.', run: () => {
       const z = h.tz(), sec = GL.sections(h.set(), T.dayKey(Date.now(), z)).list;
-      return sec.map((x) => ({ period: x.title || T.format(T.dayStart(x.month, z), z, { month: 'long', year: 'numeric' }), goals: GL.list(h.set(), x.key).map((g, i) => ({ rank: i + 1, head: GL.headOf(g), text: g.text, done: !!g.done, budgetMinutes: g.budget || undefined })) }));
+      return sec.map((x) => ({ period: x.title || T.format(T.dayStart(x.month, z), z, { month: 'long', year: 'numeric' }), goals: GL.list(h.set(), x.key).map((g, i) => ({ rank: i + 1, head: GL.headOf(g), text: g.text, done: !!g.done, budgetMinutes: g.budget || undefined, tracks: g.words?.length ? g.words : undefined })) }));
     } },
-    addGoal: { params: 'period ("this week" | "next week" | "this month" | a month name like "November" | "year"), text, head? ("work" | "fitness" | "personal"), hours? (time budget), repeat? (true: every week / month)', about: 'Add a goal (ranked last under its head).', write: true, run: async (a) => {
+    addGoal: { params: 'period ("this week" | "next week" | "this month" | a month name like "November" | "year"), text, head? ("work" | "fitness" | "personal"), hours? (time budget), repeat? (true: every week / month), track? (text to look for in event and task titles, e.g. "Moby Dick"; several separated by commas)', about: 'Add a goal (ranked last under its head).', write: true, run: async (a) => {
       const key = goalKey(a.period); const text = String(a.text || '').trim() || err('Missing "text".');
       const head = GL.HEADS.some(([x]) => x === String(a.head || '').toLowerCase()) ? String(a.head).toLowerCase() : 'personal';
       if (a.repeat && (key.startsWith('w:') || key.startsWith('m:'))) {
-        h.set().goalRepeats = GL.addRepeat(h.set(), key.startsWith('w:') ? 'week' : 'month', key, { text, head, budget: +a.hours > 0 ? +a.hours * 60 : null });
+        h.set().goalRepeats = GL.addRepeat(h.set(), key.startsWith('w:') ? 'week' : 'month', key, { text, head, budget: +a.hours > 0 ? +a.hours * 60 : null, words: GL.parseWords(a.track) });
         h.set().goals = GL.materialize(h.set(), [key]) || h.set().goals;
-      } else h.set().goals = GL.add(h.set(), key, text, { head, budget: +a.hours > 0 ? +a.hours * 60 : null }); await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, to: a.period };
+      } else h.set().goals = GL.add(h.set(), key, text, { head, budget: +a.hours > 0 ? +a.hours * 60 : null, words: GL.parseWords(a.track) }); await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, to: a.period };
     } },
     markGoal: { params: 'period, goal (text or rank), done? (default true)', about: 'Tick a goal off as reached (or reopen it).', write: true, run: async (a) => {
       const key = goalKey(a.period), l = GL.list(h.set(), key);
@@ -274,6 +275,19 @@ export function createApi(h) {
     markDone: { params: 'session (id) | task + index', about: 'Mark a session done.', write: true, run: async (a) => {
       const { task, sess } = findSession(a.session, a.task, a.index);
       h.replaceTask(S.markDone(task, sess.id)); await h.saveTasks('AI: mark done'); await h.cycle(); return { done: sess.label };
+    } },
+    setLeave: { params: 'from (date), to? (date, default = from), kind ("vacation" | "sick" | "none" to clear), reschedule? ("all" default: move task sessions and events off those days | "tasks" | "keep")', about: 'Mark days as on leave or sick leave (task sessions avoid them), or clear them.', write: true, run: async (a) => {
+      const from = parseDay(a.from), to = a.to ? parseDay(a.to) : from;
+      if (!from || !to) throw new Error('Give from (and to) as dates, e.g. "2026-11-02"');
+      const keys = []; for (let k = from <= to ? from : to; k <= (from <= to ? to : from) && keys.length < 400; k = T.addDays(k, 1)) keys.push(k);
+      const kind = a.kind === 'none' || a.kind === null ? null : a.kind === 'sick' ? 'sick' : 'vacation';
+      await h.setLeave(keys, kind, { ask: false, mode: kind ? (a.reschedule || 'all') : null });
+      return { days: keys, kind: kind || 'none' };
+    } },
+    listLeave: { about: 'Days marked as on leave or sick leave.', run: () => Object.entries(h.set().leave || {}).filter(([, v]) => S.LEAVE_KINDS[v]).sort().map(([day, kind]) => ({ day, kind })) },
+    finishTask: { params: 'session (id) | task + index', about: 'Declare the whole task finished in this session: it counts all remaining work (reading: up to the last page) and the sessions still to come are removed.', write: true, run: async (a) => {
+      const { task, sess } = findSession(a.session, a.task, a.index);
+      h.replaceTask(S.completeAt(task, sess.id)); await h.saveTasks('AI: task finished'); await h.cycle(); return { finished: task.title, at: sess.label };
     } },
     markUndone: { params: 'session | task + index', about: 'Mark a done session undone (its work is re-planned).', write: true, run: async (a) => {
       const { task, sess } = findSession(a.session, a.task, a.index);

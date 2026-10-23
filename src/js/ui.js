@@ -60,12 +60,13 @@ export function choose(title, message, options, { cancel = 'Cancel' } = {}) {
       <h2>${esc(title)}</h2>
       ${message ? `<p class="muted">${esc(message)}</p>` : ''}
       <div class="choice-list">
-        ${options.map((o, i) => `<button type="button" class="choice-btn ${o.danger ? 'danger' : ''}" data-i="${i}">
+        ${options.map((o, i) => `<button type="button" class="choice-btn ${o.danger ? 'danger' : ''} ${o.primary ? 'primary' : ''}" data-i="${i}" ${o.primary ? 'autofocus' : ''}>
           <strong>${esc(o.label)}</strong>${o.desc ? `<span>${esc(o.desc)}</span>` : ''}</button>`).join('')}
       </div>
       <div class="actions"><button type="button" class="btn ghost" data-close>${esc(cancel)}</button></div>
     </form>`, (dlg, close) => {
     $$('.choice-btn', dlg).forEach((b) => b.addEventListener('click', () => close(options[+b.dataset.i].value)));
+    const pr = $('.choice-btn.primary', dlg); if (pr) setTimeout(() => pr.focus(), 30);
   }, { cls: 'narrow' });
 }
 
@@ -80,7 +81,7 @@ function guardGhost(el, ms = 800) {
   const opened = performance.now();
   let pressed = false;
   el.addEventListener('pointerdown', () => { pressed = true; }, true);
-  const block = (e) => { if (!pressed && performance.now() - opened < ms) { e.stopPropagation(); e.preventDefault(); } };
+  const block = (e) => { if (!pressed && performance.now() - opened < ms && !(e.type === 'click' && e.pointerType === '')) { e.stopPropagation(); e.preventDefault(); } };
   for (const t of ['mousedown', 'mouseup', 'click']) el.addEventListener(t, block, true);
 }
 

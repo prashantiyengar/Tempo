@@ -18,17 +18,30 @@ export const headCats = (s, head) => (s.goalHeads?.[head]?.cats ?? DEFAULT_CATS[
 export const goalCats = (s, g) => (g.cats?.length ? g.cats : headCats(s, headOf(g)));
 export const withHeadCats = (s, head, cats) => ({ ...(s.goalHeads || {}), [head]: { ...((s.goalHeads || {})[head] || {}), cats } });
 
-// Time spent (before now) and planned (after now) in [from, to) on events and task sessions in these categories.
-export function timeIn(items, cats, from, to, now = Date.now(), settings = null) {
+// Text a goal looks for in the titles of events and tasks, e.g. "Moby Dick" (several: any of them).
+export const goalWords = (g) => (Array.isArray(g?.words) ? g.words : []).map((w) => String(w).trim()).filter(Boolean);
+export const parseWords = (str) => [...new Set(String(str || '').split(/[,;\n]/).map((w) => w.trim().replace(/^["“”']+|["“”']+$/g, '')).filter(Boolean))].slice(0, 10);
+const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+export const titleOf = (it) => (it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`);
+export const titleHas = (it, words) => { const t = fold(titleOf(it)); return words.some((w) => t.includes(fold(w))); };
+// What counts for a goal: its own categories and/or text in titles ("either" = any match, "both" = category and text).
+export const goalMatch = (g) => ({ cats: g.cats || [], words: goalWords(g), mode: g.wmode === 'both' ? 'both' : 'either' });
+export const hasOwnMatch = (g) => !!(g.cats?.length || goalWords(g).length);
+
+// Time spent (before now) and planned (after now) in [from, to) on events and task sessions in these categories
+// (and/or whose titles contain one of `words`).
+export function timeIn(items, cats, from, to, now = Date.now(), settings = null, { words = [], mode = 'either' } = {}) {
   // counting a main category also counts its sub-categories
   const set = new Set(cats || []);
   if (settings) for (const c of settings.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
   let done = 0, planned = 0;
-  if (!set.size) return { done, planned };
+  if (!set.size && !words.length) return { done, planned };
   for (const it of items) {
     if (it.allDay || it.declined || it.ev?.transparency === 'transparent') continue;
     const cat = it.kind === 'chunk' ? it.task?.categoryId : it.catId;
-    if (!set.has(cat || '__none')) continue;
+    const byCat = set.size ? set.has(cat || '__none') : null, byText = words.length ? titleHas(it, words) : null;
+    const ok = byCat == null ? byText : byText == null ? byCat : mode === 'both' ? byCat && byText : byCat || byText;
+    if (!ok) continue;
     if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) continue;
     const a = Math.max(it.start, from), b = Math.min(it.end, to);
     if (b <= a) continue;
@@ -45,19 +58,20 @@ export function progress(s, key, items, fromKey, toKey, now = Date.now()) {
     const budget = goals.reduce((a, g) => a + (+g.budget || 0), 0);
     const t = timeIn(items, headCats(s, h), from, to, now, s);
     return { head: h, label, icon, goals, reached: goals.filter((g) => g.done).length, budget, spent: t.done, planned: t.planned, cats: headCats(s, h),
-      perGoal: goals.filter((g) => g.cats?.length).map((g) => ({ id: g.id, ...timeIn(items, g.cats, from, to, now, s) })) };
+      perGoal: goals.filter(hasOwnMatch).map((g) => { const m = goalMatch(g); return { id: g.id, ...timeIn(items, m.cats, from, to, now, s, m) }; }) };
   });
 }
 
 // Edits return a new goals object (the caller saves it).
-export function add(s, key, text, { head = 'personal', budget = null, cats = null } = {}) {
-  return { ...(s.goals || {}), [key]: [...list(s, key), { id: newId(), text: text.trim().slice(0, 200), done: false, at: Date.now(), head, ...(budget ? { budget: Math.round(budget) } : {}), ...(cats?.length ? { cats } : {}) }] };
+const extra = ({ cats = null, words = null, wmode = null }) => ({ ...(cats?.length ? { cats } : {}), ...(words?.length ? { words } : {}), ...(words?.length && cats?.length && wmode === 'both' ? { wmode } : {}) });
+export function add(s, key, text, { head = 'personal', budget = null, cats = null, words = null, wmode = null } = {}) {
+  return { ...(s.goals || {}), [key]: [...list(s, key), { id: newId(), text: text.trim().slice(0, 200), done: false, at: Date.now(), head, ...(budget ? { budget: Math.round(budget) } : {}), ...extra({ cats, words, wmode }) }] };
 }
 // ---------- Repeating goals: a template in settings.goalRepeats, copied into each week / month it applies to ----------
 //   { id, every: 'week' | 'month', head, text, budget, cats, from: '<first key>', skip: ['<key>'…] }
 export const repeats = (s) => s.goalRepeats || [];
-export function addRepeat(s, every, fromKey, { text, head, budget = null, cats = null }) {
-  const r = { id: 'r' + Math.random().toString(36).slice(2, 9), every, from: fromKey, text: text.trim().slice(0, 200), head, ...(budget ? { budget: Math.round(budget) } : {}), ...(cats?.length ? { cats } : {}), skip: [] };
+export function addRepeat(s, every, fromKey, { text, head, budget = null, cats = null, words = null, wmode = null }) {
+  const r = { id: 'r' + Math.random().toString(36).slice(2, 9), every, from: fromKey, text: text.trim().slice(0, 200), head, ...(budget ? { budget: Math.round(budget) } : {}), ...extra({ cats, words, wmode }), skip: [] };
   return [...repeats(s), r];
 }
 const keyEvery = (k) => (k.startsWith('w:') ? 'week' : k.startsWith('m:') ? 'month' : null);
@@ -70,7 +84,7 @@ export function materialize(s, keys) {
       if (r.every !== every || k < r.from || (r.skip || []).includes(k)) continue;
       const l = (goals || s.goals || {})[k] || [];
       if (l.some((g) => g.repeatId === r.id)) continue;
-      goals = { ...(goals || s.goals || {}), [k]: [...l, { id: newId(), text: r.text, head: r.head, done: false, at: Date.now(), repeatId: r.id, ...(r.budget ? { budget: r.budget } : {}), ...(r.cats?.length ? { cats: r.cats } : {}) }] };
+      goals = { ...(goals || s.goals || {}), [k]: [...l, { id: newId(), text: r.text, head: r.head, done: false, at: Date.now(), repeatId: r.id, ...(r.budget ? { budget: r.budget } : {}), ...extra(r) }] };
     }
   }
   return goals;

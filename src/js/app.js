@@ -290,8 +290,8 @@ function renderTimeGrid(days, items) {
   const root = el(`<div class="tg" style="--hh:${hh}px;--ncol:${days.length}">
     <div class="tg-head">
       <div class="tg-gutter"><span class="tz-label" title="${esc(z)}">${esc(tzAbbr())}</span></div>
-      ${days.map((k) => `<div class="tg-dayhead ${k === todayK ? 'today' : ''} ${k < todayK ? 'past' : ''}" data-day="${k}">
-        <span class="wd">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</span><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}</div>`).join('')}
+      ${days.map((k) => `<div class="tg-dayhead ${k === todayK ? 'today' : ''} ${k < todayK ? 'past' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
+        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}</div>`).join('')}
     </div>
     <div class="tg-allday">
       <div class="tg-gutter small muted">all-day</div>
@@ -310,7 +310,7 @@ function renderTimeGrid(days, items) {
 
   const colsEl = $('.tg-cols', root);
   for (const k of days) {
-    const col = el(`<div class="tg-col ${k === todayK ? 'today' : ''}" data-day="${k}"></div>`);
+    const col = el(`<div class="tg-col ${k === todayK ? 'today' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}"></div>`);
     // day-bound shading
     const b = s.bounds, wd = T.weekday(k);
     if (!b.days.includes(wd)) col.appendChild(el(`<div class="off" style="top:0;height:${24 * hh}px"></div>`));
@@ -367,6 +367,7 @@ function renderTimeGrid(days, items) {
   if (drawErrors.length) { console.error('Tempo: items not drawn', drawErrors); toast(`${drawErrors.length} item(s) couldn't be drawn: ${drawErrors[0][0]} — ${drawErrors[0][1].message}`, { ms: 8000 }); }
 
   $$('.dn', root).forEach((b) => b.addEventListener('click', () => { app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
+  $$('[data-leave]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); leaveMenu(b.dataset.leave, b.getBoundingClientRect()); }));
   colsEl.addEventListener('pointerdown', onGridPointerDown);
   $('.ad-area', root).addEventListener('pointerdown', onAllDayPointerDown);
   return root;
@@ -385,8 +386,8 @@ function renderMonth({ days, monthKey }, items) {
       .sort((a, b) => (b.allDay - a.allDay) || a.start - b.start || a.title.localeCompare(b.title));
     const max = 4;
     const shown = list.length > max ? list.slice(0, max - 1) : list;
-    const cell = el(`<div class="m-cell ${T.parseKey(k).m !== month ? 'out' : ''} ${k === todayK ? 'today' : ''}" data-day="${k}">
-      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK, { month: true })}
+    const cell = el(`<div class="m-cell ${T.parseKey(k).m !== month ? 'out' : ''} ${k === todayK ? 'today' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
+      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK, { month: true })}${leaveTag(k, true)}
       <div class="m-items">
         ${shown.map((it) => it.allDay
           ? `<div class="chip allday ${!it.editable ? 'ro' : ''}" data-key="${esc(it.key)}" style="--c:${it.color}">${esc(it.title)}</div>`
@@ -396,6 +397,7 @@ function renderMonth({ days, monthKey }, items) {
     grid.appendChild(cell);
   }
   $$('[data-goto]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
+  $$('[data-leave]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); leaveMenu(b.dataset.leave, b.getBoundingClientRect()); }));
   grid.addEventListener('pointerdown', onMonthPointerDown);
   return root;
 }
@@ -628,7 +630,7 @@ function touchDown(e, where) {
   const evEl = target.closest('.ev, .chip');
   const cell = target.closest('.m-cell');
   if (where === 'grid' && (!col || target.closest('.deadline'))) return;
-  if (where === 'month' && (!cell || target.closest('[data-goto]'))) return;
+  if (where === 'month' && (!cell || target.closest('[data-goto], [data-leave]'))) return;
   closePopover();
   e.preventDefault(); // no emulated mouse events; scrolling is still handled by the browser (touch-action: pan-y)
   let lx = x0, ly = y0, active = false, done = false;
@@ -752,7 +754,7 @@ function dragEvent(e, evEl, col) {
 
 function onMonthPointerDown(e) {
   if ((e.pointerType === 'touch' || e.pointerType === 'pen') && !e._fromLongPress) return touchDown(e, 'month');
-  if (e.button !== 0 || e.target.closest('[data-goto]')) return;
+  if (e.button !== 0 || e.target.closest('[data-goto], [data-leave]')) return;
   const chip = e.target.closest('.chip');
   const cell = e.target.closest('.m-cell');
   if (!cell) return;
@@ -1048,6 +1050,7 @@ function openChunk(it, rect) {
       <div class="pop-actions">
         ${isDone ? '<button class="btn small undone">↺ Mark undone</button>' : '<button class="btn small primary done">✓ Mark done</button>'}
         <button class="btn small partial">◐ Partly done…</button>
+        ${p.pct < 100 || !isDone ? `<button class="btn small fin-task" title="${task.kind === 'reading' ? 'Count this session up to the last page and remove the sessions not done yet' : 'Count all remaining work as done in this session and remove the sessions not done yet'}">🏁 Task finished here</button>` : ''}
         ${(!isDone || sess.auto) && sess.start <= now && sess.end > now ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}
         ${(!isDone || sess.auto) && sess.start < now && sess.end > now + T.MIN ? '<button class="btn small late">⏰ Started late…</button>' : ''}
         ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
@@ -1062,6 +1065,16 @@ function openChunk(it, rect) {
     $('.done', pop)?.addEventListener('click', () => { close(); finishSession(st().tasks.find((t) => t.id === task.id), sess, timer?.chunkId === sess.id ? tmWork() / T.MIN : null); if (timer?.chunkId === sess.id) { timer = null; saveTimer(); drawTimer(); } });
     $('.undone', pop)?.addEventListener('click', () => act((t) => (sess.kind === 'pinned' ? S.unpinSession(t, sess.id) : S.markUndone(t, sess.id)), 'Marked undone — remaining sessions shifted', { kind: 'undone', task, sess }));
     $('.unpin', pop)?.addEventListener('click', () => act((t) => S.unpinSession(t, sess.id), 'Unpinned'));
+    $('.fin-task', pop)?.addEventListener('click', async () => {
+      close();
+      const cur = st().tasks.find((t) => t.id === task.id); if (!cur) return;
+      const left = S.sessions(cur).filter((c) => c.kind === 'planned' && c.id !== sess.id).length;
+      const ok = await choose(`Finish “${task.title}” with this session?`, `${task.kind === 'reading' ? `This session will count up to page ${(+cur.reading?.startPage || 1) + (+cur.reading?.pages || 0) - 1}` : 'All remaining work will count as done in this session'}${left ? `, and the ${left} session${left > 1 ? 's' : ''} not done yet will be removed` : ''}.`, [{ value: 'yes', label: 'Yes, the task is finished' }]);
+      if (ok !== 'yes') return;
+      if (timer?.chunkId === sess.id) { timer = null; saveTimer(); drawTimer(); }
+      replaceTask(S.completeAt(st().tasks.find((t) => t.id === task.id), sess.id));
+      await saveTasks('task finished'); toast(`🏁 ${task.title} finished${left ? ` — ${left} remaining session${left > 1 ? 's' : ''} removed` : ''}`, { ms: 6000 }); cycle();
+    });
     $('.edit', pop).onclick = () => { close(); editTask(task); };
     $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
     $('.fin-early', pop)?.addEventListener('click', () => { close(); finishedEarly(it); });
@@ -1560,7 +1573,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
   if (sync) {
     try {
       if (E.connected(st()) && set().syncTasksToGoogle) setStatus('Syncing…', 'busy');
-      const res = await E.syncTasks(st(), (fn) => fn(st()), (n, total) => setStatus(`Syncing ${n}/${total}…`, 'busy'));
+      const res = await E.syncTasks(st(), (fn) => fn(st()), (n, total, phase) => setStatus(phase === 'verify' ? 'Checking Google…' : `Syncing ${n}/${total}…`, 'busy'));
       if (navigator.onLine === false || st().offline) offlineStatus();
       else if (res.ok) setStatus(`Synced ${T.fmtTime(Date.now(), tz(), set().h12)}`, 'ok');
       else if (res.kind === 'local') setStatus('Local only', 'warn');
@@ -1713,6 +1726,84 @@ async function nextEventStart({ ref, exclude = null } = {}) {
 // Work hours or a time period changed. Planned sessions are re-planned on every cycle anyway; this decides
 // (setting, or asking) whether they should move: "move" also re-plans a session that is under way right now (assumed
 // done) when it no longer fits the new hours; "keep" pins the affected tasks' upcoming sessions where they are.
+// ======================================================================================
+// Leave days (on leave / sick leave)
+// ======================================================================================
+function leaveTag(k, month = false) {
+  const kind = S.leaveOf(set(), k); if (!kind) return '';
+  const L = S.LEAVE_KINDS[kind];
+  return `<button class="leave-tag lv-${kind} ${month ? 'm' : ''}" data-leave="${k}" title="${esc(L.label)} — click to change">${L.icon}${month ? '' : ` ${esc(L.label)}`}</button>`;
+}
+function leaveMenu(k, rect) {
+  const cur = S.leaveOf(set(), k);
+  const day = T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'long' });
+  popover(rect, `<div class="pop leave-pop"><h3 style="margin:0 0 8px">${esc(day)}</h3>
+      ${Object.entries(S.LEAVE_KINDS).map(([id, L]) => `<button class="btn small ${cur === id ? 'primary' : ''} lv-set" data-kind="${id}">${L.icon} ${esc(L.label)}</button>`).join(' ')}
+      ${cur ? '<button class="btn small ghost lv-clear">Not on leave</button>' : ''}
+      <div class="row" style="margin-top:8px"><button class="link lv-day">Open this day</button><span class="grow"></span><button class="link lv-more">Several days…</button></div></div>`, (pop, close) => {
+    $$('.lv-set', pop).forEach((b) => (b.onclick = () => { close(); setLeave([k], b.dataset.kind); }));
+    $('.lv-clear', pop)?.addEventListener('click', () => { close(); setLeave([k], null); });
+    $('.lv-day', pop).onclick = () => { close(); app.cursor = k; app.view = 'day'; render(); };
+    $('.lv-more', pop).onclick = () => { close(); openSettings(); };
+  });
+}
+// Mark (kind) or unmark (null) days; when new leave days already have events or task sessions, offer to move them.
+async function setLeave(keys, kind, { ask = true, mode = null } = {}) {
+  const before = { ...(set().leave || {}) };
+  const leave = { ...before };
+  for (const k of keys) { if (kind) leave[k] = kind; else delete leave[k]; }
+  set().leave = leave;
+  await E.persist(st(), ['settings']);
+  pushUndo(kind ? 'leave day' : 'remove leave day', async () => { set().leave = before; await E.persist(st(), ['settings']); syncSharedSoon(); E.invalidate(); await render(); cycle(); });
+  syncSharedSoon();
+  const added = kind ? keys.filter((k) => !S.leaveOf({ leave: before }, k)) : [];
+  if (added.length && (ask || mode)) { const r = await afterLeave(added, mode); if (r === 'back') { set().leave = before; await E.persist(st(), ['settings']); await render(); return; } }
+  else { toast(kind ? `${S.LEAVE_KINDS[kind].icon} ${S.LEAVE_KINDS[kind].label}` : 'No longer marked as leave'); cycle(); }
+}
+// The next day that is a work day and not a leave day (for moving events off leave days).
+function nextWorkDay(k) {
+  const days = set().bounds?.days?.length ? set().bounds.days : [1, 2, 3, 4, 5];
+  let d = T.addDays(k, 1);
+  for (let i = 0; i < 60 && (!days.includes(T.weekday(d)) || S.leaveOf(set(), d)); i++) d = T.addDays(d, 1);
+  return d;
+}
+async function afterLeave(keys, forced = null) {
+  const items = (await collectItems(keys)).filter((it) => !it.allDay && keys.includes(T.dayKey(it.start, tz())));
+  const sessions = items.filter((it) => it.kind === 'chunk' && it.status !== 'done' && !it.task?.onLeave && !(it.task && S.usesLeaveDays(it.task, set())));
+  const events = items.filter((it) => it.kind === 'event' && it.editable && !it.declined && !it.ev?.extendedProperties?.private?.tempoTask);
+  if (!sessions.length && !events.length) { toast(`Marked ${keys.length} day${keys.length > 1 ? 's' : ''} as leave`); cycle(); return 'none'; }
+  const what = [events.length ? `${events.length} event${events.length > 1 ? 's' : ''}` : '', sessions.length ? `${sessions.length} task session${sessions.length > 1 ? 's' : ''}` : ''].filter(Boolean).join(' and ');
+  const opts = [{ value: 'all', primary: true, label: 'Yes, reschedule them', desc: `${sessions.length ? 'Task sessions move to other days. ' : ''}${events.length ? 'Events move to the next working day at the same time.' : ''}` }];
+  if (events.length && sessions.length) opts.push({ value: 'tasks', label: 'Only move the task sessions', desc: 'Your events stay where they are.' });
+  opts.push({ value: 'keep', label: 'No, keep everything where it is', desc: sessions.length ? 'Task sessions on these days stay (they are pinned).' : 'Events stay where they are.' });
+  const r = forced || await choose(`Reschedule ${keys.length > 1 ? 'these days’' : 'this day’s'} ${what}?`, `${keys.length > 1 ? 'These days are' : 'This day is'} now marked as leave.`, opts, { cancel: 'Back — don’t mark as leave' });
+  if (!r) return 'back';
+  if (r === 'keep') {
+    for (const it of sessions) { const t = st().tasks.find((x) => x.id === it.task.id); if (t && it.status === 'planned') replaceTask(S.pinSession(t, it.sess.id, it.start, it.end)); }
+    await saveTasks('keep sessions on leave day');
+  } else {
+    // pinned sessions on those days go back into the plan
+    for (const it of sessions) { const t = st().tasks.find((x) => x.id === it.task.id); if (t && it.status === 'pinned') replaceTask(S.unpinSession(t, it.sess.id)); }
+    await saveTasks('reschedule leave day');
+    if (r === 'all' && events.length) {
+      let moved = 0;
+      setStatus('Moving events…', 'busy');
+      for (const it of events) {
+        try {
+          const to = nextWorkDay(T.dayKey(it.start, tz())); // skips weekends (by your work days) and leave days
+          const st0 = T.atTime(to, T.hhmm(T.minutesOfDay(it.start, tz())), tz());
+          await EV.moveEvent(st(), it.ev, st0, st0 + (it.end - it.start), 'this');
+          moved++;
+        } catch (err) { handleError(err); }
+      }
+      E.invalidate();
+      toast(`Moved ${moved} event${moved === 1 ? '' : 's'} to the next working day${sessions.length ? ' · task sessions re-planned' : ''}`, { ms: 6000 });
+    } else toast(sessions.length ? 'Task sessions re-planned around your leave' : 'Marked as leave');
+  }
+  cycle();
+  return r;
+}
+
 async function hoursChanged(before, after) {
   const bChanged = JSON.stringify(before.bounds) !== JSON.stringify(after.bounds);
   const perOld = new Map((before.periods || []).map((p) => [p.id, JSON.stringify(p.rules)]));
@@ -1770,7 +1861,7 @@ async function finishedEarlyApi(a) {
 let api = null;
 function setupApi() {
   api = createApi({
-    st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi, setEventDone, render,
+    setLeave, st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi, setEventDone, render,
     afterEventChange, defaultCalendar: () => ctx.defaultCalendar(), lastBusy: () => app.lastBusy, toast: (m) => toast(m),
   });
   window.tempo = api;
@@ -1890,7 +1981,8 @@ const paperEnd = (k) => periodShift(k, paperPeriod(), 1);
 async function renderPaperView(seq) {
   const s = set(), z = tz(), wk = paperWeek(), end = paperEnd(wk), per = paperPeriod();
   const view = $('#view');
-  if (!$('.np-wrap', view)) setHTML(view, '<div class="np-wrap"><p class="muted">Printing…</p></div>');
+  const fresh = !$('.np-wrap', view); // just arrived on the Review tab: the paper spins into view
+  if (fresh) { setHTML(view, '<div class="np-wrap"><p class="muted">Printing…</p></div>'); app.npSpin = true; }
   // a new picture, joke, quote and masthead ornaments for each visit (kept while you stay on the page)
   const visit = app.npVisit ||= { orn: XT.ornaments(), quote: XT.randomQuote(), joke: { text: XT.JOKES[Math.floor(Math.random() * XT.JOKES.length)] }, pic: undefined, horo: {} };
   const days = [];
@@ -1930,8 +2022,11 @@ async function renderPaperView(seq) {
     <span class="grow"></span><button type="button" class="btn small ghost np-cats" title="Which categories the paper covers">Categories: ${esc(paperCatsLabel(s))}</button><button type="button" class="btn small ghost np-hsrc" title="Where the horoscope text comes from">Horoscope: ${hsrc === 'off' ? 'off' : hsrc === 'apiverve' ? 'APIVerve' : 'online'}</button><button type="button" class="btn small ghost np-hist">Plan vs actual history</button><button type="button" class="btn small ghost np-print">Print</button></div>`;
   const root = $('.np-wrap', view) || view.appendChild(el('<div class="np-wrap"></div>'));
   const scrollY = root.scrollTop;
-  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: await paperGoals(wk, end, per, items) }));
+  const goalsP = await paperGoals(wk, end, per, items);
   if (seq !== app.renderSeq) return;
+  const spin = app.npSpin; app.npSpin = false;
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP }));
+  if (spin && !matchMedia('(prefers-reduced-motion: reduce)').matches) { const np = $('.np', root); np?.classList.add('np-spin'); np?.addEventListener('animationend', () => np.classList.remove('np-spin'), { once: true }); }
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
   $('[data-np=scope]', root).onchange = async (e) => { s.paperScope = e.target.value; await E.persist(st(), ['settings']); syncSharedSoon(); render(); };
@@ -2117,7 +2212,7 @@ async function renderGoalsView(seq) {
           ${bar}
           <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
             <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
-            ${catBox(g.cats, p)}
+            ${catBox(g.cats, p, false, GL.goalWords(g))}
             <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + (g.budget ? ' / ' : '') : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}</button>
             <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
 
@@ -2191,6 +2286,7 @@ async function addGoalDialog(key, head0, x) {
         <label class="field"><span>Time budget (h)</span><input name="b" type="number" min="0" step="0.25" placeholder="none" style="width:110px"></label>
       </div>
       <div class="field"><span>Counts towards it</span><div class="row"><span class="g-addbox"></span><span class="muted small g-addbox-note">the head's categories</span></div></div>
+      ${wordsFieldHTML([], 'either')}
       ${every ? `<label class="chk"><input type="checkbox" name="rep"> Repeat every ${every}</label>` : ''}
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Add goal</button></div></form>`,
   (dlg, close) => {
@@ -2201,8 +2297,11 @@ async function addGoalDialog(key, head0, x) {
       $('.g-addbox-note', dlg).textContent = cats.length ? cats.map((id) => C.fullLabel(s, C.catById(s, id))).join(', ') : `the ${hd[1]} categories`;
       $('.g-addbox .g-catbox', dlg).onclick = async () => { const res = await pickGoalCats(cats, hd); if (res != null) { cats = res; drawBox(); } };
     };
-    f.h.onchange = drawBox; drawBox();
-    f.onsubmit = (e) => { e.preventDefault(); const t = f.t.value.trim(); if (!t) { f.t.focus(); return; } const b = parseFloat(f.b.value); close({ text: t, head: f.h.value, budget: b > 0 ? b * 60 : null, cats, rep: !!f.rep?.checked }); };
+    const drawBox0 = drawBox;
+    const drawAll = () => { drawBox0(); syncWordsField(dlg, cats.length); if (GL.parseWords(f.w.value).length && !cats.length) $('.g-addbox-note', dlg).textContent = 'only the text below'; };
+    f.h.onchange = drawAll; f.w.oninput = drawAll; drawAll();
+    $('.g-addbox', dlg).addEventListener('click', () => setTimeout(drawAll, 50), true);
+    f.onsubmit = (e) => { e.preventDefault(); const t = f.t.value.trim(); if (!t) { f.t.focus(); return; } const b = parseFloat(f.b.value); close({ text: t, head: f.h.value, budget: b > 0 ? b * 60 : null, cats, words: GL.parseWords(f.w.value), wmode: f.wm?.value || 'either', rep: !!f.rep?.checked }); };
   }, { cls: 'narrow' });
   if (!r) return;
   if (r.rep && every) {
@@ -2212,7 +2311,7 @@ async function addGoalDialog(key, head0, x) {
     await saveGoals(g || set().goals, 'add repeating goal');
     const u = undoStack[undoStack.length - 1]; if (u) { const f0 = u.undo; u.undo = async () => { set().goalRepeats = before; await f0(); }; }
     toast(`Added — repeats every ${every}`);
-  } else saveGoals(GL.add(set(), key, r.text, { head: r.head, budget: r.budget, cats: r.cats }), 'add goal');
+  } else saveGoals(GL.add(set(), key, r.text, { head: r.head, budget: r.budget, cats: r.cats, words: r.words, wmode: r.wmode }), 'add goal');
 }
 
 // The icon box next to a goal: its own categories' icons, or a faint tag when it uses the head's categories.
@@ -2222,8 +2321,15 @@ function catBoxInner(cats, head) {
   if (!list.length) return '<span class="g-cb-none">🏷</span>';
   return list.slice(0, 3).map((c) => `<span class="g-cb-ic" style="--c:${esc(c.color)}">${esc(c.icon || C.parentOf(s, c)?.icon || c.name.slice(0, 1))}</span>`).join('') + (list.length > 3 ? `<span class="g-cb-more">+${list.length - 3}</span>` : '');
 }
-function catBox(cats, p, add = false) {
+// The "look for this text" field of the goal dialogs.
+function wordsFieldHTML(words, mode) {
+  return `<label class="field"><span>…and/or text in event and task titles</span><input name="w" value="${esc((words || []).join(', '))}" placeholder="e.g. Moby Dick (several: separate with commas)" autocomplete="off"></label>
+    <label class="field g-wm"><span>When both are set, count</span><select name="wm"><option value="either">Either: the categories or the text</option><option value="both" ${mode === 'both' ? 'selected' : ''}>Both: only that text within those categories</option></select></label>`;
+}
+function syncWordsField(dlg, nCats) { const f = $('form', dlg); const wm = $('.g-wm', dlg); if (wm) wm.style.display = nCats && GL.parseWords(f.w.value).length ? '' : 'none'; }
+function catBox(cats, p, add = false, words = []) {
   const s = set(), names = (cats || []).map((id) => C.fullLabel(s, C.catById(s, id))).filter(Boolean);
+  if (words?.length) return `<button type="button" class="g-catbox set" title="${esc(`Counts ${names.length ? names.join(', ') + ' and/or ' : ''}titles containing “${words.join('”, “')}” — click to change categories`)}" aria-label="What counts for this goal">${names.length ? catBoxInner(cats, p) : ''}<span class="g-cb-ic g-cb-txt">🔎</span></button>`;
   const title = names.length ? `Counts: ${names.join(', ')} — click to change` : `Counts the ${p.label} categories${p.cats.length ? ` (${p.cats.map((id) => C.catLabel(C.catById(s, id)) || 'No category').join(', ')})` : ''} — click to pick categories for this goal`;
   return `<button type="button" class="g-catbox ${names.length ? 'set' : ''}" title="${esc(title)}" aria-label="${add ? 'Categories for the new goal' : 'Categories for this goal'}">${catBoxInner(cats, p)}</button>`;
 }
@@ -2269,20 +2375,25 @@ async function editGoal(key, id) {
       </div>
       <details ${own.size ? 'open' : ''}><summary class="small">Count only these categories for this goal (otherwise the head's)</summary>
         <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
+      ${wordsFieldHTML(GL.goalWords(g), g.wmode)}
       ${(() => { const every = key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : null; return every ? `<label class="chk"><input type="checkbox" name="rep" ${GL.repeatOf(s, g) ? 'checked' : ''}> Repeat every ${every}</label>` : ''; })()}
       <label class="chk"><input type="checkbox" name="d" ${g.done ? 'checked' : ''}> Reached</label>
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
-  (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), done: f.d.checked, rep: f.rep ? f.rep.checked : null }); }; }, { cls: 'narrow' });
+  (dlg, close) => {
+    const f = $('form', dlg);
+    const upd = () => syncWordsField(dlg, $$('input[name=c]:checked', dlg).length); f.addEventListener('input', upd); f.addEventListener('change', upd); upd();
+    f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), words: GL.parseWords(f.w.value), wmode: f.wm.value, done: f.d.checked, rep: f.rep ? f.rep.checked : null }); };
+  }, { cls: 'narrow' });
   if (!r) return;
   // repeat on / off (the copies already made stay)
   const rp = GL.repeatOf(set(), g);
   if (r.rep === false && rp) set().goalRepeats = GL.repeats(set()).filter((x) => x.id !== rp.id);
   if (r.rep === true && !rp) {
-    const reps = GL.addRepeat(set(), key.startsWith('w:') ? 'week' : 'month', key, { text: r.text, head: r.head, budget: r.budget, cats: r.cats });
+    const reps = GL.addRepeat(set(), key.startsWith('w:') ? 'week' : 'month', key, { text: r.text, head: r.head, budget: r.budget, cats: r.cats, words: r.words, wmode: r.wmode });
     set().goalRepeats = reps; r.repeatId = reps[reps.length - 1].id;
   }
-  if (r.rep === true && rp) set().goalRepeats = GL.repeats(set()).map((x) => (x.id === rp.id ? { ...x, text: r.text.slice(0, 200), head: r.head, budget: r.budget || undefined, cats: r.cats.length ? r.cats : undefined } : x));
-  saveGoals(GL.update(set(), key, id, { text: r.text.slice(0, 200), head: r.head, budget: r.budget, cats: r.cats.length ? r.cats : null, done: r.done, ...(r.repeatId ? { repeatId: r.repeatId } : r.rep === false ? { repeatId: null } : {}) }), 'edit goal');
+  if (r.rep === true && rp) set().goalRepeats = GL.repeats(set()).map((x) => (x.id === rp.id ? { ...x, text: r.text.slice(0, 200), head: r.head, budget: r.budget || undefined, cats: r.cats.length ? r.cats : undefined, words: r.words.length ? r.words : undefined, wmode: r.words.length && r.cats.length && r.wmode === 'both' ? 'both' : undefined } : x));
+  saveGoals(GL.update(set(), key, id, { text: r.text.slice(0, 200), head: r.head, budget: r.budget, cats: r.cats.length ? r.cats : null, words: r.words.length ? r.words : null, wmode: r.words.length && r.cats.length && r.wmode === 'both' ? 'both' : null, done: r.done, ...(r.repeatId ? { repeatId: r.repeatId } : r.rep === false ? { repeatId: null } : {}) }), 'edit goal');
 }
 
 // On the first day of the week, offer the review once.
@@ -2582,6 +2693,9 @@ async function openSettings() {
     if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes || r.settings.taskProfile !== before.taskProfile
       || JSON.stringify(r.settings.notifyProfiles) !== JSON.stringify(before.notifyProfiles)) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     await hoursChanged(before, r.settings);
+    const addedLeave = Object.keys(r.settings.leave || {}).filter((k) => S.leaveOf(r.settings, k) && !S.leaveOf(before, k));
+    if (addedLeave.length && (await afterLeave(addedLeave)) === 'back') { for (const k of addedLeave) delete set().leave[k]; await E.persist(st(), ['settings']); await render(); }
+    else if (JSON.stringify(before.leave || {}) !== JSON.stringify(r.settings.leave || {})) cycle();
     if (JSON.stringify(before.weather || null) !== JSON.stringify(r.settings.weather || null)) W.refresh(r.settings, { force: true }).then((ok) => { if (ok) render(); });
     app.miniCursor = T.dayKey(Date.now(), tz());
   }

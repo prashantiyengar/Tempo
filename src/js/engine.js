@@ -252,8 +252,8 @@ export function chunkBody(task, sess, state) {
   return {
     summary: (done ? '✓ ' : '') + sess.label,
     description: [task.notes, 'Scheduled by Tempo Calendar — edit this task in the extension; changes here will be overwritten.'].filter(Boolean).join('\n\n'),
-    start: { dateTime: new Date(sess.start).toISOString(), timeZone: tz },
-    end: { dateTime: new Date(sess.end).toISOString(), timeZone: tz },
+    start: { dateTime: new Date(Math.round(sess.start / 1000) * 1000).toISOString(), timeZone: tz },
+    end: { dateTime: new Date(Math.round(sess.end / 1000) * 1000).toISOString(), timeZone: tz },
     colorId: G.nearestColorId(task.color || '#4f6bed'),
     transparency: 'opaque',
     status: 'confirmed',
@@ -271,7 +271,7 @@ export function chunkBody(task, sess, state) {
 const DEF_FIELDS = ['id', 'title', 'kind', 'rank', 'totalMinutes', 'reading', 'deadline', 'earliestStart', 'chunkMinutes', 'minChunkMinutes',
   'maxPerDayMinutes', 'breakMinutes', 'wiggleMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notifyProfile', 'notes', 'created', 'rev', 'calendarId',
   'categoryId', 'categoryName', 'categoryColor', 'categoryIcon', 'periodId', 'periodName', 'periodRules',
-  'repeat', 'repeatStart', 'marginDays', 'after', 'projectId', 'projectName', 'projectStep', 'speedLog', 'prefer'];
+  'repeat', 'repeatStart', 'marginDays', 'after', 'projectId', 'projectName', 'projectStep', 'speedLog', 'prefer', 'onLeave', 'periodLeave', 'completedAt'];
 const PART = 900; // Google allows 1024 chars per extended-property value
 
 export function encodeDef(task) {
@@ -410,11 +410,14 @@ export async function pullTasks(state, now = Date.now()) {
 }
 
 // Does the event on Google match what we meant to write?
+// (Lenient where Google normalises: whitespace in the title, times to the second.)
+const normTitle = (x) => String(x || '').normalize('NFC').replace(/\s+/g, ' ').trim();
+const sameSec = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) < 1000;
 function matches(ev, body) {
   if (!ev || ev.status === 'cancelled') return false;
   const p = ev.extendedProperties?.private || {}, q = body.extendedProperties.private;
-  return ev.summary === body.summary && Date.parse(ev.start?.dateTime || ev.start?.date) === Date.parse(body.start.dateTime)
-    && Date.parse(ev.end?.dateTime || ev.end?.date) === Date.parse(body.end.dateTime)
+  return normTitle(ev.summary) === normTitle(body.summary) && sameSec(ev.start?.dateTime || ev.start?.date, body.start.dateTime)
+    && sameSec(ev.end?.dateTime || ev.end?.date, body.end.dateTime)
     && p.chunkId === q.chunkId && p.taskId === q.taskId && (p.tStatus || '') === q.tStatus && (p.tCredit || '') === (q.tCredit || '') && p.tRev === q.tRev;
 }
 const bodyHash = (body) => JSON.stringify([body.summary, body.start, body.end, body.colorId, body.reminders, body.description, body.extendedProperties]);
@@ -452,6 +455,16 @@ export async function syncTasks(state, apply, onProgress) {
       jobs.push({ task, cal, sess, body, hash: bodyHash(body), gid: sess.gid ? normGid(state, sess.gid) : null, syncHash: sess.syncHash });
     }
   }
+  // Two sessions must never share one Google event (they would overwrite each other forever): the later one gets its own.
+  const seenG = new Set(), seenC = new Set();
+  for (const j of jobs) {
+    const ck = `${j.task.id}|${j.sess.id}`;
+    if (seenC.has(ck)) { j.dupChunk = true; continue; }
+    seenC.add(ck);
+    if (j.gid && seenG.has(j.gid)) { j.gid = null; j.syncHash = null; setGid(j.task.id, j.sess.id, null, null); }
+    if (j.gid) seenG.add(j.gid);
+  }
+  for (let i = jobs.length - 1; i >= 0; i--) if (jobs[i].dupChunk) jobs.splice(i, 1);
   let n = 0, failed = 0, lastErr = null, repaired = 0, verified = 0, unverified = [], deletedN = 0;
   const upsert = async (j) => {
     try {
@@ -507,14 +520,17 @@ export async function syncTasks(state, apply, onProgress) {
     await G.pool(todo, G.PARALLEL, upsert);
     // 4. Read back what we wrote and confirm it; write again whatever didn't arrive intact (up to two more rounds).
     if (todo.length || orphans.length) {
-      for (let round = 0; round < 3; round++) {
+      for (let round = 0; round < 4; round++) {
+        onProgress?.(n, total, 'verify');
         remote = await readRemote();
         const bad = jobs.filter((j) => !j.failed && (!j.gid || !matches(remote.get(j.gid), j.body)));
         const strays = orphans.filter(([, g]) => remote.has(normGid(state, g)));
         if (!bad.length && !strays.length) break;
-        if (round === 2) { unverified = bad; break; }
+        if (round === 3) { unverified = bad; break; }
         repaired += bad.length;
         for (const j of bad) if (j.gid && !remote.has(j.gid)) j.gid = null;
+        // Patching didn't take twice: replace the event on Google with a fresh copy.
+        if (round === 2) await G.pool(bad.filter((j) => j.gid), G.PARALLEL, async (j) => { try { await G.deleteEvent(...splitGid(j.gid)); } catch { /* already gone */ } j.gid = null; });
         await G.pool(strays, G.PARALLEL, ([, g]) => G.deleteEvent(...splitGid(normGid(state, g))));
         await G.pool(bad, G.PARALLEL, upsert);
       }
@@ -542,7 +558,7 @@ const SHARED_PART = 450;
 export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bounds', 'overflowBounds', 'chunkMinutes', 'minChunkMinutes', 'breakMinutes',
   'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
-  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'goalRepeats', 'paperCats', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'later', 'weather'];
+  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'goalRepeats', 'paperCats', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'later', 'weather', 'leave'];
 const normCat = ({ id, name, color, icon, prefer, parent }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}), ...(parent ? { parent } : {}) });
 function sharedOf(s) {
   const o = {};
