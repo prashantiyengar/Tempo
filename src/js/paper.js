@@ -90,7 +90,7 @@ export const PERIODS = {
 
 // extras: { orn: {left, right, top, motto}, joke: {text, source, link}, quote: {text, by} } — picture and online
 // horoscope are filled in afterwards (they load from the network) into .np-pic and .np-horo-live.
-export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] } }) {
+export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] }, projects = [] }) {
   const z = s.tz;
   const P = PERIODS[period] || PERIODS.week;
   const rand = rng(r.reviewWeek + period);
@@ -170,6 +170,18 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
     ${blocks.length && blocks.some((b) => b.prog.some((p) => p.goals.length || p.spent)) ? blocks.map((b) => { const rows = b.prog.map(headRow).join(''); return rows ? `<h4 class="np-h4">${esc(b.label)}</h4>${rows}` : ''; }).join('')
       : `<p class="np-small">Set goals under Work, Fitness and Personal in the <b>Goals</b> tab, and the paper will report on them.</p>`}
     ${goals.next?.length ? `<h4 class="np-h4">Coming up</h4>${goals.next.slice(0, 2).map((x) => `<p class="np-small"><i>${esc(x.label)}:</i> ${x.list.slice(0, 3).map((g, i) => `${i + 1}. ${esc(g.text)}`).join(' · ')}${x.list.length > 3 ? ' …' : ''}</p>`).join('')}` : ''}`;
+  // ---- projects: time put in this period, steps finished, overall progress, what's next
+  const pjActive = projects.filter((x) => x.done || x.finished.length);
+  const pjDone = projects.find((x) => x.completedNow);
+  const pjHours = projects.reduce((a, x) => a + x.done, 0);
+  const projH = !projects.length ? say(PH.PROJ_H.none) : pjDone ? say(PH.PROJ_H.finished, { name: pjDone.name }) : pjActive.length ? say(PH.PROJ_H.active, { projects: plural(pjActive.length, 'project'), hours: fmtH(pjHours) }) : say(PH.PROJ_H.quiet);
+  const projHTML = !projects.length ? '' : `<section class="np-proj">
+        <span class="np-kicker">${esc(K('proj'))}</span>
+        <h3 class="np-h3">${esc(projH)}</h3>
+        ${projects.map((x) => `<div class="np-pj"><div class="np-ghh"><b>📁 ${esc(x.name)}</b> <span class="np-mute">${x.complete ? 'complete' : `${x.pct}% · ${x.steps}`}${x.done ? ` · ${dur(x.done)} ${P.this}` : ''}</span><span class="np-gbar"><i style="width:${x.pct}%"></i></span></div>
+          ${x.finished.length ? `<p class="np-small">✓ ${x.finished.map((t) => esc(t)).join(' · ')}</p>` : ''}
+          ${x.next && !x.complete ? `<p class="np-small np-mute">Next: ${esc(x.next.title)}${x.next.at ? ` (${esc(T.format(x.next.at, z, { weekday: 'short', day: 'numeric', month: 'short' }))})` : ''}${x.late ? ' — <b>behind schedule</b>' : ''}</p>` : ''}</div>`).join('')}
+      </section>`;
   const days = Array.from({ length: 7 }, (_, i) => T.addDays(T.dayKey(r.nextFrom, z), i));
   const maxL = Math.max(60, ...Object.values(r.load));
   const kindTxt = { skipped: 'was deleted', undone: 'was marked undone', moved: 'was pushed later' };
@@ -224,6 +236,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         <span class="np-kicker">${esc(K('goals'))}</span>
         ${goalsHTML}
       </section>
+      ${projHTML}
       <section class="np-words">
         <span class="np-kicker">${esc(K('words'))}</span>
         ${extras.quote ? `<blockquote class="np-quote">“${esc(extras.quote.text)}”<cite>— ${esc(extras.quote.by)}</cite></blockquote>` : ''}

@@ -12,6 +12,7 @@ import * as EV from './events.js';
 import * as C from './categories.js';
 import * as N from './notify.js';
 import * as GL from './goals.js';
+import * as P from './projects.js';
 import { parseTask, resolveDate } from './parse.js';
 
 export function createApi(h) {
@@ -276,6 +277,10 @@ export function createApi(h) {
       const { task, sess } = findSession(a.session, a.task, a.index);
       h.replaceTask(S.markDone(task, sess.id)); await h.saveTasks('AI: mark done'); await h.cycle(); return { done: sess.label };
     } },
+    listProjects: { about: 'Projects with their steps (tasks and events, in order) and progress.', run: () => P.list(h.set()).map((p) => {
+      const pr = P.progress(p, h.st().tasks);
+      return { name: p.name, inOrder: p.sequential !== false, progress: `${pr.pct}% (${pr.finished}/${pr.count} steps)`, steps: pr.rows.map((r, i) => ({ step: i + 1, kind: r.st.kind, title: r.st.title, start: fmt(r.st.start), end: fmt(r.st.end), hours: r.st.kind === 'task' ? r.st.hours : undefined, done: r.finished, pct: r.pct })) };
+    }) },
     setLeave: { params: 'from (date), to? (date, default = from), kind ("vacation" | "sick" | "none" to clear), reschedule? ("all" default: move task sessions and events off those days | "tasks" | "keep")', about: 'Mark days as on leave or sick leave (task sessions avoid them), or clear them.', write: true, run: async (a) => {
       const from = parseDay(a.from), to = a.to ? parseDay(a.to) : from;
       if (!from || !to) throw new Error('Give from (and to) as dates, e.g. "2026-11-02"');

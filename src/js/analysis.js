@@ -1,5 +1,6 @@
 // Time analysis: how much of the chosen hours are free vs occupied, broken down by color / source / type.
 import * as T from './tz.js';
+import { projectOf } from './projects.js';
 import * as S from './scheduler.js';
 import * as G from './gcal.js';
 import { esc } from './ui.js';
@@ -80,7 +81,9 @@ export function compute(items, windows, tz) {
         if (between && m <= GAP_MAX) { d.gaps += m; totals.gaps += m; } else { d.free += m; totals.free += m; }
         continue;
       }
-      cover.sort((x, y) => x.prio - y.prio || x.start - y.start);
+      // the most specific entry wins: events before task sessions, and of two overlapping events the shorter one (1 h of
+      // chores logged inside 4 h of childcare counts as chores for that hour)
+      cover.sort((x, y) => x.prio - y.prio || (x.end - x.start) - (y.end - y.start) || y.start - x.start);
       const g = cover[0].group;
       d.groups[g] = (d.groups[g] || 0) + m;
       totals.groups[g] = (totals.groups[g] || 0) + m;
@@ -127,6 +130,12 @@ export function groupOf(it, by, ctx) {
     const lbl = (x) => `${x.icon ? x.icon + ' ' : ''}${x.name}`;
     if (c) return { key: 'cat:' + c.id, label: p && by === 'category' ? `${lbl(p)} › ${lbl(c)}` : lbl(c), color: c.color };
     return it.kind === 'chunk' ? { key: 'cat:none-t', label: 'Uncategorized tasks', color: '#c0c4cc' } : { key: 'cat:none-e', label: 'Uncategorized events', color: '#9aa0aa' };
+  }
+  if (by === 'project') {
+    const p = projectOf(it, s);
+    const PC = ['#4f6bed', '#0f9d76', '#e8710a', '#a142f4', '#d6455b', '#129eaf', '#c27c0e', '#5b7c99'];
+    if (p) return { key: 'proj:' + p.id, label: `📁 ${p.name}`, color: PC[Math.max(0, (s.projects || []).findIndex((x) => x.id === p.id)) % PC.length] };
+    return { key: 'proj:none', label: 'Not in a project', color: '#c0c4cc' };
   }
   if (by === 'type') return it.kind === 'chunk' ? { key: 'tasks', label: 'Task sessions', color: '#8a5cf6' } : { key: 'events', label: 'Calendar events', color: '#5b7c99' };
   if (by === 'source') {
@@ -262,7 +271,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
     return `<tr><td><details class="an-det"><summary><span class="sw-dot" style="background:${m.color}"></span>${name}<span class="muted small an-count">${n} item${n === 1 ? '' : 's'} ▾</span></summary>${titleList(keys)}</details></td>
       <td class="num">${fmtH(T0[k] || 0)}</td><td class="num">${pct(T0[k] || 0, totals.available)}%</td><td class="num">${pct(T0[k] || 0, occupied)}%</td></tr>`;
   }).join('');
-  const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' || opts.by === 'maincat' ? 'Category' : opts.by === 'type' ? 'Type' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
+  const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' || opts.by === 'maincat' ? 'Category' : opts.by === 'type' ? 'Type' : opts.by === 'project' ? 'Project' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
     <tbody>${rows}${totals.gaps ? `<tr class="gap-row"><td><span class="gap-sw"></span> Short gaps between items <span class="muted small">(≤ ${GAP_MAX} min, not free)</span></td><td class="num">${fmtH(totals.gaps)}</td><td class="num">${pct(totals.gaps, totals.available)}%</td><td class="num">—</td></tr>` : ''}<tr class="free-row"><td><span class="sw-dot free-sw"></span>Free</td><td class="num">${fmtH(totals.free)}</td><td class="num">${pct(totals.free, totals.available)}%</td><td class="num">—</td></tr></tbody>
     <tfoot><tr><td>Total in scope</td><td class="num">${fmtH(totals.available)}</td><td class="num">100%</td><td></td></tr></tfoot></table>`;
 
@@ -273,7 +282,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
           ${[['next7', 'Next 7 days'], ['next30', 'Next 30 days'], ['week', 'This week'], ['nextweek', 'Next week'], ['month', 'This month'], ['nextmonth', 'Next month'], ['custom', 'Custom…']].map(([v, l]) => `<option value="${v}" ${opts.period === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         ${opts.period === 'custom' ? `<label class="field"><span>From</span><input type="date" data-o="from" value="${opts.from || ''}"></label><label class="field"><span>To</span><input type="date" data-o="to" value="${opts.to || ''}"></label>` : ''}
         <label class="field"><span>Hours</span><select data-o="scope">${[...Object.entries(SCOPES), ...(settings.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${opts.scope === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
-        <label class="field"><span>Group by</span><select data-o="by">${[['category', 'Category'], ['maincat', 'Main categories'], ['color', 'Color'], ['source', 'Task or calendar'], ['type', 'Events vs tasks']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="field"><span>Group by</span><select data-o="by">${[['category', 'Category'], ['maincat', 'Main categories'], ['color', 'Color'], ['source', 'Task or calendar'], ['type', 'Events vs tasks'], ['project', 'Projects']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         <span class="grow"></span>
         <button class="btn small ghost" data-o="csv">Download CSV</button>
       </div>

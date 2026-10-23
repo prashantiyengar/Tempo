@@ -11,6 +11,7 @@ import * as N from './notify.js';
 import * as A from './analysis.js';
 import * as W from './weather.js';
 import * as XT from './extras.js';
+import * as P from './projects.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -1256,7 +1257,7 @@ export function settingsDialog(ctx) {
           <label class="chk"><input type="checkbox" class="pj-seq" ${p.sequential ? 'checked' : ''}> steps in order</label>
           <span class="muted small">${n} task${n === 1 ? '' : 's'}</span><span class="grow"></span>
           <button type="button" class="icon-btn pj-del" title="Delete project (tasks stay)" aria-label="Delete project">✕</button></div>`;
-      }).join('') || '<p class="muted small">No projects yet — create one from a task’s “Part of project”.</p>');
+      }).join('') || '<p class="muted small">No projects yet — create one with + Project (a chain of tasks and events), or from a task’s “Part of project”.</p>');
       $$('.proj-row', dlg).forEach((row) => {
         const p = projects[+row.dataset.i];
         $('.pj-name', row).oninput = (e) => { p.name = e.target.value; };
@@ -1800,4 +1801,116 @@ export function partialDialog(ctx, task, sess, opts = {}) {
       close({ credit, squeeze: f.fit.value === 'squeeze', split, pages: reading ? +f.pages.value : null, pct: reading ? null : +f.pct.value });
     });
   }, { cls: 'narrow' });
+}
+
+// ======================================================================================
+// Project dialog: a chain of tasks and events, each with an ideal start, end and (tasks) hours
+// ======================================================================================
+// Resolves { project, removed: [steps] } (save), { delete: true, removed } or null (cancel).
+export function projectDialog(ctx, project = null) {
+  const st = ctx.state, s = st.settings, tz = s.tz;
+  const isNew = !project;
+  const p0 = project ? { ...project } : { id: P.newProjectId(), name: '', sequential: true, titleMode: 'prefix', created: Date.now(), steps: [] };
+  let steps = (project ? P.steps(project, st.tasks) : []).map((x) => ({ ...x }));
+  const removed = [];
+  const today = T.dayKey(Date.now(), tz);
+  const keyOf = (ms) => (ms ? T.dayKey(ms, tz) : '');
+  const timeOf = (ms, d) => (ms ? T.hhmm(T.minutesOfDay(ms, tz)) : d);
+  const prog = project ? P.progress(project, st.tasks, Date.now(), ctx.eventDone || (() => false)) : null;
+  const statusOf = (stp) => {
+    const r = prog?.rows.find((x) => x.st.id === stp.id); if (!r || !stp.ref) return '<span class="ps-new">new</span>';
+    if (r.finished) return '<span class="ps-ok">✓ done</span>';
+    if (r.st.kind === 'task') return `<span class="ps-pct">${r.pct}%${r.next ? ` · next ${esc(T.format(r.next, tz, { weekday: 'short', day: 'numeric', month: 'short' }))}` : ''}${r.late ? ' · ⚠' : ''}</span>`;
+    return `<span class="ps-pct">${r.next ? esc(T.format(r.next, tz, { weekday: 'short', day: 'numeric', month: 'short' })) : ''}</span>`;
+  };
+  const html = `<form class="project-form" autocomplete="off" novalidate>
+    <header class="dlg-head"><input name="name" class="title-input" placeholder="Project name, e.g. Thesis" value="${esc(p0.name)}" maxlength="40" autofocus><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+    <div class="dlg-body">
+      ${prog ? `<div class="pj-prog"><div class="bar"><i style="width:${prog.pct}%"></i></div><span class="muted small">${prog.finished}/${prog.count} steps done · ${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)}</span></div>` : ''}
+      <div class="row">
+        <label class="field"><span>Project name in titles</span><select name="titleMode">
+          <option value="prefix" ${p0.titleMode !== 'suffix' && p0.titleMode !== 'none' ? 'selected' : ''}>At the start — “Name: step”</option>
+          <option value="suffix" ${p0.titleMode === 'suffix' ? 'selected' : ''}>At the end — “step — Name”</option>
+          <option value="none" ${p0.titleMode === 'none' ? 'selected' : ''}>Not added</option></select></label>
+        <label class="chk"><input type="checkbox" name="sequential" ${p0.sequential !== false ? 'checked' : ''}> Steps run in order (each starts after the previous is done)</label>
+      </div>
+      <div class="sub-h">Steps</div>
+      <div class="pj-steps"></div>
+      <div class="row"><button type="button" class="btn small pj-add" data-kind="task">+ Task</button><button type="button" class="btn small pj-add" data-kind="event">+ Event</button>
+        <span class="muted small">Tasks are split into sessions between their start and end; events go on your calendar.</span></div>
+      <p class="muted small pj-err" hidden></p>
+    </div>
+    <footer class="actions">
+      ${isNew ? '' : '<button type="button" class="btn danger ghost pj-delete">Delete project…</button>'}
+      <span class="grow"></span>
+      <button type="button" class="btn ghost" data-close>Cancel</button>
+      <button type="submit" class="btn primary">${isNew ? 'Create project' : 'Save'}</button>
+    </footer></form>`;
+  return modal(html, (dlg, close) => {
+    const f = $('form', dlg), box = $('.pj-steps', dlg);
+    const read = () => {
+      $$('.pj-step', box).forEach((row) => {
+        const x = steps[+row.dataset.i];
+        x.kind = $('.ps-kind', row).value;
+        x.title = $('.ps-title', row).value;
+        const sd = $('input.ps-sd', row).value, ed = $('input.ps-ed', row).value || sd;
+        if (x.kind === 'task') {
+          x.start = sd ? T.atTime(sd, s.bounds.start, tz) : null;
+          x.end = ed ? T.atTime(ed, s.bounds.end, tz) : null;
+          x.hours = Math.max(0.25, +$('input.ps-h', row).value || 1);
+          delete x.allDay;
+        } else {
+          x.start = sd ? T.atTime(sd, $('input.ps-st', row).value || '10:00', tz) : null;
+          x.end = ed ? T.atTime(ed, $('input.ps-et', row).value || '11:00', tz) : null;
+          if (x.start && x.end && x.end <= x.start) x.end = x.start + T.HOUR;
+        }
+      });
+    };
+    const draw = () => {
+      setHTML(box, steps.map((x, i) => `<div class="pj-step ${x.kind}" data-i="${i}">
+        <span class="ps-n">${i + 1}</span>
+        <select class="ps-kind" aria-label="Kind"><option value="task">Task</option><option value="event" ${x.kind === 'event' ? 'selected' : ''}>Event</option></select>
+        <input class="ps-title" placeholder="${x.kind === 'task' ? 'What to do, e.g. Write chapter 2' : 'Event, e.g. Meeting with supervisor'}" value="${esc(x.title || '')}">
+        <div class="ps-when">${x.kind === 'task'
+          ? `<label>Start <input type="date" data-quick="off" class="ps-sd" value="${keyOf(x.start)}"></label><label>End <input type="date" data-quick="off" class="ps-ed" value="${keyOf(x.end)}"></label><label>Hours <input type="number" class="ps-h num" min="0.25" step="0.25" value="${x.hours ?? 2}"></label>`
+          : `<label><input type="date" data-quick="off" class="ps-sd" value="${keyOf(x.start)}"> <input type="time" class="ps-st" value="${timeOf(x.start, '10:00')}" step="300"></label><label>to <input type="date" data-quick="off" class="ps-ed" value="${keyOf(x.end)}"> <input type="time" class="ps-et" value="${timeOf(x.end, '11:00')}" step="300"></label>`}</div>
+        <span class="ps-status">${statusOf(x)}</span>
+        <span class="ps-acts"><button type="button" class="icon-btn sm ps-up" title="Earlier in the chain" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm ps-down" title="Later in the chain" ${i < steps.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm ps-del" title="Remove this step">✕</button></span>
+      </div>`).join('') || '<p class="muted small">No steps yet — add the tasks and events of this project in the order they happen.</p>');
+      $$('.pj-step', box).forEach((row) => {
+        const i = +row.dataset.i;
+        $('.ps-kind', row).onchange = () => { read(); const x = steps[i]; if (x.ref) { removed.push({ ...x, kind: x.kind === 'task' ? 'event' : 'task' }); x.ref = null; } if (x.kind === 'event' && x.start) { x.start = T.atTime(T.dayKey(x.start, tz), '10:00', tz); x.end = x.start + T.HOUR; } draw(); };
+        $('.ps-up', row).onclick = () => { read(); [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; draw(); };
+        $('.ps-down', row).onclick = () => { read(); [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]]; draw(); };
+        $('.ps-del', row).onclick = () => { read(); const [x] = steps.splice(i, 1); if (x.ref) removed.push(x); draw(); };
+      });
+    };
+    draw();
+    $$('.pj-add', dlg).forEach((b) => (b.onclick = () => {
+      read();
+      const last = steps[steps.length - 1];
+      const startK = last?.end ? keyOf(last.end) : today;
+      const kind = b.dataset.kind;
+      steps.push(kind === 'task'
+        ? { id: P.newStepId(), kind, title: '', start: T.atTime(startK, s.bounds.start, tz), end: T.atTime(T.addDays(startK, 7), s.bounds.end, tz), hours: 2, ref: null }
+        : { id: P.newStepId(), kind, title: '', start: T.atTime(startK, '10:00', tz), end: T.atTime(startK, '11:00', tz), ref: null });
+      draw();
+      $$('.pj-step .ps-title', box).pop()?.focus();
+    }));
+    $('.pj-delete', dlg)?.addEventListener('click', async () => {
+      const v = await choose(`Delete “${p0.name}”?`, null, [
+        { value: 'all', label: 'Delete the project and its tasks and events', danger: true },
+        { value: 'keep', label: 'Delete only the project', desc: 'Its tasks and events stay (without the project).' }]);
+      if (v) close({ delete: true, removeItems: v === 'all', removed: [...removed, ...steps.filter((x) => x.ref)] });
+    });
+    f.addEventListener('submit', (e) => {
+      e.preventDefault(); read();
+      const err = $('.pj-err', dlg);
+      const name = f.name.value.trim();
+      const bad = !name ? 'Give the project a name.' : steps.find((x) => !x.title.trim()) ? 'Every step needs a title.'
+        : steps.find((x) => !x.start || !x.end) ? 'Every step needs a start and an end.' : steps.find((x) => x.kind === 'task' && x.end <= x.start) ? 'A task ends before it starts.' : '';
+      if (bad) { err.textContent = bad; err.hidden = false; if (!name) f.name.focus(); return; }
+      close({ project: { ...p0, name, titleMode: f.titleMode.value, sequential: f.sequential.checked, steps: steps.map((x) => ({ ...x, title: x.title.trim() })) }, removed });
+    });
+  }, { cls: 'wide' });
 }

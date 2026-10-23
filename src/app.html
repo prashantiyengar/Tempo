@@ -17,6 +17,7 @@
         <button class="btn primary" id="btn-new-event">+ Event</button>
         <button class="btn" id="btn-new-task" title="A task Tempo splits into sessions">+ Task</button>
         <button class="btn" id="btn-new-reading" title="Plan reading a book">📖</button>
+        <button class="btn" id="btn-new-project" title="A project: a chain of tasks and events">+ Project</button>
       </div>
       <div class="quick">
         <input id="quick-add" placeholder="Type a task… e.g. Read Dune 200 pages by Friday, Study" autocomplete="off" spellcheck="false" aria-label="Quick add a task">
@@ -24,12 +25,13 @@
       </div>
       <div id="mini" class="mini"></div>
       <section class="side-sec">
-        <div class="sec-head"><span class="side-tabs" role="tablist"><button type="button" data-st="tasks" class="on" role="tab">Tasks</button><button type="button" data-st="later" role="tab" title="Things to schedule later">Later <b id="later-n"></b></button></span><button class="icon-btn sm" id="btn-resched" title="Re-plan task sessions now">⟲</button></div>
+        <div class="sec-head"><span class="side-tabs" role="tablist"><button type="button" data-st="tasks" class="on" role="tab">Tasks</button><button type="button" data-st="later" role="tab" title="Things to schedule later">Later <b id="later-n"></b></button><button type="button" data-st="projects" role="tab" title="Project progress">Projects <b id="proj-n"></b></button></span><button class="icon-btn sm" id="btn-resched" title="Re-plan task sessions now">⟲</button></div>
         <div id="task-list" class="task-list"></div>
         <div id="later-list" class="later-list" hidden></div>
+        <div id="proj-list" class="proj-list" hidden></div>
       </section>
-      <section class="side-sec">
-        <div class="sec-head"><span>Calendars</span></div>
+      <section class="side-sec cal-sec">
+        <div class="sec-head"><button type="button" class="sec-toggle" id="cal-toggle" aria-expanded="true" title="Show or hide the calendars"><span class="sec-caret">▾</span> Calendars <b class="cal-count"></b></button></div>
         <div id="cal-list" class="cal-list"></div>
       </section>
     </aside>

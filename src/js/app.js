@@ -20,6 +20,7 @@ import * as W from './weather.js';
 import * as NP from './paper.js';
 import * as XT from './extras.js';
 import * as GL from './goals.js';
+import * as P from './projects.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -38,6 +39,7 @@ const ctx = {
   lastEventEnd: (o) => lastEventEnd(o),
   nextEventStart: (o) => nextEventStart(o),
   get lastBusy() { return app.lastBusy; },
+  eventDone: (stp) => projectEventDone(stp),
   // New events go to the calendar chosen for task sessions (Settings → Google Calendar), else the primary one.
   defaultCalendar() {
     if (!E.connected(st())) return E.LOCAL_CAL;
@@ -329,7 +331,7 @@ function renderTimeGrid(days, items) {
       const left = (g.col / g.cols) * 100, width = (1 / g.cols) * 100;
       const short = h < 36;
       const timeStr = `${T.fmtTime(it.start, z, s.h12)} – ${T.fmtTime(it.end, z, s.h12)}`;
-      const node = el(`<div class="${itemClasses(it)} ${short ? 'short' : ''}" data-key="${esc(it.key)}" style="top:${top}px;height:${h}px;left:calc(${left}% + 1px);width:calc(${width}% - ${g.cols > 1 ? 3 : 6}px);--c:${it.color}">
+      const node = el(`<div class="${itemClasses(it)} ${short ? 'short' : ''}" data-key="${esc(it.key)}" style="top:${top}px;height:${h}px;left:calc((100% - var(--free-strip)) * ${left / 100} + 1px);width:calc((100% - var(--free-strip)) * ${width / 100} - ${g.cols > 1 ? 3 : 2}px);--c:${it.color}">
         <div class="ev-t">${it.sess?.partial ? '<span class="tick" title="Partly done">◐</span>' : it.status === 'done' || it.evDone ? '<span class="tick">✓</span>' : ''}${it.status === 'pinned' ? '<span class="pin" title="Pinned">📌</span>' : ''}${esc(it.title)}</div>
         <div class="ev-time">${short ? '' : esc(timeStr)}${it.ev?.recurringEventId ? ' <span class="rep" title="Repeats">↻</span>' : ''}</div>
         ${it.editable && g.endsHere ? '<div class="ev-resize"></div>' : ''}
@@ -414,6 +416,7 @@ function renderSidebar() {
     { id: 'tasks', summary: 'Task sessions', color: '#8a5cf6' },
     ...AC.extCalendars().map((c) => ({ id: c.key, summary: `${c.name} · ${c.account.label}`, color: c.color || '#888' })),
   ];
+  { const shown = cals.filter((c) => !hidden.has(c.id)).length; const cc = $('.cal-count'); if (cc) cc.textContent = shown === cals.length ? `${cals.length}` : `${shown}/${cals.length}`; }
   setHTML($('#cal-list'), cals.map((c) => `<label class="cal-row" title="${esc(c.summary)}">
     <input type="checkbox" data-cal="${esc(c.id)}" ${hidden.has(c.id) ? '' : 'checked'}><i style="--c:${c.color}"></i><span>${esc(c.summary)}</span></label>`).join('')
     + (E.connected(st()) ? '' : `<button class="btn small ghost wide" id="connect-cta">${G.builtinAvailable() ? 'Sign in with Google' : 'Connect Google Calendar…'}</button>`));
@@ -478,12 +481,110 @@ async function saveLater(list, label) {
   if (label) pushUndo(label, async () => { set().later = before; await E.persist(st(), ['settings']); renderLater(); });
   renderLater();
 }
+// ---------- Projects: progress in the sidebar ----------
+function projectEventDone(stp) {
+  if (stp.kind !== 'event' || !stp.ref) return false;
+  const k = stp.ref; return !!st().eventDone?.[k];
+}
+function renderProjects(tab = app.sideTab || 'tasks') {
+  const box = $('#proj-list'); if (!box) return;
+  box.hidden = tab !== 'projects';
+  const z = tz(), now = Date.now(), list = P.list(set());
+  const n = $('#proj-n'); if (n) n.textContent = list.length ? String(list.filter((p) => !P.progress(p, st().tasks, now, projectEventDone).complete).length || '') : '';
+  if (tab !== 'projects') return;
+  const fmt = (ms) => T.format(ms, z, { weekday: 'short', day: 'numeric', month: 'short' });
+  setHTML(box, `<button type="button" class="btn small wide pj-new">+ New project</button>
+    ${list.length ? list.map((p) => {
+      const pr = P.progress(p, st().tasks, now, projectEventDone);
+      const nx = pr.next;
+      const late = pr.rows.some((r) => r.late);
+      const last = pr.rows.reduce((a, r) => Math.max(a, r.finish || r.st.end || 0), 0);
+      return `<button type="button" class="pj-card ${pr.complete ? 'complete' : ''}" data-id="${esc(p.id)}">
+        <span class="pj-t">📁 ${esc(p.name)}${late ? ' <span class="warn-ic" title="A task in it doesn\'t fit before its end date">⚠</span>' : ''}</span>
+        <span class="pj-meta">${pr.complete ? 'Done ✓' : `${pr.finished}/${pr.count} steps · ${T.fmtDur(pr.done)} of ${T.fmtDur(pr.total)}${last ? ` · done by ${esc(fmt(last))}` : ''}`}</span>
+        <span class="bar"><i style="width:${pr.pct}%"></i></span>
+        ${nx && !pr.complete ? `<span class="pj-next">Next: ${nx.st.kind === 'event' ? '📅' : '⧉'} ${esc(nx.st.title)}${nx.next ? ` · ${esc(fmt(nx.next))}` : ''}</span>` : ''}
+        <span class="pj-dots">${pr.rows.map((r) => `<i class="${r.finished ? 'd' : r.pct ? 'p' : ''} ${r.st.kind}" title="${esc(r.st.title)} — ${r.finished ? 'done' : r.pct + '%'}"></i>`).join('')}</span>
+      </button>`;
+    }).join('') : '<p class="muted small empty">A project is a chain of tasks and events — e.g. a thesis: research, a meeting, writing, a deadline. Create one to see its progress here.</p>'}`);
+  $('.pj-new', box).onclick = () => openProject(null);
+  $$('.pj-card', box).forEach((b) => (b.onclick = () => openProject(P.byId(set(), b.dataset.id))));
+}
+async function openProject(p) {
+  closeDrawer?.();
+  const r = await D.projectDialog(ctx, p);
+  if (!r) return;
+  try { await saveProject(r, p); } catch (err) { handleError(err); }
+}
+// Create / update the steps' tasks and events, remove the ones taken out, and store the project.
+async function saveProject(r, before) {
+  const s = set(), z = tz();
+  const evRef = (ref) => { const i = ref.indexOf('|'); return { _calId: ref.slice(0, i), id: ref.slice(i + 1) }; };
+  setStatus('Saving project…', 'busy');
+  for (const x of r.removed || []) {
+    try {
+      if (x.kind === 'task') { const t = st().tasks.find((y) => y.id === x.ref); if (t && (r.delete ? r.removeItems : true)) { st().orphanGids.push(...[...(t.planned || []), ...(t.frozen || [])].map((c) => c.gid).filter(Boolean), ...(t.orphanGids || [])); st().tasks = st().tasks.filter((y) => y.id !== t.id); st().tombstones = [...(st().tombstones || []), t.id].slice(-300); } else if (t) replaceTask({ ...t, projectId: null, projectName: null, projectStep: null }); }
+      else if (x.ref && (r.delete ? r.removeItems : true)) await EV.deleteEvent(st(), evRef(x.ref), 'this');
+    } catch (err) { if (!/not found|deleted|410/i.test(err.message)) handleError(err); }
+  }
+  if (r.delete) {
+    s.projects = P.list(s).filter((x) => x.id !== before.id);
+    st().tasks = st().tasks.map((t) => (t.projectId === before.id ? { ...t, projectId: null, projectName: null, projectStep: null, rev: Date.now() } : t));
+    await E.persist(st(), ['settings']); syncSharedSoon(); await saveTasks('delete project'); await afterEventChange();
+    toast(`Deleted project “${before.name}”`); return;
+  }
+  const p = r.project;
+  const projectsBefore = JSON.parse(JSON.stringify(P.list(s))), createdEvents = [];
+  let prevEventEnd = 0, made = 0;
+  for (let i = 0; i < p.steps.length; i++) {
+    const x = p.steps[i];
+    const title = P.fullTitle(p, x.title);
+    if (x.kind === 'task') {
+      const fields = { title, earliestStart: Math.max(x.start || 0, p.sequential ? prevEventEnd : 0) || null, deadline: x.end, totalMinutes: Math.max(5, Math.round((+x.hours || 1) * 60)), projectId: p.id, projectName: p.name, projectStep: i + 1 };
+      const t = x.ref && st().tasks.find((y) => y.id === x.ref);
+      if (t) {
+        const changed = Object.entries(fields).some(([k, v]) => (t[k] ?? null) !== (v ?? null));
+        if (changed) replaceTask({ ...t, ...fields });
+      } else {
+        const nt = buildDraft(fields);
+        st().tasks.push(nt); x.ref = nt.id; made++;
+      }
+    } else {
+      const body = { summary: title, start: { dateTime: new Date(x.start).toISOString(), timeZone: z }, end: { dateTime: new Date(x.end).toISOString(), timeZone: z } };
+      let done = false;
+      if (x.ref) {
+        try { await EV.updateEvent(st(), evRef(x.ref), body, 'this'); done = true; }
+        catch (err) { if (!/not found|deleted|no longer exists|410/i.test(err.message)) throw err; }
+      }
+      if (!done) {
+        const cal = ctx.defaultCalendar();
+        const ev = await EV.createEvent(st(), cal, { ...body, reminders: { useDefault: true }, extendedProperties: { private: { tempoProject: p.id, tempoStep: x.id } } });
+        x.ref = `${ev._calId || cal}|${ev.id}`; made++; createdEvents.push(x.ref);
+      }
+      prevEventEnd = Math.max(prevEventEnd, x.end);
+    }
+  }
+  const exists = P.byId(s, p.id);
+  s.projects = exists ? P.list(s).map((y) => (y.id === p.id ? p : y)) : [...P.list(s), p];
+  await E.persist(st(), ['settings', 'localEvents']); syncSharedSoon();
+  await saveTasks(exists ? `edit project “${p.name}”` : `new project “${p.name}”`);
+  // undo also puts the project list back and removes the events it created
+  const u = undoStack[undoStack.length - 1];
+  if (u) { const f0 = u.undo; u.undo = async () => { await f0(); set().projects = projectsBefore; for (const ref of createdEvents) { try { await EV.deleteEvent(st(), evRef(ref), 'this'); } catch { /* already gone */ } } await E.persist(st(), ['settings', 'localEvents']); syncSharedSoon(); E.invalidate(); await render(); }; }
+  E.invalidate();
+  app.sideTab = 'projects'; try { localStorage.setItem('tempo:sideTab', 'projects'); } catch { /* storage blocked */ }
+  await render();
+  toast(exists ? `Project “${p.name}” saved` : `Project “${p.name}” created${made ? ` — ${made} step${made > 1 ? 's' : ''} planned` : ''}`);
+  cycle();
+}
+
 function renderLater() {
   const box = $('#later-list'); if (!box) return;
   const tab = app.sideTab || 'tasks';
   $$('.side-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.st === tab));
   $('#task-list').hidden = tab !== 'tasks';
   box.hidden = tab !== 'later';
+  renderProjects(tab);
   $('#btn-resched').hidden = tab !== 'tasks';
   const list = laterList();
   const n = $('#later-n'); if (n) n.textContent = list.length ? String(list.length) : '';
@@ -1010,12 +1111,13 @@ function openItem(it, rect) {
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
-      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}</div>
+      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}${!it.allDay ? '<button class="btn small ghost add-during" title="Record something else you did during this event, e.g. an hour of chores during childcare">＋ Add during this</button>' : ''}</div>
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
     $('.x', p).onclick = close;
     $('.load-tasks', p)?.addEventListener('click', () => { close(); refreshFromServer(); });
     $('.fin-early', p)?.addEventListener('click', () => { close(); finishedEarly(it); });
+    $('.add-during', p)?.addEventListener('click', () => { close(); addDuring(it); });
     const toggle = (done) => async () => { close(); try { await setEventDone(it, done); } catch (err) { handleError(err); } };
     $('.ev-done', p)?.addEventListener('click', toggle(true));
     $('.ev-undone', p)?.addEventListener('click', toggle(false));
@@ -1029,6 +1131,18 @@ function openItem(it, rect) {
       catch (err) { handleError(err); }
     });
   });
+}
+
+// Record an event that overlaps another one (e.g. 1 h of chores during 4 h of childcare): quick create for one hour
+// inside it — from now when it's under way, else from its start. In Analysis the shorter entry counts for that time.
+function addDuring(it) {
+  const step = 15 * T.MIN, now = Date.now();
+  let start = it.start <= now && it.end > now ? Math.max(it.start, Math.floor(now / step) * step - 60 * T.MIN) : it.start;
+  if (start >= it.end) start = it.start;
+  const end = Math.min(it.end, start + 60 * T.MIN);
+  const node = document.querySelector(`.ev[data-key="${CSS.escape(it.key)}"]`);
+  const r = node?.getBoundingClientRect() || { left: innerWidth / 2 - 150, top: innerHeight / 3, right: innerWidth / 2 + 150, bottom: innerHeight / 3 + 40, width: 300, height: 40 };
+  quickCreate(r, { start, end: Math.max(end, start + 15 * T.MIN), allDay: false });
 }
 
 function openChunk(it, rect) {
@@ -1057,6 +1171,7 @@ function openChunk(it, rect) {
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
+        <button class="btn small ghost add-during" title="Record something else you did during this session">＋ Add during this</button>
       </div>
       <div class="muted small hint">Tip: drag a session to pin it to a specific time — the rest of the series shifts around it.</div>
     </div>`, (pop, close) => {
@@ -1076,6 +1191,7 @@ function openChunk(it, rect) {
       await saveTasks('task finished'); toast(`🏁 ${task.title} finished${left ? ` — ${left} remaining session${left > 1 ? 's' : ''} removed` : ''}`, { ms: 6000 }); cycle();
     });
     $('.edit', pop).onclick = () => { close(); editTask(task); };
+    $('.add-during', pop)?.addEventListener('click', () => { close(); addDuring(it); });
     $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
     $('.fin-early', pop)?.addEventListener('click', () => { close(); finishedEarly(it); });
     $('.late', pop)?.addEventListener('click', () => { close(); startedLate(it); });
@@ -2025,7 +2141,7 @@ async function renderPaperView(seq) {
   const goalsP = await paperGoals(wk, end, per, items);
   if (seq !== app.renderSeq) return;
   const spin = app.npSpin; app.npSpin = false;
-  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP }));
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP, projects: paperProjects(items, r.from, r.weekEnd) }));
   if (spin && !matchMedia('(prefers-reduced-motion: reduce)').matches) { const np = $('.np', root); np?.classList.add('np-spin'); np?.addEventListener('animationend', () => np.classList.remove('np-spin'), { once: true }); }
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
@@ -2070,6 +2186,16 @@ async function renderPaperView(seq) {
   }
 }
 // Goal progress for the paper: weekly and monthly (or the months / year for longer periods).
+// Projects in the paper: time in the period, steps finished in it, overall progress and the next step
+function paperProjects(items, from, to) {
+  const s = set(), now = Date.now(), tm = P.timeByProject(items, s, from, to, now);
+  return P.list(s).map((p) => {
+    const pr = P.progress(p, st().tasks, now, projectEventDone);
+    const fin = P.finishedIn(p, st().tasks, from, Math.min(to, now), now);
+    return { name: p.name, pct: pr.pct, steps: `${pr.finished}/${pr.count} steps`, done: tm[p.id]?.done || 0, finished: fin.map((r) => r.st.title), complete: pr.complete, completedNow: pr.complete && fin.length > 0,
+      next: pr.next ? { title: pr.next.st.title, at: pr.next.next } : null, late: pr.rows.some((r) => r.late) };
+  }).filter((x) => !x.complete || x.completedNow);
+}
 async function paperGoals(wk, end, per, items) {
   const s = set(), z = tz(), blocks = [];
   { const keys = []; for (let w = T.startOfWeek(wk, s.weekStart ?? 1); w < T.addDays(end, 7); w = T.addDays(w, 7)) keys.push(GL.weekKey(w)); for (let m = T.keyOf(T.parseKey(wk).y, T.parseKey(wk).m, 1); m <= end; m = T.addMonths(m, 1)) keys.push(GL.monthKey(m));
@@ -2999,6 +3125,7 @@ function bindToolbar() {
     { ic: '+', label: 'New event', run: () => $('#btn-new-event').click() },
     { ic: '⧉', label: 'New task (split into sessions)', run: () => newTask({ kind: 'generic' }) },
     { ic: '📖', label: 'New reading plan', run: () => newTask({ kind: 'reading' }) },
+    { ic: '📁', label: 'New project (a chain of tasks and events)', run: () => openProject(null) },
     { ic: '⏰', label: 'Started late', run: () => startedLate() },
     { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
     { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
@@ -3033,6 +3160,7 @@ function bindToolbar() {
   setupQuickAdd();
   $('#sync-status').onclick = openSyncPanel;
   $('#btn-refresh').onclick = refreshFromServer;
+  $('#btn-new-project').onclick = () => openProject(null);
   $('#btn-new-event').onclick = () => {
     const now = Date.now(), z = tz();
     const k = app.cursor;
@@ -3120,6 +3248,13 @@ async function init() {
   maybeOfferReview();
   setTimeout(checkGoalNotice, 3000);
   setInterval(checkGoalNotice, 60000);
+  // Calendars list in the sidebar: fold away / unfold (remembered on this device)
+  const calSec = $('.cal-sec'), calTg = $('#cal-toggle');
+  const setCalsOpen = (open) => { calSec?.classList.toggle('collapsed', !open); calTg?.setAttribute('aria-expanded', String(open)); };
+  try { setCalsOpen(localStorage.getItem('tempo:calsCollapsed') !== '1'); } catch { /* storage blocked */ }
+  calTg?.addEventListener('click', () => { const open = calSec.classList.contains('collapsed'); setCalsOpen(open); try { localStorage.setItem('tempo:calsCollapsed', open ? '0' : '1'); } catch { /* storage blocked */ } });
+  // weather: today's and tomorrow's forecasts change most — check again every 30 minutes, and on coming back
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) W.refresh(set()).then((fresh) => { if (fresh) render(); }); });
   if (isWeb) startWebReminders();
   if (isWeb && 'serviceWorker' in navigator && document.querySelector('link[rel=manifest]')) navigator.serviceWorker.register('sw.js').catch(() => {});
   addEventListener('offline', () => { offlineStatus(); toast('You’re offline — showing your saved calendar. Changes sync when you’re back.', { noUndo: true, ms: 5000 }); });

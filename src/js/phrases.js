@@ -152,7 +152,15 @@ export const GOALS = {
   few: ['Goals in sight: ${k} of ${n} reached', 'Work in progress: ${k} of ${n} goals', '{Still climbing|Long way to go|Early days|Halfway is a state of mind|Room to grow|Plenty left to play for}: ${k} of ${n} goals {reached|done|so far}'],
 };
 
-// ---------- outlook ----------
+// ---------- projects ----------
+KICKERS.proj = ['Projekte', 'Projekte', 'Baustellen', 'Großprojekte', 'Vorhaben'];
+export const PROJ_H = {
+  none: ['No projects {on the books|in the works|under way}', 'The project desk {is quiet|has nothing to report}'],
+  active: ['{Progress report|Construction news|Work in progress}: ${projects} {moving|advancing|under way}', '${hours} {poured into|invested in|spent on} {your projects|the projects}', '{Brick by brick|Step by step|Piece by piece}: {project news|the projects advance|${hours} of project work}'],
+  finished: ['{Ribbon cut|Topping-out ceremony|Done and dusted}: ${name} {completed|finished|delivered}', '${name} {crosses the finish line|is complete|wraps up}'],
+  quiet: ['{Quiet on the building sites|The scaffolding stands still|Projects on pause} {this ${noun}|for now}', 'No project work {recorded|logged} {this ${noun}|lately}'],
+};
+
 export const OUT_RISK = ['Storm warning for the to-do list', 'Deadlines loom', '{Choppy waters|Heavy weather|Rough seas} ahead', '{Brace yourself|Batten down the hatches}: deadlines {approach|close in}', 'Red flags on the horizon'];
 export const OUT_CLEAR = ['Clear skies ahead', 'Next ${noun} looks manageable', '{Smooth sailing|Fair weather|Calm waters} ahead', 'No {storms|clouds|alarms} on the horizon', '{The road ahead is clear|All systems go}'];
 

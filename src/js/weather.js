@@ -1,5 +1,6 @@
 // Weather forecast for the next 14 days, shown at the top of each day. Uses Open-Meteo (free, no account, no key):
-// only the coordinates of the place you choose are sent. Cached on this device for 3 hours.
+// only the coordinates of the place you choose are sent. Refreshed every 30 minutes while Tempo is open (today's and
+// tomorrow's forecasts change most), and whenever you come back to it after that.
 import * as T from './tz.js';
 import { ext } from './storage.js';
 
@@ -7,7 +8,7 @@ const API = 'https://api.open-meteo.com/v1/forecast';
 const GEO = 'https://geocoding-api.open-meteo.com/v1/search';
 export const ORIGINS = ['https://api.open-meteo.com/*', 'https://geocoding-api.open-meteo.com/*'];
 const KEY = 'tempo:wx';
-const FRESH = 3 * T.HOUR;
+const FRESH = 30 * T.MIN;
 export const DAYS = 14;
 
 // WMO weather codes → icon + words
@@ -55,7 +56,7 @@ export function forecast(s) {
   return c && c.loc === locKey(s.weather) ? c.days : null;
 }
 
-// Fetch when missing or older than 3 hours. Resolves true when new data arrived (so the caller re-renders).
+// Fetch when missing or older than 30 minutes. Resolves true when new data arrived (so the caller re-renders).
 let inflight = null;
 export function refresh(s, { force = false } = {}) {
   if (!enabled(s)) return Promise.resolve(false);
