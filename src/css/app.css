@@ -410,6 +410,12 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
   .side { display: block; position: fixed; top: 0; bottom: 0; left: 0; width: min(86vw, 320px); z-index: 60; transform: translateX(-102%); transition: transform .22s ease; box-shadow: var(--shadow); padding-top: max(14px, env(safe-area-inset-top)); padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
   .side.open { transform: none; }
   .main { height: 100dvh; padding-bottom: calc(58px + env(safe-area-inset-bottom)); }
+  /* the page itself never scrolls on phones (only the calendar inside it), so nothing can push the bottom bar away */
+  html, body { overflow: hidden; overscroll-behavior: none; }
+  body { position: fixed; inset: 0; width: 100%; }
+  .shell { height: 100dvh; }
+  .view { overflow: hidden; contain: paint; }
+  .bottombar { transform: translateZ(0); }
   .topbar { padding: max(6px, env(safe-area-inset-top)) 8px 6px; gap: 4px; flex-wrap: nowrap; }
   .topbar h1 { font-size: 16px; margin: 0 4px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; order: 0; width: auto; }
   .topbar .grow, #view-seg, .menu-wrap, #btn-settings, #btn-review, #btn-now, .navs { display: none !important; }
@@ -1322,3 +1328,20 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .day-notes .dn-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
 .tonow-btn { position: absolute; right: 4px; z-index: 6; font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--c, var(--accent)); color: var(--c, var(--accent)); background: var(--panel); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
 .tonow-btn:hover { background: color-mix(in srgb, var(--c, var(--accent)) 14%, var(--panel)); }
+.dm-note.due { background: #ff6b6b !important; color: #fff; animation: due-pulse 1.6s ease-in-out infinite; }
+@keyframes due-pulse { 50% { box-shadow: 0 0 0 3px rgba(255,107,107,.35); } }
+@media (prefers-reduced-motion: reduce) { .dm-note.due { animation: none; } }
+.note.due { border-color: #e04848; background: color-mix(in srgb, #ff6b6b 14%, var(--panel)); }
+.note-day.due { color: #d33; }
+.note-for { color: var(--ink2); font-weight: 600; }
+.note-for.due { color: #d33; }
+.note-t ul { margin: 2px 0; padding-left: 18px; }
+.note-t code { font-size: 12px; background: var(--off); padding: 0 3px; border-radius: 3px; }
+.note-t a { color: var(--accent); word-break: break-all; }
+.note-tools { display: flex; gap: 2px; align-self: flex-start; }
+.note-tools button { border: 1px solid var(--line); background: var(--panel); border-radius: 5px; min-width: 26px; height: 24px; font-size: 12px; cursor: pointer; color: var(--ink); padding: 0 5px; }
+.note-tools button:hover { background: var(--off); }
+.note-add-row { display: flex; align-items: center; gap: 6px; width: 100%; }
+.note-for-in { font-size: 12px; display: inline-flex; align-items: center; gap: 3px; }
+.note-for-in input { font-size: 12px; padding: 2px 4px; max-width: 140px; }
+.note-edit-f textarea { margin-top: 4px; }

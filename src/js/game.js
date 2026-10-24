@@ -46,6 +46,8 @@ export const CFG = [
   ['recoverDays2', '…clean days in a row to win back all of it', 10, 2, 60, 1],
   ['recoverStep', 'Each new drain needs this many more clean days (both steps)', 1, 0, 5, 1],
   ['recoverBonusPct', 'Bonus for winning all of it back (% of what was lost)', 5, 0, 50, 1],
+  ['rateXP', 'Rating a day (app XP)', 3, 0, 50, 1],
+  ['rateWhyXP', '…extra when you add why', 3, 0, 50, 1],
   ['laterXP', 'Scheduling something from Later (life XP)', 4, 0, 100, 1],
   ['laterPerWeek', '…plus this for each week it waited in Later', 2, 0, 50, 0.5],
   ['laterMaxWeeks', '…counting at most this many weeks', 26, 1, 104, 1],
@@ -366,6 +368,9 @@ export function dayXP(k, s, ctx, now = Date.now()) {
     const n = ctx.habitStreak ? ctx.habitStreak(h, k) : 0;
     if (n >= 2) { const hr = habitReward(s, n, rankI, h.freq?.per || 'day'); add('life', hr.xp, `habit streak: ${h.name} (${n} ${h.freq?.per && h.freq.per !== 'day' ? h.freq.per : 'day'}s in a row)`); if (hr.milestone) add('life', hr.milestone, `habit milestone: ${h.name} — ${n} ${h.freq?.per && h.freq.per !== 'day' ? h.freq.per : 'day'}s!`); }
   }
+  // rating the day (a little more with a reason)
+  const rt = s.dayRatings?.[k];
+  if (rt && rt.v != null && c.rateXP + c.rateWhyXP) add('app', c.rateXP + (rt.why ? c.rateWhyXP : 0), `rated the day ${rt.v}/5${rt.why ? ' with a reason' : ''}`);
   // goals: defining them (app XP), putting hours into them (life XP, bit by bit) and reaching them (life XP)
   for (const { g: gl, key } of ctx.goalsAll || []) {
     const v0 = goalValue(gl, key, s), gm = c.goalXP, v = { ...v0, define: Math.round(v0.define * gm), final: Math.round(v0.final * gm), progress: Math.round(v0.progress * gm) };

@@ -68,8 +68,8 @@ async def main():
         await page.screenshot(path=f'{OUT}/r31-details.png')
         await page.click('dialog[open] [data-close]'); await page.wait_for_timeout(300)
         # level up -> fireworks
-        await page.evaluate("localStorage.setItem('tempo:gameLevel', '1')")
-        await page.evaluate("window.__tempo.render()"); await page.wait_for_timeout(400)
+        await page.evaluate("window.__tempo.app.state.settings.game.celebrated = 1")
+        await page.evaluate("window.__tempo.gameRefresh()"); await page.wait_for_timeout(600)
         check('3i. levelling up is celebrated with fireworks', bool(await page.query_selector('canvas.fireworks')))
         await page.screenshot(path=f'{OUT}/r31-fireworks.png')
         await page.wait_for_timeout(3000)
