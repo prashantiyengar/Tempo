@@ -935,10 +935,22 @@ export function settingsDialog(ctx) {
           <label class="field"><span>“Since last event” starts this many minutes after it (0–15)</span><input type="number" name="sinceLastBuffer" min="0" max="15" step="1" value="${s.sinceLastBuffer || 0}"></label>
           <label class="field"><span>“Till next event” ends this many minutes before it (0–15)</span><input type="number" name="tillNextBuffer" min="0" max="15" step="1" value="${s.tillNextBuffer ?? s.sinceLastBuffer ?? 0}"></label>
         </div>`)}
-        ${sect('s-sleep', 'Analysis — assumed sleep', `
+        ${sect('s-sleep', 'Sleep', `
+          <label class="chk"><input type="checkbox" name="sleepEvents" ${s.sleepEvents ? 'checked' : ''}> Add a sleep block to my calendar for each night that has passed, in the hours below — around anything already there (an event from 2–3 am gives sleep before and after it)</label>
+          <label class="field"><span>Sleep blocks go on</span><select name="sleepCal"><option value="default">My main calendar</option><option value="local" ${s.sleepCal === 'local' ? 'selected' : ''}>Local (this browser only)</option></select></label>
           <label class="chk"><input type="checkbox" name="sleepAssume" ${s.sleepAssume !== false ? 'checked' : ''}> Count this time as sleep on nights with nothing else in it (Analysis covers the full 24 hours)</label>
           <div class="row"><input type="time" name="sleepStart" value="${esc(s.sleepStart || '23:00')}" step="900"> <span class="muted">to</span> <input type="time" name="sleepEnd" value="${esc(s.sleepEnd || '07:00')}" step="900"></div>
           <label class="field"><span>Counts as category</span><select name="sleepCategory">${A.sleepCatOptions(s)}</select></label>`)}
+        ${sect('s-game', 'Game mode', (() => {
+          const g = s.game || {};
+          const guess = (c) => /read|book|study|learn|course|sport|exercise|fitness|gym|run|health|practi|music|language|meditat|yoga/i.test(c.name);
+          const life = new Set(g.lifeCats?.length ? g.lifeCats : C.ordered(s).filter(guess).map((c) => c.id));
+          const rest = new Set(g.restCats?.length ? g.restCats : C.ordered(s).filter((c) => /leisure|free|fun|social|hobby|family/i.test(c.name)).map((c) => c.id));
+          return `<label class="chk"><input type="checkbox" name="gameOn" ${g.on ? 'checked' : ''}> Play Tempo as a game: earn XP for planning and doing things, and level up from 1 to 300</label>
+          <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b> (things that build long-term skills, e.g. reading, working out)</span><div class="g-catlist game-life">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gl-c" value="${esc(c.id)}" ${life.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+          <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="g-catlist game-rest">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gr-c" value="${esc(c.id)}" ${rest.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+          <p class="muted small" style="margin:0">Sleep counts too (your sleep blocks or sleep category). Progress is kept with your settings, so it follows you to your other devices.</p>`;
+        })())}
         ${sect('s-weather', 'Weather', `
           <label class="chk"><input type="checkbox" name="wxOn" ${wx.on ? 'checked' : ''}> Show the forecast at the top of each of the next 14 days</label>
           <div class="row wx-find-row"><input name="wxPlace" placeholder="City, e.g. Berlin" value="${esc(wx.name || '')}" autocomplete="off"><button type="button" class="btn small wx-find">Find</button><button type="button" class="btn small ghost wx-here">📍 My location</button></div>
@@ -1079,7 +1091,8 @@ export function settingsDialog(ctx) {
       's-leave': () => { const today = T.dayKey(Date.now(), s.tz); const up = Object.keys(leave).filter((k) => k >= today && S.LEAVE_KINDS[leave[k]]).sort(); return up.length ? `${up.length} upcoming day${up.length > 1 ? 's' : ''} · next ${T.format(T.dayStart(up[0], s.tz), s.tz, { day: 'numeric', month: 'short' })}` : 'None upcoming'; },
       's-display': () => `${optText('weekView')} · starts ${optText('weekStart')} · ${optText('h12')}`,
       's-events': () => `${val('defaultEventMinutes')} min · since/till buffers ${val('sinceLastBuffer') || 0}/${val('tillNextBuffer') || 0} min`,
-      's-sleep': () => (chk('sleepAssume') ? `${val('sleepStart')}–${val('sleepEnd')} · ${optText('sleepCategory')}` : 'Off'),
+      's-sleep': () => [chk('sleepEvents') ? 'Sleep blocks on' : '', chk('sleepAssume') ? 'assumed in Analysis' : '', `${val('sleepStart')}–${val('sleepEnd')}`].filter(Boolean).join(' · '),
+      's-game': () => (chk('gameOn') ? `On · ${$$('.gl-c:checked', dlg).length} life-growth categor${$$('.gl-c:checked', dlg).length === 1 ? 'y' : 'ies'}` : 'Off'),
       's-weather': () => (chk('wxOn') ? `${(val('wxPlace') || 'No place chosen').split(',')[0]} · °${val('wxUnit')}` : 'Off'),
       's-hours': () => `${val('bStart')}–${val('bEnd')}, ${days('bdays')}`,
       's-periods': () => periods.map((x) => x.name).filter(Boolean).join(', ') || 'None',
@@ -1358,6 +1371,10 @@ export function settingsDialog(ctx) {
         picSources: picSrc.map((x) => ({ ...x, name: (x.name || '').trim() || 'Pictures', value: (x.value || '').trim() })),
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
+        game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value),
+          started: s.game?.started || (f.gameOn.checked ? T.dayKey(Date.now(), s.tz) : undefined), active: f.gameOn.checked && !s.game?.on ? [...new Set([...(s.game?.active || []), T.dayKey(Date.now(), s.tz)])] : s.game?.active },
+        sleepEvents: f.sleepEvents.checked, sleepCal: f.sleepCal.value,
+        sleepEventsFrom: f.sleepEvents.checked ? (s.sleepEvents && s.sleepEventsFrom ? s.sleepEventsFrom : T.addDays(T.dayKey(Date.now(), s.tz), -1)) : s.sleepEventsFrom || null,
         sleepAssume: f.sleepAssume.checked, sleepCategory: f.sleepCategory.value || null, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
         dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),
         travelMinutes: Math.max(0, +f.travelMinutes.value || 0), repeatHorizonDays: Math.max(7, +f.repeatHorizonDays.value || 28),
@@ -1963,17 +1980,27 @@ export function habitDialog(ctx, habit = null) {
         <label class="field"><span>Unit</span><input name="unit" value="${esc(h0.unit || '')}" placeholder="e.g. glasses, km, pages" maxlength="20"></label>
         <label class="field"><span>Per</span><select name="nper"><option value="day" ${f0.per === 'day' ? 'selected' : ''}>day</option><option value="week" ${f0.per === 'week' ? 'selected' : ''}>week</option><option value="month" ${f0.per === 'month' ? 'selected' : ''}>month</option></select></label>
       </div>
-      <fieldset class="box hb-auto"><legend>Automatic, from your calendar</legend>
+      ${sect('hb-adv', 'Advanced: automatic tracking', `<div class="hb-auto">
         <label class="field"><span>Tick it off by itself</span><select name="amode">
           <option value="">No — I tick it off myself</option>
           <option value="tick" ${h0.auto?.mode === 'tick' ? 'selected' : ''}>Tick a day when an event or task contains…</option>
-          <option value="untick" ${h0.auto?.mode === 'untick' ? 'selected' : ''}>Tick every day, except when an event or task contains…</option></select></label>
-        <div class="hb-auto-more">
+          <option value="untick" ${h0.auto?.mode === 'untick' ? 'selected' : ''}>Tick every day, except when an event or task contains…</option>
+          <option value="hours" ${h0.auto?.mode === 'hours' ? 'selected' : ''}>Tick by hours spent in categories…</option></select></label>
+        <div class="hb-auto-words">
           <label class="field"><span>Words to look for in titles</span><input name="awords" value="${esc((h0.auto?.words || []).join(', '))}" placeholder="e.g. run, gym, swim (separate with commas)" autocomplete="off"></label>
-          <label class="field"><span>From</span><input type="date" data-quick="off" name="afrom" value="${esc(h0.auto?.from || T.addDays(T.dayKey(Date.now(), ctx.state.settings.tz), -30))}"></label>
-          <p class="muted small" style="margin:0">Only events and task sessions that have already started count, never future ones. Words match the start of a word, ignoring case — “run” finds “Morning run” and “Running”, not “Brunch”. A day you tick or untick yourself keeps your choice.</p>
+          <p class="muted small" style="margin:0">Words match the start of a word, ignoring case — “run” finds “Morning run” and “Running”, not “Brunch”.</p>
         </div>
-      </fieldset>
+        <div class="hb-auto-hours">
+          <div class="row"><label class="field"><span>When I spend</span><select name="aop"><option value="atLeast" ${h0.auto?.op !== 'atMost' ? 'selected' : ''}>at least</option><option value="atMost" ${h0.auto?.op === 'atMost' ? 'selected' : ''}>at most</option></select></label>
+            <label class="field"><span>Hours</span><input type="number" name="ahours" min="0" step="0.25" value="${h0.auto?.hours ?? 1}" class="num"></label>
+            <label class="field"><span>Per</span><select name="aper"><option value="day" ${h0.auto?.per !== 'week' ? 'selected' : ''}>day</option><option value="week" ${h0.auto?.per === 'week' ? 'selected' : ''}>week</option></select></label></div>
+          <div class="field"><span>…in these categories</span><div class="g-catlist hb-acats">${C.ordered(ctx.state.settings).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" name="acat" value="${esc(c.id)}" ${(h0.auto?.cats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+          <p class="muted small" style="margin:0">“At most” suits habits like “Not more than 2 h of screen time a day”. Per week: “at least” ticks the day your week's total gets there; “at most” ticks each day while the week stays under.</p>
+        </div>
+        <div class="hb-auto-from">
+          <label class="field"><span>From</span><input type="date" data-quick="off" name="afrom" value="${esc(h0.auto?.from || T.addDays(T.dayKey(Date.now(), ctx.state.settings.tz), -30))}"></label>
+          <p class="muted small" style="margin:0">Only time that has already passed counts, never future events or tasks. A day you tick or untick yourself keeps your choice.</p>
+        </div></div>`, { open: !!h0.auto })}
       <p class="muted small" style="margin:0">Tick a habit off in the list (click a day). Right-click or long-press a day to mark it skipped — a skipped day doesn't break your streak.</p>
     </div>
     <footer class="actions">${habit ? `<button type="button" class="btn ghost danger hb-del">Delete…</button><button type="button" class="btn ghost hb-arch">${habit.archived ? 'Unarchive' : 'Archive'}</button>` : ''}<span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">${habit ? 'Save' : 'Add habit'}</button></footer>
@@ -1985,10 +2012,13 @@ export function habitDialog(ctx, habit = null) {
       $('.hb-yesno', dlg).style.display = num ? 'none' : '';
       $('.hb-number', dlg).style.display = num ? '' : 'none';
       $('.hb-times', dlg).style.display = f.per.value === 'day' ? 'none' : '';
-      $('.hb-auto', dlg).style.display = num ? 'none' : '';
-      $('.hb-auto-more', dlg).style.display = f.amode.value ? '' : 'none';
+      $('details[data-sect=hb-adv]', dlg).style.display = num ? 'none' : '';
+      $('.hb-auto-words', dlg).style.display = f.amode.value === 'tick' || f.amode.value === 'untick' ? '' : 'none';
+      $('.hb-auto-hours', dlg).style.display = f.amode.value === 'hours' ? '' : 'none';
+      $('.hb-auto-from', dlg).style.display = f.amode.value ? '' : 'none';
     };
     f.addEventListener('change', sync); sync();
+    wireSects(dlg, { 'hb-adv': () => ({ tick: '⚡ by words', untick: '⚡ unless words', hours: '⚡ by hours' }[f.amode.value] || 'Off') });
     $('.hb-del', dlg)?.addEventListener('click', async () => { if (await choose(`Delete “${h0.name}”?`, 'Its whole history goes too. (Archiving keeps it.)', [{ value: true, label: 'Delete the habit', danger: true }])) close({ delete: true }); });
     $('.hb-arch', dlg)?.addEventListener('click', () => close({ ...h0, archived: !h0.archived }));
     f.addEventListener('submit', (e) => {
@@ -1999,7 +2029,12 @@ export function habitDialog(ctx, habit = null) {
       close({ ...h0, name, question: f.question.value.trim(), color: f.color.value || h0.color, type: num ? 'number' : 'yesno',
         freq: { per, times: num || per === 'day' ? 1 : Math.max(1, Math.min(per === 'week' ? 7 : 31, Math.round(+f.times.value || 1))) },
         target: num ? Math.max(0.1, +f.target.value || 1) : 1, unit: num ? f.unit.value.trim() : '',
-        auto: !num && f.amode.value && f.awords.value.trim() ? { mode: f.amode.value, words: [...new Set(f.awords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean))].slice(0, 12), from: f.afrom.value || T.dayKey(Date.now(), ctx.state.settings.tz) } : null });
+        auto: (() => {
+          const fromK = f.afrom.value || T.dayKey(Date.now(), ctx.state.settings.tz);
+          if (num || !f.amode.value) return null;
+          if (f.amode.value === 'hours') { const cats = $$('input[name=acat]:checked', dlg).map((x) => x.value); return cats.length ? { mode: 'hours', cats, op: f.aop.value, hours: Math.max(0, +f.ahours.value || 0), per: f.aper.value, from: fromK } : null; }
+          return f.awords.value.trim() ? { mode: f.amode.value, words: [...new Set(f.awords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean))].slice(0, 12), from: fromK } : null;
+        })() });
     });
   });
 }

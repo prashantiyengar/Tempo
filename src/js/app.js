@@ -22,6 +22,7 @@ import * as XT from './extras.js';
 import * as GL from './goals.js';
 import * as P from './projects.js';
 import * as HB from './habits.js';
+import * as GM from './game.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -294,7 +295,7 @@ function renderTimeGrid(days, items) {
     <div class="tg-head">
       <div class="tg-gutter"><span class="tz-label" title="${esc(z)}">${esc(tzAbbr())}</span></div>
       ${days.map((k) => `<div class="tg-dayhead ${k === todayK ? 'today' : ''} ${k < todayK ? 'past' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
-        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}</div>`).join('')}
+        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}${gameDayChip(k, items)}</div>`).join('')}
     </div>
     <div class="tg-allday">
       <div class="tg-gutter small muted">all-day</div>
@@ -410,6 +411,7 @@ function renderMonth({ days, monthKey }, items) {
 // ======================================================================================
 function renderSidebar() {
   renderMini();
+  renderGamePanel();
   const s = set(), hidden = new Set(s.hiddenCalendars || []);
   const cals = [
     ...(E.connected(st()) ? (st().gmeta.calendars || []) : []),
@@ -605,7 +607,7 @@ function habitCell(h, k) {
     return `<button type="button" class="hb-c num ${v > 0 ? 'on' : ''} ${done ? 'full' : ''} ${v === -1 ? 'skip' : ''}" data-k="${k}" style="--c:${h.color}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}">${v === -1 ? '»' : `<b>${v > 0 ? HB.fmtNum(v) : '0'}</b><small>${esc(h.unit || '')}</small>`}</button>`;
   }
   const auto = HB.isAuto(h, k), hit = h.autoHit?.[k];
-  const why = auto ? (h.auto.mode === 'tick' ? (hit ? ` — ticked automatically: “${hit}”` : ' — nothing on the calendar matched') : (hit ? ` — unticked automatically: “${hit}”` : ' — ticked automatically: nothing matched')) : HB.autoOn(h) && HB.isManual(h, k) ? ' — set by hand' : '';
+  const why = auto && h.auto.mode === 'hours' ? ` — ${v === 1 ? 'ticked' : 'not ticked'} automatically: ${hit || ''} (${h.auto.op === 'atMost' ? 'at most' : 'at least'} ${h.auto.hours} h per ${h.auto.per === 'week' ? 'week' : 'day'})` : auto ? (h.auto.mode === 'tick' ? (hit ? ` — ticked automatically: “${hit}”` : ' — nothing on the calendar matched') : (hit ? ` — unticked automatically: “${hit}”` : ' — ticked automatically: nothing matched')) : HB.autoOn(h) && HB.isManual(h, k) ? ' — set by hand' : '';
   return `<button type="button" class="hb-c ${v === 1 ? 'on' : v === -1 ? 'skip' : ''} ${auto ? 'auto' : ''}" data-k="${k}" style="--c:${h.color}" aria-pressed="${v === 1}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}${v === -1 ? ' — skipped' : ''}${esc(why)}">${v === 1 ? '✓' : v === -1 ? '»' : '✕'}</button>`;
 }
 function renderHabits(box, { days = 5 } = {}) {
@@ -615,7 +617,7 @@ function renderHabits(box, { days = 5 } = {}) {
   setHTML(box, `<div class="hb-list" style="--hb-days:${days}">
       <div class="hb-row hb-headrow"><span class="hb-name"><button type="button" class="link hb-add" title="New habit">+ New${days > 4 ? ' habit' : ''}</button></span>${keys.map((k) => `<span class="hb-day"><b>${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }).slice(0, 3).toUpperCase())}</b>${T.parseKey(k).d}</span>`).join('')}</div>
       ${habits.map((h) => { const sc = HB.score(h, s, today); return `<div class="hb-row" data-id="${esc(h.id)}" style="--c:${h.color}">
-        <button type="button" class="hb-name" title="${esc(h.question || h.name)} — ${Math.round(sc * 100)}% · ${esc(HB.freqLabel(h))}">${ringSVG(sc, h.color)}<span class="hb-n">${esc(h.name)}</span>${HB.autoOn(h) ? `<span class="hb-autoic" title="Ticked automatically from your calendar: ${esc(h.auto.mode === 'tick' ? 'when' : 'unless')} a title contains ${esc(h.auto.words.join(', '))}">⚡</span>` : ''}</button>
+        <button type="button" class="hb-name" title="${esc(h.question || h.name)} — ${Math.round(sc * 100)}% · ${esc(HB.freqLabel(h))}">${ringSVG(sc, h.color)}<span class="hb-n">${esc(h.name)}</span>${HB.autoOn(h) ? `<span class="hb-autoic" title="${esc(h.auto.mode === 'hours' ? `Ticked automatically: ${h.auto.op === 'atMost' ? 'at most' : 'at least'} ${h.auto.hours} h per ${h.auto.per === 'week' ? 'week' : 'day'} in ${h.auto.cats.map((id) => C.catLabel(C.catById(set(), id)) || id).join(', ')}` : `Ticked automatically from your calendar: ${h.auto.mode === 'tick' ? 'when' : 'unless'} a title contains ${h.auto.words.join(', ')}`)}">⚡</span>` : ''}</button>
         ${keys.map((k) => habitCell(h, k)).join('')}</div>`; }).join('') || `<p class="muted small empty">Track habits like exercise, reading or water: tick each day off, and watch the score ring fill up. <button type="button" class="link hb-add">Add your first habit</button></p>`}
       ${archived.length ? `<details class="hb-arch-l"><summary class="muted small">Archived (${archived.length})</summary>${archived.map((h) => `<button type="button" class="link hb-open-a" data-id="${esc(h.id)}">${esc(h.name)}</button>`).join(' · ')}</details>` : ''}
     </div>`);
@@ -649,6 +651,212 @@ function wireHabitCell(c, id) {
     putHabit(v.skip ? HB.setValue(h, k, -1) : HB.setValue(h, k, v.v === '' ? null : +v.v), 'habit amount');
   });
 }
+// ======================================================================================
+// Game mode: XP, levels, quests, achievements (see game.js)
+// ======================================================================================
+const gameOn = () => !!set().game?.on;
+function gameCtx(items) {
+  const s = set(), now = Date.now();
+  const tasks = st().tasks.map((t) => {
+    const pr = S.progress(t, now);
+    const done = (t.frozen || []).filter((c) => c.status === 'done');
+    return { ...t, _finishedAt: !t.repeat && pr.pct >= 100 && done.length ? Math.max(...done.map((c) => c.end)) : null, _sessions: S.sessions(t).length };
+  });
+  const projectsDone = P.list(s).map((p) => { const pr = P.progress(p, st().tasks, now, projectEventDone); return pr.complete ? { name: p.name, at: Math.max(0, ...pr.rows.map((r) => r.task?._finishedAt || r.st.end || 0), ...pr.rows.filter((r) => r.task).map((r) => Math.max(0, ...(r.task.frozen || []).filter((c) => c.status === 'done').map((c) => c.end)))) } : null; }).filter(Boolean);
+  const goals = Object.values(s.goals || {}).flat().filter((g) => g.done && g.doneAt);
+  return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), goals, history: s.history || [] };
+}
+function gameDayChip(k, items) {
+  if (!gameOn()) return '';
+  const today = T.dayKey(Date.now(), tz()), led = set().game?.ledger?.[k];
+  if (k < today && led) return `<span class="xp-chip ${led.net < 0 ? 'neg' : ''}" title="XP that day: ${led.net >= 0 ? '+' : ''}${led.net}">${led.net >= 0 ? '+' : ''}${led.net} XP</span>`;
+  if (k < (set().game?.started || today)) return '';
+  const d = GM.dayXP(k, set(), gameCtx(items));
+  if (k > today) return d.potential.total ? `<span class="xp-chip pot" title="XP you can earn by completing this day's events and sessions">+${d.potential.total} possible</span>` : '';
+  return `<span class="xp-chip ${d.net < 0 ? 'neg' : ''}" title="${esc(`${d.net >= 0 ? 'Earned' : 'Net'} ${d.net} XP so far${k === today && d.potential.total ? `, ${d.potential.total} more to earn today` : ''}`)}">${d.net >= 0 ? '+' : ''}${d.net}${k === today && d.potential.total ? ` <i>· +${d.potential.total} to go</i>` : ''}</span>`;
+}
+// What an event / session is worth, for its popup
+function gameXPLine(it) {
+  if (!gameOn()) return '';
+  const x = GM.itemXP(it, set());
+  const parts = [x.busy ? `<b class="xp-b">+${x.busy} busy</b>` : '', x.life ? `<b class="xp-l">+${x.life} life</b>` : '', x.app ? `<b class="xp-a">+${x.app} app</b>` : ''].filter(Boolean);
+  if (!parts.length) return '';
+  return `<div class="pop-row small xp-line">🎮 ${x.done ? 'Earned' : 'Completing this earns'} ${parts.join(' ')} <span class="muted">(${esc(x.why.join(', '))})</span></div>`;
+}
+const gameSave = async () => { await E.persist(st(), ['settings']); syncSharedSoon(); };
+// Mark today as a day you used Tempo
+async function gameActive() {
+  if (!gameOn()) return;
+  const g = set().game, k = T.dayKey(Date.now(), tz());
+  if (!(g.active || []).includes(k)) { g.active = [...(g.active || []), k].slice(-400); await gameSave(); }
+}
+// Settle past days (and finished weeks) into the ledger, work out today, check achievements and level-ups.
+let gameBusy = false;
+async function gameRefresh() {
+  if (!gameOn() || gameBusy) return;
+  gameBusy = true;
+  try {
+    const s = set(), g = s.game, z = tz(), now = Date.now(), today = T.dayKey(now, z);
+    g.started ||= today; g.ledger ||= {}; g.weeks ||= {}; g.ach ||= {};
+    const first = [g.started, T.addDays(today, -35)].sort()[1];
+    const open = []; for (let k = first; k < today; k = T.addDays(k, 1)) if (!g.ledger[k]) open.push(k);
+    const items = await collectItems([open[0] || today, T.addDays(today, 30)].sort());
+    const ctx = gameCtx(items);
+    let changed = false;
+    for (const k of open) {
+      const d = GM.dayXP(k, s, ctx, now);
+      g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
+      changed = true;
+    }
+    // weeks that are over
+    for (let wk = T.startOfWeek(g.started, s.weekStart ?? 1); T.addDays(wk, 7) <= today; wk = T.addDays(wk, 7)) {
+      if (g.weeks[wk]) continue;
+      const days = Array.from({ length: 7 }, (_, i) => g.ledger[T.addDays(wk, i)]).filter(Boolean);
+      if (!days.length) continue;
+      const w = GM.weekXP(wk, s, days); g.weeks[wk] = { b: w.busy, fill: +w.fill.toFixed(3), pens: w.pens }; changed = true;
+      if (w.fill >= 0.6) unlock('full-week'); if (w.pens === 0 && days.length >= 5) unlock('clean-week');
+    }
+    app.gameToday = GM.dayXP(today, s, ctx, now);
+    // achievements
+    function unlock(id) { if (!g.ach[id]) { g.ach[id] = now; changed = true; const a = GM.ACHIEVEMENTS.find((x) => x[0] === id); if (a) setTimeout(() => toast(`🏆 Achievement: ${a[1]} ${a[2]} — ${a[3]} (+${GM.ACH_XP} XP)`, { ms: 6000 }), 300); } }
+    const tot = gameTotals();
+    let streak = 0; for (let d = today; (g.active || []).includes(d); d = T.addDays(d, -1)) streak++;
+    if (st().tasks.length) unlock('first-task'); if (P.list(s).length) unlock('first-project');
+    if (streak >= 7) unlock('streak-7'); if (streak >= 30) unlock('streak-30');
+    const sessDone = st().tasks.reduce((a, t) => a + (t.frozen || []).filter((c) => c.status === 'done' && c.end >= T.dayStart(g.started, z)).length, 0);
+    if (sessDone >= 25) unlock('sessions-25'); if (sessDone >= 100) unlock('sessions-100');
+    if (tot.life >= 1000) unlock('life-1000'); if (tot.life >= 10000) unlock('life-10000');
+    const lv = GM.levelOf(tot.total, tot.life).level;
+    if (lv >= 20) unlock('level-20'); if (lv >= 50) unlock('level-50'); if (lv >= 100) unlock('level-100');
+    if (changed) await gameSave();
+    renderGamePanel();
+  } catch (err) { console.warn('Tempo: game', err); }
+  finally { gameBusy = false; }
+}
+function gameTotals() {
+  const g = set().game || {}, t = { app: 0, busy: 0, life: 0, pen: 0 };
+  for (const d of Object.values(g.ledger || {})) { t.app += d.a || 0; t.busy += d.b || 0; t.life += d.l || 0; t.pen += d.p || 0; }
+  for (const w of Object.values(g.weeks || {})) t.busy += w.b || 0;
+  t.app += Object.keys(g.ach || {}).length * GM.ACH_XP;
+  const d = app.gameToday; if (d) { t.app += d.app; t.busy += d.busy; t.life += d.life; t.pen += d.pen; }
+  t.total = Math.max(0, t.app + t.busy + t.life - t.pen);
+  return t;
+}
+// The sidebar panel: rank emblem, level, progress, XP by type, streak, today, quests
+function renderGamePanel() {
+  const box = $('#game-panel'); if (!box) return;
+  document.body.classList.toggle('game-on', gameOn());
+  if (!gameOn()) { box.hidden = true; return; }
+  box.hidden = false;
+  const g = set().game, tot = gameTotals(), lv = GM.levelOf(tot.total, tot.life), tier = GM.tierOf(lv.level), today = T.dayKey(Date.now(), tz());
+  let streak = 0; for (let d = today; (g.active || []).includes(d); d = T.addDays(d, -1)) streak++;
+  const d = app.gameToday;
+  const pct = lv.max ? 100 : Math.min(100, (lv.into / Math.max(1, lv.span)) * 100);
+  const share = (x) => (tot.app + tot.busy + tot.life ? (x / (tot.app + tot.busy + tot.life)) * 100 : 0);
+  let collapsed = false; try { collapsed = localStorage.getItem('tempo:gameCollapsed') === '1'; } catch { /* storage blocked */ }
+  setHTML(box, `<button type="button" class="gp-head" aria-expanded="${!collapsed}">${GM.emblemSVG(lv.level, collapsed ? 30 : 46)}<span class="gp-t"><b>Level ${lv.level}</b><span>${esc(tier.name)}</span></span><span class="gp-today ${d && d.net < 0 ? 'neg' : ''}" title="XP today">${d ? `${d.net >= 0 ? '+' : ''}${d.net}` : ''}</span><span class="sec-caret">▾</span></button>
+    <div class="gp-bar" title="${lv.into} / ${lv.span} XP to level ${lv.level + 1}"><i style="width:${pct}%;--tc:${tier.color}"></i></div>
+    <div class="gp-body" ${collapsed ? 'hidden' : ''}>
+      <div class="gp-sub">${lv.max ? 'Highest level reached!' : lv.capped ? `Enough XP for level ${lv.level + 1}` : `${lv.into.toLocaleString()} / ${lv.span.toLocaleString()} XP to level ${lv.level + 1}`}${lv.capped ? `<br><b class="xp-l">🔒 ${lv.lifeNeed.toLocaleString()} more life XP</b> to unlock level ${lv.level + 1}` : ''}</div>
+      <div class="gp-mix" title="Your XP by type"><i class="xp-a-bg" style="width:${share(tot.app)}%"></i><i class="xp-b-bg" style="width:${share(tot.busy)}%"></i><i class="xp-l-bg" style="width:${share(tot.life)}%"></i></div>
+      <div class="gp-types"><span class="xp-a">● App ${tot.app.toLocaleString()}</span><span class="xp-b">● Busy ${tot.busy.toLocaleString()}</span><span class="xp-l">● Life ${tot.life.toLocaleString()}</span>${tot.pen ? `<span class="xp-p">− ${tot.pen.toLocaleString()} rescheduling</span>` : ''}</div>
+      <div class="gp-row"><span title="Days in a row you used Tempo">🔥 ${streak} day${streak === 1 ? '' : 's'}</span><span title="Total XP">⭐ ${tot.total.toLocaleString()} XP</span>${d?.potential?.total ? `<span title="Still to earn today">🎯 +${d.potential.total} today</span>` : ''}</div>
+      ${d?.quests?.length ? `<div class="gp-q"><b>Today's quests</b>${d.quests.map((q) => `<div class="gp-qi ${q.ok ? 'ok' : ''}"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span><i style="width:${Math.min(100, (q.have / q.goal) * 100)}%"></i></div>`).join('')}</div>` : ''}
+      <div class="gp-row"><button type="button" class="link gp-more">Ranks, achievements & XP log</button></div>
+    </div>`);
+  $('.gp-head', box).onclick = () => { try { localStorage.setItem('tempo:gameCollapsed', collapsed ? '0' : '1'); } catch { /* storage blocked */ } renderGamePanel(); };
+  $('.gp-more', box)?.addEventListener('click', gameDetails);
+  // level up?
+  let prev = 0; try { prev = +localStorage.getItem('tempo:gameLevel') || 0; } catch { /* storage blocked */ }
+  if (prev && lv.level > prev) {
+    const newTier = GM.tierOf(lv.level).from > GM.tierOf(prev).from;
+    fireworks(newTier ? 3600 : 2200);
+    toast(newTier ? `🎉 New rank: ${tier.icon} ${tier.name} — level ${lv.level}!` : `🎉 Level ${lv.level}!`, { ms: 6000 });
+  }
+  try { localStorage.setItem('tempo:gameLevel', String(lv.level)); } catch { /* storage blocked */ }
+}
+// Ranks (with their emblems), achievements and the XP log of the last days
+async function gameDetails() {
+  const g = set().game, tot = gameTotals(), lv = GM.levelOf(tot.total, tot.life);
+  const days = Object.entries(g.ledger || {}).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14);
+  const t = app.gameToday;
+  await modal(`<div class="g-details"><header class="dlg-head"><h2>🎮 Level ${lv.level} · ${esc(GM.tierOf(lv.level).name)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
+    <h3 class="gd-h">Ranks</h3><div class="gd-tiers">${GM.TIERS.map(([L, n]) => `<div class="gd-tier ${lv.level >= L ? 'got' : ''}">${GM.emblemSVG(L, 54)}<b>${esc(n)}</b><span class="muted small">level ${L}${lv.level < L ? ` · ${(GM.xpFor(L) - tot.total).toLocaleString()} XP to go` : ' ✓'}</span></div>`).join('')}</div>
+    <h3 class="gd-h">Achievements <span class="muted small">${Object.keys(g.ach || {}).length}/${GM.ACHIEVEMENTS.length} · +${GM.ACH_XP} XP each</span></h3>
+    <div class="gd-ach">${GM.ACHIEVEMENTS.map(([id, ic, n, d]) => `<div class="gd-a ${g.ach?.[id] ? 'got' : ''}" title="${esc(d)}"><span>${ic}</span><b>${esc(n)}</b><span class="muted small">${esc(d)}</span></div>`).join('')}</div>
+    <h3 class="gd-h">XP log</h3>
+    ${t ? `<details open class="gd-day"><summary><b>Today</b> <span class="${t.net < 0 ? 'xp-p' : ''}">${t.net >= 0 ? '+' : ''}${t.net} XP</span></summary>${t.lines.map(([l, ty, x]) => `<div class="gd-line"><span>${esc(l)}</span><b class="xp-${ty === 'pen' ? 'p' : ty[0]}">${x > 0 ? '+' : ''}${x}</b></div>`).join('') || '<p class="muted small">Nothing yet today.</p>'}</details>` : ''}
+    ${days.map(([k, d]) => `<details class="gd-day"><summary><b>${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}</b> <span class="${d.net < 0 ? 'xp-p' : ''}">${d.net >= 0 ? '+' : ''}${d.net} XP</span> <span class="muted small">${Math.round((d.fill || 0) * 100)}% planned</span></summary>${(d.top || []).map(([l, ty, x]) => `<div class="gd-line"><span>${esc(l)}</span><b class="xp-${ty === 'pen' ? 'p' : ty[0]}">${x > 0 ? '+' : ''}${x}</b></div>`).join('')}</details>`).join('')}
+    <h3 class="gd-h">How XP works</h3>
+    <ul class="small gd-rules"><li><b class="xp-b">Busy</b>: events you attend (longer ones earn more; ticked off ×1.2), task sessions you complete (each later session of a task is worth 8% more), finished tasks and projects, a full day (at least half of 7:00–23:00 planned), keeping to the plan, and a weekly bonus for how much of the week was planned.</li>
+      <li><b class="xp-l">Life</b>: time in your life-growth categories (set in Settings → General → Game mode), sleep, some leisure, habits ticked off and goals reached. Going up levels needs a share of life XP — never more than a quarter.</li>
+      <li><b class="xp-a">App</b>: opening Tempo each day (more for a streak), scheduling events and tasks (a fifth of what they're worth — the rest comes when you do them), starting projects, logging habits, achievements.</li>
+      <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — more each time the same task slips again within a week.</li></ul>
+  </div></div>`, () => {}, { cls: 'wide' });
+}
+// A short burst of fireworks over the page
+function fireworks(ms = 2200) {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const c = document.createElement('canvas'); c.className = 'fireworks'; document.body.appendChild(c);
+  const dpr = devicePixelRatio || 1; c.width = innerWidth * dpr; c.height = innerHeight * dpr;
+  const x = c.getContext('2d'); x.scale(dpr, dpr);
+  const parts = [], colors = ['#ffd54f', '#ff7043', '#4fc3f7', '#81c784', '#ba68c8', '#f06292', '#fff'];
+  const burst = () => { const cx = innerWidth * (0.2 + Math.random() * 0.6), cy = innerHeight * (0.15 + Math.random() * 0.35), col = colors[Math.floor(Math.random() * colors.length)]; for (let i = 0; i < 70; i++) { const a = Math.random() * Math.PI * 2, v = 1.5 + Math.random() * 4.5; parts.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 60 + Math.random() * 30, col }); } };
+  const t0 = performance.now(); let last = 0;
+  const step = (t) => {
+    if (t - last > 350 && t - t0 < ms - 600) { burst(); last = t; }
+    x.clearRect(0, 0, innerWidth, innerHeight);
+    for (const p of parts) { p.x += p.vx; p.y += p.vy; p.vy += 0.06; p.vx *= 0.985; p.life--; if (p.life > 0) { x.globalAlpha = Math.min(1, p.life / 40); x.fillStyle = p.col; x.beginPath(); x.arc(p.x, p.y, 2.2, 0, 7); x.fill(); } }
+    for (let i = parts.length - 1; i >= 0; i--) if (parts[i].life <= 0) parts.splice(i, 1);
+    if (t - t0 < ms || parts.length) requestAnimationFrame(step); else c.remove();
+  };
+  burst(); requestAnimationFrame(step);
+}
+
+// ======================================================================================
+// Sleep blocks: for each night that has passed, add "Sleep" events in your sleep hours (e.g. 23:00–07:00) around
+// anything already there (an event from 2–3 am gives 23:00–02:00 and 03:00–07:00). Optional (Settings → General).
+// ======================================================================================
+let sleepAt = 0, sleepBusy = false;
+async function addSleepBlocks({ force = false } = {}) {
+  const s = set();
+  if (!s.sleepEvents || sleepBusy || (!force && Date.now() - sleepAt < 10 * T.MIN)) return;
+  sleepBusy = true; sleepAt = Date.now();
+  try {
+    const z = tz(), now = Date.now(), today = T.dayKey(now, z);
+    const a = s.sleepStart || '23:00', b = s.sleepEnd || '07:00';
+    const done = new Set(s.sleepDone || []);
+    const since = s.sleepEventsFrom || T.addDays(today, -1);
+    const nights = [];
+    for (let d = T.addDays(today, -3); d <= today; d = T.addDays(d, 1)) {
+      const st0 = T.atTime(d, a, z), en = T.parseHHMM(b) > T.parseHHMM(a) ? T.atTime(d, b, z) : T.atTime(T.addDays(d, 1), b, z);
+      if (en <= now && d >= since && !done.has(d)) nights.push({ d, st: st0, en }); // `since` = the first night (the evening it starts)
+    }
+    if (!nights.length) return;
+    const items = await collectItems([nights[0].d, T.addDays(nights[nights.length - 1].d, 1)]);
+    const cat = s.sleepCategory && C.catById(s, s.sleepCategory);
+    const cal = s.sleepCal === 'local' ? E.LOCAL_CAL : ctx.defaultCalendar();
+    let made = 0;
+    for (const n of nights) {
+      const inNight = items.filter((it) => !it.allDay && it.end > n.st && it.start < n.en && !it.declined);
+      if (inNight.some((it) => it.ev?.extendedProperties?.private?.tempoSleep)) { done.add(n.d); continue; } // already there (another device)
+      const busy = S.merge(inNight.filter((it) => it.ev?.transparency !== 'transparent').map((it) => ({ start: Math.max(it.start, n.st), end: Math.min(it.end, n.en) })));
+      const gaps = S.subtract([{ start: n.st, end: n.en }], busy).filter((g) => g.end - g.start >= 15 * T.MIN);
+      for (const g of gaps) {
+        const priv = { tempoSleep: n.d, ...(cat ? { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color, tempoCatIcon: cat.icon || '' } : {}) };
+        await EV.createEvent(st(), cal, { summary: `${cat?.icon && cat.icon !== '😴' ? cat.icon + ' ' : ''}😴 Sleep`, start: { dateTime: new Date(g.start).toISOString(), timeZone: z }, end: { dateTime: new Date(g.end).toISOString(), timeZone: z },
+          transparency: 'opaque', reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv } });
+        made++;
+      }
+      done.add(n.d);
+    }
+    s.sleepDone = [...done].sort().slice(-40);
+    await E.persist(st(), ['settings', 'localEvents']); syncSharedSoon();
+    if (made) { E.invalidate(); await render(); toast(`😴 Added ${made} sleep block${made > 1 ? 's' : ''} for last night`, { ms: 4000 }); }
+  } catch (err) { handleError(err); }
+  finally { sleepBusy = false; }
+}
+
 // Automatic habits: look at the events and task sessions of the days since "from" (up to 60 days back each time)
 // and tick / untick them. Runs after each refresh (at most every 2 minutes) and right after a habit is set up.
 let habitAutoAt = 0, habitAutoBusy = false;
@@ -1062,6 +1270,7 @@ async function askScope(verb) {
 
 async function commitMove(it, start, end) {
   try {
+    if (gameOn() && (it.kind === 'chunk' || it.end < start || it.start > end || Math.abs(start - it.start) >= 30 * T.MIN)) logHistory({ kind: 'resched', task: it.task, title: it.title, t: it.start });
     if (it.kind === 'chunk') {
       replaceTask(S.pinSession(it.task, it.sess.id, start, end));
       await saveTasks(`move “${it.task.title}” session`);
@@ -1268,6 +1477,7 @@ function openItem(it, rect) {
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
       <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}${!it.allDay ? '<button class="btn small ghost add-during" title="Record something else you did during this event, e.g. an hour of chores during childcare">＋ Add during this</button>' : ''}</div>
+      ${gameXPLine(it)}
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
     $('.x', p).onclick = close;
@@ -1316,6 +1526,7 @@ function openChunk(it, rect) {
       <div class="pop-row small"><button class="cat-chip on pop-cat" ${task.categoryId ? `style="--c:${esc(task.color)}"` : ''}>${task.categoryId ? `<i></i>${esc(C.catLabel(C.catById(s, task.categoryId)) || task.categoryName || 'Category')}` : '+ Category'} ▾</button></div>
       <div class="pop-row small">Part of <b>${esc(task.title)}</b> · rank ${task.rank} · due ${esc(T.format(task.deadline, z, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 }))}</div>
       <div class="pop-row"><div class="bar"><i style="width:${p.pct}%;background:${task.color}"></i></div><div class="muted small">${T.fmtDur(p.done)} of ${T.fmtDur(p.total)} done</div></div>
+      ${gameXPLine(it)}
       <div class="pop-row small">${!E.connected(st()) ? '<span class="muted">Only in this browser (Google not connected)</span>' : sess.gid ? '<span class="g-ok">✓ On Google Calendar</span>' : '<span class="g-bad">Not on Google Calendar yet</span> <button class="link sync-now">Sync now</button>'}</div>
       <div class="pop-actions">
         ${isDone ? '<button class="btn small undone">↺ Mark undone</button>' : '<button class="btn small primary done">✓ Mark done</button>'}
@@ -1857,7 +2068,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     renderBanner();
   }
   markBaseline();
-  autoHabits();
+  addSleepBlocks().then(() => autoHabits()).then(() => gameRefresh());
   await handleProblems(problems);
 }
 
@@ -2502,10 +2713,10 @@ async function renderGoalsView(seq) {
             <button type="button" class="link g-cats" data-head="${p.head}" title="Which categories of events and tasks count towards ${p.label.toLowerCase()} goals (all periods)">${p.cats.length ? 'counts: ' + esc(p.cats.map(catName).join(', ')) : 'set categories that count'}</button>
             <span class="g-time">${esc(tm)}</span><button type="button" class="g-plus" data-head="${p.head}" title="Add a ${p.label.toLowerCase()} goal" aria-label="Add a ${p.label.toLowerCase()} goal to ${esc(title)}">+</button></div>
           ${bar}
-          <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
+          <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}" ${g.ruleState ? `data-auto="${g.ruleState.done ? 1 : 0}"` : ''}>
             <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
             ${catBox(g.cats, p, false, GL.goalWords(g))}
-            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud" title="${pg ? `${hrs(pg.done)} done${pg.planned ? `, ${hrs(pg.planned)} scheduled` : ''} in this period` : ''}">⏱ ${pg ? `${hrs(pg.done)} done${pg.planned ? ` + ${hrs(pg.planned)} scheduled` : ''}${g.budget ? ' / ' : ''}` : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}</button>
+            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud" title="${pg ? `${hrs(pg.done)} done${pg.planned ? `, ${hrs(pg.planned)} scheduled` : ''} in this period` : ''}">⏱ ${pg ? `${hrs(pg.done)} done${pg.planned ? ` + ${hrs(pg.planned)} scheduled` : ''}${g.budget ? ' / ' : ''}` : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}${g.ruleState ? ` <span class="g-rule-b ${g.ruleState.done ? 'ok' : g.ruleState.failed ? 'bad' : ''}" title="Reached automatically: ${esc(GL.ruleText(g.rule))}${g.override != null ? ' (you set it yourself)' : ''}">⚡ ${esc(g.ruleState.text)}</span>` : ''}</button>
             <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
 
         </div>`;
@@ -2536,7 +2747,12 @@ async function renderGoalsView(seq) {
     $$('.g-cats', c).forEach((b) => (b.onclick = () => editHeadCats(b.dataset.head)));
     $$('.g-row', c).forEach((r) => {
       const id = r.dataset.id;
-      $('.g-done', r).onchange = (e) => saveGoals(GL.update(set(), key, id, { done: e.target.checked, doneAt: e.target.checked ? Date.now() : null }), e.target.checked ? 'goal reached' : 'goal reopened');
+      $('.g-done', r).onchange = (e) => {
+        const ch = e.target.checked, auto = r.dataset.auto;
+        // a goal with a rule: ticking it yourself overrides the rule; matching the rule again hands it back
+        const extra = auto != null ? { override: (auto === '1') === ch ? null : ch } : {};
+        saveGoals(GL.update(set(), key, id, { done: ch, doneAt: ch ? Date.now() : null, ...extra }), ch ? 'goal reached' : 'goal reopened');
+      };
       $('.g-up', r).onclick = () => saveGoals(GL.move(set(), key, id, -1));
       $('.g-down', r).onclick = () => saveGoals(GL.move(set(), key, id, 1));
       $('.g-del', r).onclick = async () => {
@@ -2581,6 +2797,7 @@ async function addGoalDialog(key, head0, x) {
       </div>
       <div class="field"><span>Counts towards it</span><div class="row"><span class="g-addbox"></span><span class="muted small g-addbox-note">the head's categories</span></div></div>
       ${wordsFieldHTML([], 'either')}
+      ${goalRuleHTML(null, every || 'year')}
       ${every ? `<label class="chk"><input type="checkbox" name="rep"> Repeat every ${every}</label>` : ''}
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Add goal</button></div></form>`,
   (dlg, close) => {
@@ -2595,17 +2812,22 @@ async function addGoalDialog(key, head0, x) {
     const drawAll = () => { drawBox0(); syncWordsField(dlg, cats.length); if (GL.parseWords(f.w.value).length && !cats.length) $('.g-addbox-note', dlg).textContent = 'only the text below'; };
     f.h.onchange = drawAll; f.w.oninput = drawAll; drawAll();
     $('.g-addbox', dlg).addEventListener('click', () => setTimeout(drawAll, 50), true);
-    f.onsubmit = (e) => { e.preventDefault(); const t = f.t.value.trim(); if (!t) { f.t.focus(); return; } const b = parseFloat(f.b.value); close({ text: t, head: f.h.value, budget: b > 0 ? b * 60 : null, cats, words: GL.parseWords(f.w.value), wmode: f.wm?.value || 'either', rep: !!f.rep?.checked }); };
+    f.onsubmit = (e) => { e.preventDefault(); const t = f.t.value.trim(); if (!t) { f.t.focus(); return; } const b = parseFloat(f.b.value); close({ text: t, head: f.h.value, budget: b > 0 ? b * 60 : null, cats, words: GL.parseWords(f.w.value), wmode: f.wm?.value || 'either', rule: readGoalRule(dlg), rep: !!f.rep?.checked }); };
+    D.wireSects(dlg, { 'g-rule': () => { const r = readGoalRule(dlg); return r ? `⚡ ${GL.ruleText(r)}` : 'Off'; } });
   }, { cls: 'narrow' });
   if (!r) return;
   if (r.rep && every) {
     const before = set().goalRepeats;
-    set().goalRepeats = GL.addRepeat(set(), every, key, r);
+    set().goalRepeats = GL.addRepeat(set(), every, key, r).map((x, i, a) => (i === a.length - 1 && r.rule ? { ...x, rule: r.rule } : x));
     const g = GL.materialize(set(), [key]);
     await saveGoals(g || set().goals, 'add repeating goal');
     const u = undoStack[undoStack.length - 1]; if (u) { const f0 = u.undo; u.undo = async () => { set().goalRepeats = before; await f0(); }; }
     toast(`Added — repeats every ${every}`);
-  } else saveGoals(GL.add(set(), key, r.text, { head: r.head, budget: r.budget, cats: r.cats, words: r.words, wmode: r.wmode }), 'add goal');
+  } else {
+    const gs = GL.add(set(), key, r.text, { head: r.head, budget: r.budget, cats: r.cats, words: r.words, wmode: r.wmode });
+    if (r.rule) { const l = gs[key]; l[l.length - 1] = { ...l[l.length - 1], rule: r.rule }; }
+    saveGoals(gs, 'add goal');
+  }
 }
 
 // The icon box next to a goal: its own categories' icons, or a faint tag when it uses the head's categories.
@@ -2615,6 +2837,17 @@ function catBoxInner(cats, head) {
   if (!list.length) return '<span class="g-cb-none">🏷</span>';
   return list.slice(0, 3).map((c) => `<span class="g-cb-ic" style="--c:${esc(c.color)}">${esc(c.icon || C.parentOf(s, c)?.icon || c.name.slice(0, 1))}</span>`).join('') + (list.length > 3 ? `<span class="g-cb-more">+${list.length - 3}</span>` : '');
 }
+// "Advanced: complete automatically" block of the goal dialogs (a rule on hours in categories).
+function goalRuleHTML(r, every) {
+  const s = set();
+  return D.sect('g-rule', 'Advanced: complete automatically', `
+    <div class="row"><label class="field"><span>Mark it reached when I spend</span><select name="rop"><option value="">— off —</option><option value="atLeast" ${r?.op === 'atLeast' ? 'selected' : ''}>at least</option><option value="atMost" ${r?.op === 'atMost' ? 'selected' : ''}>at most</option></select></label>
+      <label class="field"><span>Hours</span><input type="number" name="rh" min="0" step="0.25" value="${r?.hours ?? 5}" class="num"></label>
+      <label class="field"><span>Counted</span><select name="rper"><option value="period" ${!r?.per || r.per === 'period' ? 'selected' : ''}>in the whole ${every || 'period'}</option><option value="day" ${r?.per === 'day' ? 'selected' : ''}>every day</option>${every !== 'week' ? `<option value="week" ${r?.per === 'week' ? 'selected' : ''}>every week</option>` : ''}</select></label></div>
+    <div class="field"><span>…in these categories <em class="muted">(none ticked = the goal's categories)</em></span><div class="g-catlist g-rcats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" name="rcat" value="${esc(c.id)}" ${(r?.cats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+    <p class="muted small" style="margin:0">Only time that has passed counts. “At least” is reached as soon as you get there; “at most” is reached when the period ends without going over (and shows as missed as soon as you do). Ticking or unticking the goal yourself overrides it.</p>`, { open: !!r });
+}
+const readGoalRule = (dlg) => { const f = $('form', dlg); return f.rop?.value ? { op: f.rop.value, hours: Math.max(0, +f.rh.value || 0), per: f.rper.value, cats: $$('input[name=rcat]:checked', dlg).map((x) => x.value) } : null; };
 // The "look for this text" field of the goal dialogs.
 function wordsFieldHTML(words, mode) {
   return `<label class="field"><span>…and/or text in event and task titles</span><input name="w" value="${esc((words || []).join(', '))}" placeholder="e.g. Moby Dick (several: separate with commas)" autocomplete="off"></label>
@@ -2670,14 +2903,16 @@ async function editGoal(key, id) {
       <details ${own.size ? 'open' : ''}><summary class="small">Count only these categories for this goal (otherwise the head's)</summary>
         <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
       ${wordsFieldHTML(GL.goalWords(g), g.wmode)}
+      ${goalRuleHTML(g.rule, key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : 'year')}
       ${(() => { const every = key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : null; return every ? `<label class="chk"><input type="checkbox" name="rep" ${GL.repeatOf(s, g) ? 'checked' : ''}> Repeat every ${every}</label>` : ''; })()}
       <label class="chk"><input type="checkbox" name="d" ${g.done ? 'checked' : ''}> Reached</label>
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
   (dlg, close) => {
     const f = $('form', dlg);
     const upd = () => syncWordsField(dlg, $$('input[name=c]:checked', dlg).length); f.addEventListener('input', upd); f.addEventListener('change', upd); upd();
-    f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), words: GL.parseWords(f.w.value), wmode: f.wm.value, done: f.d.checked, rep: f.rep ? f.rep.checked : null }); };
-  }, { cls: 'narrow' });
+    f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), words: GL.parseWords(f.w.value), wmode: f.wm.value, rule: readGoalRule(dlg), done: f.d.checked, rep: f.rep ? f.rep.checked : null }); };
+    D.wireSects(dlg, { 'g-rule': () => { const r = readGoalRule(dlg); return r ? `⚡ ${GL.ruleText(r)}` : 'Off'; } });
+  });
   if (!r) return;
   // repeat on / off (the copies already made stay)
   const rp = GL.repeatOf(set(), g);
@@ -2687,7 +2922,7 @@ async function editGoal(key, id) {
     set().goalRepeats = reps; r.repeatId = reps[reps.length - 1].id;
   }
   if (r.rep === true && rp) set().goalRepeats = GL.repeats(set()).map((x) => (x.id === rp.id ? { ...x, text: r.text.slice(0, 200), head: r.head, budget: r.budget || undefined, cats: r.cats.length ? r.cats : undefined, words: r.words.length ? r.words : undefined, wmode: r.words.length && r.cats.length && r.wmode === 'both' ? 'both' : undefined } : x));
-  saveGoals(GL.update(set(), key, id, { text: r.text.slice(0, 200), head: r.head, budget: r.budget, cats: r.cats.length ? r.cats : null, words: r.words.length ? r.words : null, wmode: r.words.length && r.cats.length && r.wmode === 'both' ? 'both' : null, done: r.done, ...(r.repeatId ? { repeatId: r.repeatId } : r.rep === false ? { repeatId: null } : {}) }), 'edit goal');
+  saveGoals(GL.update(set(), key, id, { text: r.text.slice(0, 200), head: r.head, budget: r.budget, cats: r.cats.length ? r.cats : null, words: r.words.length ? r.words : null, wmode: r.words.length && r.cats.length && r.wmode === 'both' ? 'both' : null, rule: r.rule, ...(r.rule ? (r.done !== !!g.done ? { override: r.done } : {}) : { override: null }), done: r.done, ...(r.repeatId ? { repeatId: r.repeatId } : r.rep === false ? { repeatId: null } : {}) }), 'edit goal');
 }
 
 // On the first day of the week, offer the review once.
@@ -2987,6 +3222,8 @@ async function openSettings() {
     if (r.settings.taskEmailReminderMinutes !== before.taskEmailReminderMinutes || r.settings.taskProfile !== before.taskProfile
       || JSON.stringify(r.settings.notifyProfiles) !== JSON.stringify(before.notifyProfiles)) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     await hoursChanged(before, r.settings);
+    if (r.settings.sleepEvents && !before.sleepEvents) addSleepBlocks({ force: true });
+    if (r.settings.game?.on !== before.game?.on) { app.gameToday = null; if (r.settings.game?.on) { toast('🎮 Game mode on — earn XP and level up!', { ms: 5000 }); gameRefresh(); } renderGamePanel(); render(); }
     const addedLeave = Object.keys(r.settings.leave || {}).filter((k) => S.leaveOf(r.settings, k) && !S.leaveOf(before, k));
     if (addedLeave.length && (await afterLeave(addedLeave)) === 'back') { for (const k of addedLeave) delete set().leave[k]; await E.persist(st(), ['settings']); await render(); }
     else if (JSON.stringify(before.leave || {}) !== JSON.stringify(r.settings.leave || {})) cycle();
@@ -3425,6 +3662,8 @@ async function init() {
   try { setCalsOpen(localStorage.getItem('tempo:calsCollapsed') !== '1'); } catch { /* storage blocked */ }
   calTg?.addEventListener('click', () => { const open = calSec.classList.contains('collapsed'); setCalsOpen(open); try { localStorage.setItem('tempo:calsCollapsed', open ? '0' : '1'); } catch { /* storage blocked */ } });
   // weather: today's and tomorrow's forecasts change most — check again every 30 minutes, and on coming back
+  gameActive();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) gameActive(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) W.refresh(set()).then((fresh) => { if (fresh) render(); }); });
   if (isWeb) startWebReminders();
   if (isWeb && 'serviceWorker' in navigator && document.querySelector('link[rel=manifest]')) navigator.serviceWorker.register('sw.js').catch(() => {});

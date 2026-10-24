@@ -36,6 +36,7 @@ async def main():
         # Exercise: tick when a title contains "run"
         await page.click('.g-habits .hb-add'); await page.wait_for_selector('dialog[open] .habit-form')
         await page.fill('dialog[open] [name=name]', 'Exercise')
+        await page.click('dialog[open] details[data-sect=hb-adv] > summary')
         check('1a. the automatic section is offered for yes/no habits', await page.is_visible('dialog[open] [name=amode]'))
         await page.select_option('dialog[open] [name=amode]', 'tick'); await page.fill('dialog[open] [name=awords]', 'run, gym'); await page.fill('dialog[open] [name=afrom]', '2026-10-18')
         await page.screenshot(path=f'{OUT}/r29-dialog.png')
@@ -48,6 +49,7 @@ async def main():
         # "Didn't play computer games": ticked unless a title contains it
         await page.click('.g-habits .hb-add'); await page.wait_for_selector('dialog[open] .habit-form')
         await page.fill('dialog[open] [name=name]', 'No computer games')
+        await page.click('dialog[open] details[data-sect=hb-adv] > summary')
         await page.select_option('dialog[open] [name=amode]', 'untick'); await page.fill('dialog[open] [name=awords]', 'computer games'); await page.fill('dialog[open] [name=afrom]', '2026-10-20')
         await page.click('dialog[open] button[type=submit]'); await page.wait_for_timeout(2500)
         ng = await cells('No computer games')

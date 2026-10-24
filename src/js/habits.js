@@ -6,6 +6,7 @@
 // Yes/no habits: a day is done (✓), skipped (», doesn't break a streak) or not done. Number habits: the amount on
 // each day, against a target per day, week or month (e.g. 8 glasses a day, 20 km a week).
 import * as T from './tz.js';
+import { catMinutes } from './goals.js';
 
 export const COLORS = ['#d32f2f', '#e64a19', '#f57c00', '#ff8f00', '#f9a825', '#afb42b', '#7cb342', '#388e3c', '#00897b', '#00acc1', '#039be5', '#1976d2', '#303f9f', '#5e35b1', '#8e24aa', '#d81b60', '#5d4037', '#757575'];
 export const PER_DAYS = { day: 1, week: 7, month: 30 };
@@ -31,7 +32,10 @@ export const fmtNum = (v) => (Math.abs(v) >= 100 || Number.isInteger(+v) ? Strin
 //   untick: a day is ticked unless an event or task session contains one of them (e.g. "Didn't play computer games")
 // Only what has already started counts — never future items. The results are kept in h.autoLog { day: 1 | 0 }
 // (and h.autoHit { day: title }); anything you set by hand (h.log, where 0 = "not done") wins over them.
-export const autoOn = (h) => !!(h && h.type !== 'number' && h.auto && (h.auto.mode === 'tick' || h.auto.mode === 'untick') && (h.auto.words || []).some((w) => String(w).trim()));
+//   hours:  a day is ticked by time spent in categories: { cats, op: 'atLeast' | 'atMost', hours, per: 'day' | 'week' }
+//           (per week: "at least" ticks the day the week's total gets there; "at most" ticks each day while it stays under)
+export const autoOn = (h) => !!(h && h.type !== 'number' && h.auto && (((h.auto.mode === 'tick' || h.auto.mode === 'untick') && (h.auto.words || []).some((w) => String(w).trim()))
+  || (h.auto.mode === 'hours' && (h.auto.cats || []).length && +h.auto.hours >= 0)));
 export const isManual = (h, k) => !!h.log && Object.prototype.hasOwnProperty.call(h.log, k);
 export const isAuto = (h, k) => autoOn(h) && !isManual(h, k) && h.autoLog?.[k] != null;
 export const val = (h, k) => {
@@ -76,10 +80,35 @@ export function matcher(words) {
   return (text) => re.test(fold(text));
 }
 const itemTitle = (it) => (it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`);
+function applyHours(h, items, keys, s, now, from, today) {
+  const z = s.tz, a = h.auto, lim = (+a.hours || 0) * 60;
+  const autoLog = { ...(h.autoLog || {}) }, autoHit = { ...(h.autoHit || {}) };
+  const mins = (k0, k1) => catMinutes(items, a.cats, T.dayStart(k0, z), T.dayStart(k1, z), now, s);
+  const fmt = (m) => (m >= 60 ? `${+(m / 60).toFixed(1)} h` : `${Math.round(m)} min`);
+  for (const k of keys) {
+    if (k > today || k < from) { delete autoLog[k]; delete autoHit[k]; continue; }
+    let v, m;
+    if (a.per === 'week') {
+      const wk = T.startOfWeek(k, s.weekStart ?? 1);
+      m = mins(wk, T.addDays(k, 1));
+      const before = k === wk ? 0 : mins(wk, k);
+      v = a.op === 'atMost' ? (m <= lim ? 1 : 0) : (m >= lim && before < lim ? 1 : 0);
+      autoHit[k] = `${fmt(m)} this week so far`;
+    } else {
+      m = mins(k, T.addDays(k, 1));
+      v = a.op === 'atMost' ? (m <= lim ? 1 : 0) : (m >= lim ? 1 : 0);
+      autoHit[k] = `${fmt(m)} that day`;
+    }
+    autoLog[k] = v;
+  }
+  for (const k of Object.keys(autoLog)) if (k < from || k > today) { delete autoLog[k]; delete autoHit[k]; }
+  return { ...h, autoLog, autoHit };
+}
 // Work out the automatic value for each of `keys` from the items (events and task sessions) of those days.
 export function applyAuto(h, items, keys, s, now = Date.now()) {
   if (!autoOn(h)) return h;
   const z = s.tz, today = T.dayKey(now, z), from = h.auto.from || (h.created ? T.dayKey(h.created, z) : today);
+  if (h.auto.mode === 'hours') return applyHours(h, items, keys, s, now, from, today);
   const has = matcher(h.auto.words);
   const hits = {};
   for (const it of items) {

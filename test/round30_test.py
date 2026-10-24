@@ -23,6 +23,7 @@ async def run(p, name):
     await page.tap('#bottombar button[data-view=goals]'); await page.wait_for_timeout(1200)
     await page.tap('.g-habits .hb-name:has-text("Exercise")'); await page.wait_for_selector('dialog[open] .hb-detail'); await page.wait_for_timeout(900)
     await page.tap('dialog[open] .hb-edit'); await page.wait_for_selector('dialog[open] .habit-form'); await page.wait_for_timeout(900)
+    if not await page.is_visible('dialog[open] [name=amode]'): await page.tap('dialog[open] details[data-sect=hb-adv] > summary')
     await page.select_option('dialog[open] [name=amode]', 'untick'); await page.wait_for_timeout(300)
     vh = await page.evaluate('innerHeight')
     btn = await page.evaluate("(() => { const b = document.querySelector('dialog[open] .habit-form button[type=submit]').getBoundingClientRect(); return [Math.round(b.top), Math.round(b.bottom)]; })()")

@@ -50,11 +50,62 @@ export function timeIn(items, cats, from, to, now = Date.now(), settings = null,
   }
   return { done: Math.round(done), planned: Math.round(planned) };
 }
+// ---------- Hours in categories (for automatic goals and habits) ----------
+// Elapsed minutes (before `now`) in [from, to) spent on events and task sessions in these categories (sub-categories
+// included); overlapping entries are counted once.
+export function catMinutes(items, cats, from, to, now = Date.now(), settings = null) {
+  const set = new Set(cats || []);
+  if (settings) for (const c of settings.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
+  if (!set.size) return 0;
+  const end = Math.min(to, now), iv = [];
+  for (const it of items) {
+    if (it.allDay || it.declined || it.ev?.transparency === 'transparent') continue;
+    if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) continue;
+    if (!set.has((it.kind === 'chunk' ? it.task?.categoryId : it.catId) || '__none')) continue;
+    const a = Math.max(it.start, from), b = Math.min(it.end, end);
+    if (b > a) iv.push([a, b]);
+  }
+  iv.sort((x, y) => x[0] - y[0]);
+  let m = 0, cs = -1, ce = -1;
+  for (const [a, b] of iv) { if (a > ce) { if (ce > cs) m += ce - cs; cs = a; ce = b; } else ce = Math.max(ce, b); }
+  if (ce > cs) m += ce - cs;
+  return m / T.MIN;
+}
+// A rule: { cats, op: 'atLeast' | 'atMost', hours, per: 'period' | 'day' | 'week' }
+export const ruleText = (r, s) => `${r.op === 'atMost' ? 'at most' : 'at least'} ${+r.hours} h ${r.per === 'day' ? 'every day' : r.per === 'week' ? 'every week' : 'in total'}`;
+// Status of a goal's rule over [fromKey, toKey): done (reached), failed (can't be reached any more), value text.
+export function ruleStatus(g, s, items, fromKey, toKey, now = Date.now()) {
+  const r = g.rule; if (!r || !(+r.hours >= 0)) return null;
+  const z = s.tz, cats = r.cats?.length ? r.cats : goalCats(s, g), lim = +r.hours * 60, today = T.dayKey(now, z);
+  const over = T.dayStart(toKey, z) <= now;
+  const span = (a, b) => catMinutes(items, cats, T.dayStart(a, z), T.dayStart(b, z), now, s);
+  const fmt = (m) => (m >= 60 ? `${+(m / 60).toFixed(1)} h` : `${Math.round(m)} min`);
+  if (r.per === 'day' || r.per === 'week') {
+    const parts = [];
+    for (let k = fromKey; k < toKey && k <= today; ) {
+      const e = r.per === 'day' ? T.addDays(k, 1) : T.addDays(T.startOfWeek(k, s.weekStart ?? 1), 7);
+      const stop = e < toKey ? e : toKey;
+      parts.push({ m: span(k, stop), closed: T.dayStart(stop, z) <= now });
+      k = stop;
+    }
+    const okP = (p) => (r.op === 'atMost' ? p.m <= lim : p.m >= lim);
+    const bad = parts.filter((p) => (r.op === 'atMost' ? !okP(p) : p.closed && !okP(p))).length;
+    const good = parts.filter(okP).length;
+    const total = r.per === 'day' ? T.daysBetween(fromKey, toKey) : Math.ceil(T.daysBetween(fromKey, toKey) / 7);
+    return { done: over && !bad, failed: bad > 0, onTrack: !bad, text: `${good}/${total} ${r.per === 'day' ? 'days' : 'weeks'} ${r.op === 'atMost' ? '≤' : '≥'} ${+r.hours} h` };
+  }
+  const m = span(fromKey, toKey);
+  if (r.op === 'atMost') return { done: over && m <= lim, failed: m > lim, onTrack: m <= lim, text: `${fmt(m)} of ≤ ${+r.hours} h` };
+  return { done: m >= lim, failed: over && m < lim, onTrack: true, text: `${fmt(m)} of ≥ ${+r.hours} h` };
+}
+// Done as shown: what you ticked yourself (override) wins over the rule, which wins over the stored flag.
+export function effectiveDone(g, st) { if (g.override === true || g.override === false) return g.override; return st ? st.done : !!g.done; }
+
 // Per head: goals reached, budget, time done/planned — for a section [fromKey, toKey).
 export function progress(s, key, items, fromKey, toKey, now = Date.now()) {
   const z = s.tz, from = T.dayStart(fromKey, z), to = T.dayStart(toKey, z);
   return HEADS.map(([h, label, icon]) => {
-    const goals = list(s, key).filter((g) => headOf(g) === h);
+    const goals = list(s, key).filter((g) => headOf(g) === h).map((g) => { if (!g.rule) return g; const rs = ruleStatus(g, s, items, fromKey, toKey, now); return { ...g, ruleState: rs, autoDone: rs?.done, done: effectiveDone(g, rs) }; });
     const budget = goals.reduce((a, g) => a + (+g.budget || 0), 0);
     const t = timeIn(items, headCats(s, h), from, to, now, s);
     return { head: h, label, icon, goals, reached: goals.filter((g) => g.done).length, budget, spent: t.done, planned: t.planned, cats: headCats(s, h),
@@ -84,7 +135,7 @@ export function materialize(s, keys) {
       if (r.every !== every || k < r.from || (r.skip || []).includes(k)) continue;
       const l = (goals || s.goals || {})[k] || [];
       if (l.some((g) => g.repeatId === r.id)) continue;
-      goals = { ...(goals || s.goals || {}), [k]: [...l, { id: newId(), text: r.text, head: r.head, done: false, at: Date.now(), repeatId: r.id, ...(r.budget ? { budget: r.budget } : {}), ...extra(r) }] };
+      goals = { ...(goals || s.goals || {}), [k]: [...l, { id: newId(), text: r.text, head: r.head, done: false, at: Date.now(), repeatId: r.id, ...(r.budget ? { budget: r.budget } : {}), ...extra(r), ...(r.rule ? { rule: r.rule } : {}) }] };
     }
   }
   return goals;
