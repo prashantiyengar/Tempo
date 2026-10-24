@@ -169,6 +169,16 @@ export const HABIT_H = {
   weak: ['Habits {wobble|slip|need a nudge}: ${pct}% kept', '{The habit tracker sounds the alarm|Room to grow on the habit front|Fresh start next ${noun}?}', '{Missed days pile up|A quiet ${noun} for the routines}'],
 };
 
+// ---------- game news ----------
+KICKERS.game = ['Spielberichte', 'Spielberichte', 'Sportteil', 'Die Rangliste', 'Aus der Arena', 'Punktestand'];
+export const GAME_H = {
+  rank: ['{Promotion|Coronation|A new title}: ${who} {becomes|rises to|is now} ${rank}', '${rank}! {Level ${level} reached|The ranks open at level ${level}}', '{Trumpets sound|Banners unfurl|The crowd cheers} for the new ${rank}'],
+  levelup: ['{Up, up and away|Onwards and upwards|Level up}: ${who} {reaches|climbs to|hits} level ${level}', '{Another rung climbed|Higher still|A step up}: level ${level}', '${n} new level{s|s} {this ${noun}|in one ${noun}}: now at ${level}'],
+  clean: ['{Clean sheet|Not a drop lost|Spotless}: ${days} drain-free day{s|s} {in a row|and counting}', '{Discipline pays|Temptation resisted|Willpower wins}: ${xp} XP {earned|banked} this ${noun}'],
+  drained: ['{XP leaks|The drain gurgles|Points down the plughole}: −${drain} XP {lost|drained} this ${noun}', '{Costly distractions|A leaky ${noun}}: ${drain} XP {gone|drained}'],
+  steady: ['{Steady progress|Points on the board|The tally grows}: +${xp} XP {this ${noun}|in the ${noun}}', '${who} {gathers|collects|earns} ${xp} XP {this ${noun}|and keeps climbing}', '{Quiet climb|On the way up}: ${xp} XP to level ${next}'],
+};
+
 // ---------- outlook ----------
 export const OUT_RISK = ['Storm warning for the to-do list', 'Deadlines loom', '{Choppy waters|Heavy weather|Rough seas} ahead', '{Brace yourself|Batten down the hatches}: deadlines {approach|close in}', 'Red flags on the horizon'];
 export const OUT_CLEAR = ['Clear skies ahead', 'Next ${noun} looks manageable', '{Smooth sailing|Fair weather|Calm waters} ahead', 'No {storms|clouds|alarms} on the horizon', '{The road ahead is clear|All systems go}'];

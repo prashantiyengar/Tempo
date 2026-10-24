@@ -90,7 +90,7 @@ export const PERIODS = {
 
 // extras: { orn: {left, right, top, motto}, joke: {text, source, link}, quote: {text, by} } — picture and online
 // horoscope are filled in afterwards (they load from the network) into .np-pic and .np-horo-live.
-export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] }, projects = [], habits = [] }) {
+export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] }, projects = [], habits = [], game = null }) {
   const z = s.tz;
   const P = PERIODS[period] || PERIODS.week;
   const rand = rng(r.reviewWeek + period);
@@ -191,6 +191,23 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         ${habits.map((x) => `<div class="np-hb"><div class="np-ghh"><b>${esc(x.name)}</b> <span class="np-mute">${x.number ? `${x.done} / ${x.expected} ${esc(x.unit)}` : `${x.done} of ${x.expected} ${+x.expected === 1 ? 'time' : 'times'}`} · score ${Math.round(x.score * 100)}%${x.change ? ` (${x.change > 0 ? '+' : ''}${Math.round(x.change * 100)})` : ''}${x.streak ? ` · streak ${x.streak} ${x.streakUnit}${x.streak === 1 ? '' : 's'}` : ''}</span></div>
           ${x.days.length ? `<div class="np-hbdays">${x.days.map((d) => `<i class="${d.v === 1 ? 'd' : d.v === -1 ? 's' : d.v > 0 ? 'p' : ''}" title="${esc(d.k)}"></i>`).join('')}</div>` : ''}</div>`).join('')}
       </section>`;
+  // ---- game news: level, rank, XP this period, level-ups, clean streak, drains, achievements
+  const gameHTML = !game ? '' : (() => {
+    const v = { who: 'The player', level: game.level, rank: game.rank, n: game.ups.length, xp: game.xp.toLocaleString(), days: game.cleanDays, drain: game.drain.toLocaleString(), next: game.level + 1 };
+    const h = game.newRank ? PH.GAME_H.rank : game.ups.length ? PH.GAME_H.levelup : game.drain > game.clean && game.drain ? PH.GAME_H.drained : game.cleanDays >= 2 ? PH.GAME_H.clean : PH.GAME_H.steady;
+    return `<section class="np-game">
+        <span class="np-kicker">${esc(K('game'))}</span>
+        <div class="np-gm">${game.emblem}<div><h3 class="np-h3">${esc(say(h, { ...v, rank: game.newRank || game.rank, xp: (h === PH.GAME_H.clean ? game.clean : game.xp).toLocaleString() }))}</h3>
+        <p class="np-small"><b>Level ${game.level}</b> · ${esc(game.rank)} · ${game.total.toLocaleString()} XP in all${game.toNext ? ` · ${game.toNext.toLocaleString()} XP to level ${game.level + 1}` : ''}</p></div></div>
+        <ul class="np-small np-glist">
+          <li>${game.xp >= 0 ? '+' : ''}${game.xp.toLocaleString()} XP ${P.this}${game.best ? ` — best day ${esc(game.best.label)} (${game.best.xp >= 0 ? '+' : ''}${game.best.xp})` : ''}</li>
+          ${game.ups.length ? `<li>🚩 ${game.ups.map((u) => `level ${u.level} on ${esc(u.label)}`).join(', ')}</li>` : ''}
+          ${game.cleanOn ? `<li>🧹 ${game.cleanDays ? `${game.cleanDays}-day clean streak` : 'no clean streak'}${game.cleanWeeks ? `, ${game.cleanWeeks} clean week${game.cleanWeeks > 1 ? 's' : ''} in a row` : ''}${game.clean ? ` · +${game.clean} XP in clean bonuses` : ''}</li>` : ''}
+          ${game.drain ? `<li>💧 −${game.drain.toLocaleString()} XP drained${game.drainWhat ? ` (${esc(game.drainWhat)})` : ''}</li>` : ''}
+          ${game.ach.length ? `<li>🏆 ${game.ach.map((a) => esc(a)).join(', ')}</li>` : ''}
+        </ul>
+      </section>`;
+  })();
   const days = Array.from({ length: 7 }, (_, i) => T.addDays(T.dayKey(r.nextFrom, z), i));
   const maxL = Math.max(60, ...Object.values(r.load));
   const kindTxt = { skipped: 'was deleted', undone: 'was marked undone', moved: 'was pushed later' };
@@ -247,6 +264,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
       </section>
       ${projHTML}
       ${habitHTML}
+      ${gameHTML}
       <section class="np-words">
         <span class="np-kicker">${esc(K('words'))}</span>
         ${extras.quote ? `<blockquote class="np-quote">“${esc(extras.quote.text)}”<cite>— ${esc(extras.quote.by)}</cite></blockquote>` : ''}

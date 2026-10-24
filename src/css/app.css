@@ -1193,7 +1193,21 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .g-rule-b.ok { color: var(--ok); } .g-rule-b.bad { color: var(--danger); }
 
 /* ---------- Game mode ---------- */
-:root { --xp-a: #2f7de1; --xp-b: #e8850c; --xp-l: #2e9b5b; --xp-p: #d6455b; }
+:root { --xp-a: #2f7de1; --xp-b: #e8850c; --xp-l: #2e9b5b; --xp-p: #d6455b; --xp-c: #12a3a3; }
+.xp-c { color: var(--xp-c); }
+.game-panel .xp-c { color: #6fe6e0; }
+.gp-clean { font-size: 12px; line-height: 1.4; padding: 6px 8px; border-radius: 8px; background: rgba(111,230,224,.12); }
+.gp-clean.broke { background: rgba(255,138,128,.12); }
+.dr-chart { display: block; max-width: 420px; color: var(--muted); margin-top: 2px; }
+.dr-graph .muted { display: block; }
+.lv-flag { font-size: 12px; margin-left: 3px; cursor: default; text-decoration: none; }
+.cp-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.cp-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--c) 18%, var(--panel)); border: 1px solid color-mix(in srgb, var(--c) 45%, var(--line)); }
+.cp-none { font-size: 12px; }
+.cp-grid { margin-top: 6px; }
+.cp-grid[hidden] { display: none !important; }
+.cp-grid label.cat-chip { cursor: pointer; }
+.cp-done-row { width: 100%; display: flex; justify-content: flex-end; margin-top: 4px; }
 .xp-a { color: var(--xp-a); } .xp-b { color: var(--xp-b); } .xp-l { color: var(--xp-l); } .xp-p { color: var(--xp-p); }
 .xp-a-bg { background: var(--xp-a); } .xp-b-bg { background: var(--xp-b); } .xp-l-bg { background: var(--xp-l); }
 .game-panel { margin: 0 0 12px; border-radius: 12px; padding: 8px 10px 10px; color: #f3f0ff; background: radial-gradient(circle at 15% 0%, #3b2f7a 0%, #1e1b3a 55%, #141226 100%); box-shadow: inset 0 0 0 1px rgba(255, 213, 79, .25), 0 4px 14px rgba(20, 18, 40, .25); }
@@ -1264,3 +1278,7 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .dr-nums { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px 10px; }
 .dr-nums .field span { font-size: 11.5px; }
 .g-catlist.game-life, .g-catlist.game-rest, .g-catlist.game-no, .g-catlist.dr-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 10px; }
+
+.np-gm { display: flex; gap: 10px; align-items: center; }
+.np-gm svg { flex: none; }
+.np-glist { margin: 6px 0 0; padding-left: 18px; }

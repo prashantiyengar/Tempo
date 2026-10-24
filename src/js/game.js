@@ -28,7 +28,15 @@ export const CFG = [
   ['questXP', 'Quest XP (×)', 1, 0, 5, 0.1],
   ['goalXP', 'Goal XP (×)', 1, 0, 5, 0.1],
   ['lifeCap', 'Most of your XP that must be life XP to level up (%)', 25, 0, 50, 1],
+  ['drainRankScale', 'XP drains cost more as you rise: extra % for each rank (every 5 levels)', 3, 0, 20, 0.5],
+  ['cleanDayPct', 'Clean-day bonus: % of the day\'s XP for a day without drains', 5, 0, 50, 1],
+  ['cleanDayStep', 'Clean-day bonus grows by this % for each day in a row', 1, 0, 20, 0.5],
+  ['cleanWeekPct', 'Clean-week bonus: % of the week\'s XP for a week without drains', 8, 0, 50, 1],
+  ['cleanWeekStep', 'Clean-week bonus grows by this % for each week in a row', 2, 0, 20, 0.5],
+  ['cleanMaxPct', 'Most a clean-day or clean-week bonus can be (%)', 25, 0, 100, 1],
 ];
+// How a clean streak's bonus grows: first period base %, then + step % for each period in a row, up to the maximum.
+export const cleanPct = (base, step, n, max) => (n > 0 ? Math.min(max, base + step * (n - 1)) : 0);
 export const RULES_V = 3; // when the rules change, the ledger is counted again
 export function cfg(s) {
   const o = {}, c = s?.game?.cfg || {};
@@ -359,15 +367,17 @@ export function drainHours(d, s, items, fromKey, toKey, now = Date.now()) {
   }
   return out;
 }
-export function drainPct(d, h) {
+// The % a drain costs for h hours. `scale` grows with your level (drains cost more the higher you climb).
+export function drainPct(d, h, scale = 1) {
   const free = +d.free || 0, tol = Math.max(free, +d.tol || 0);
   if (h <= free + 1e-9) return 0;
-  if (h <= tol + 1e-9) return +d.basePct || 0;
-  return Math.min(+d.maxPct || 75, (+d.basePct || 0) + (+d.growPct || 0) * (h - tol));
+  if (h <= tol + 1e-9) return Math.min(100, (+d.basePct || 0) * scale);
+  return Math.min(+d.maxPct || 75, ((+d.basePct || 0) + (+d.growPct || 0) * (h - tol)) * scale);
 }
+export const drainScale = (s, level = 1) => 1 + (cfg(s).drainRankScale / 100) * tierOf(Math.max(1, level)).index;
 // What the drains cost in a week. dayXP: { k: { app, busy, life } } for the days of the week (XP before drains).
 // Returns { total, lines: [[label, cost, dayKey | null]] }
-export function weekDrains(s, wk, dayXPs, items, now = Date.now()) {
+export function weekDrains(s, wk, dayXPs, items, now = Date.now(), scale = 1) {
   const drains = (s.game?.drains || []).filter((d) => (d.cats || []).length || (d.words || []).length);
   const days = Array.from({ length: 7 }, (_, i) => T.addDays(wk, i));
   const xpOf = (k, types) => { const x = dayXPs[k]; return x ? types.reduce((a, t) => a + Math.max(0, x[t] || 0), 0) : 0; };
@@ -377,19 +387,29 @@ export function weekDrains(s, wk, dayXPs, items, now = Date.now()) {
     const hrs = drainHours(d, s, items, wk, T.addDays(wk, 7), now);
     const fh = (h) => (h >= 1 ? `${+h.toFixed(1)} h` : `${Math.round(h * 60)} min`);
     if (d.per === 'day') {
-      for (const k of days) { const h = hrs[k] || 0, p = drainPct(d, h); if (p) lines.push([`${d.name}: ${fh(h)} that day → −${Math.round(p)}%`, Math.round(xpOf(k, types) * p / 100), k]); }
+      for (const k of days) { const h = hrs[k] || 0, p = drainPct(d, h, scale); if (p) lines.push([`${d.name}: ${fh(h)} that day → −${Math.round(p)}%`, Math.round(xpOf(k, types) * p / 100), k]); }
       continue;
     }
     const H = days.reduce((a, k) => a + (hrs[k] || 0), 0), tol = Math.max(+d.free || 0, +d.tol || 0);
     if (H <= tol + 1e-9) {
-      const p = drainPct(d, H);
+      const p = drainPct(d, H, scale);
       if (p) for (const k of days) if ((hrs[k] || 0) > 0) lines.push([`${d.name}: ${fh(hrs[k])} (${fh(H)} this week, tolerated) → −${Math.round(p)}% of the day`, Math.round(xpOf(k, types) * p / 100), k]);
     } else {
-      const p = drainPct(d, H), wkXP = days.reduce((a, k) => a + xpOf(k, types), 0);
+      const p = drainPct(d, H, scale), wkXP = days.reduce((a, k) => a + xpOf(k, types), 0);
       lines.push([`${d.name}: ${fh(H)} this week, ${fh(H - tol)} over the ${fh(tol)} tolerated → −${Math.round(p)}% of the week`, Math.round(wkXP * p / 100), null]);
     }
   }
   return { total: lines.reduce((a, l) => a + l[1], 0), lines: lines.filter((l) => l[1] > 0) };
+}
+
+// All drain hours on a day (any drain) — for clean days
+export function anyDrainHours(s, items, fromKey, toKey, now = Date.now()) {
+  const out = {};
+  for (const d of (s.game?.drains || []).filter((x) => (x.cats || []).length || (x.words || []).length)) {
+    const h = drainHours(d, s, items, fromKey, toKey, now);
+    for (const [k, v] of Object.entries(h)) out[k] = (out[k] || 0) + v;
+  }
+  return out;
 }
 
 // Week bonus (once the week is over): how much of the week's waking hours were planned, and keeping to the plan.
@@ -412,3 +432,92 @@ export const ACHIEVEMENTS = [
   ['level-20', '📒', 'Apprentice', 'Reach level 20'], ['level-50', '⏳', 'Timekeeper', 'Reach level 50'], ['level-100', '🔮', 'Chronomancer', 'Reach level 100'],
 ];
 export const ACH_XP = 60;
+
+
+// ---- Clean days and weeks (no XP drain at all), totals from the ledger, and when levels were reached
+export const hasDrains = (s) => (s.game?.drains || []).some((d) => (d.cats || []).length || (d.words || []).length);
+const posXP = (d) => Math.max(0, d.a || 0) + Math.max(0, d.b || 0) + Math.max(0, d.l || 0);
+// Clean-day bonus for a settled day: streak n (this day included) and its XP
+export function cleanDay(s, dayEntry, n) {
+  const c = cfg(s), pct = cleanPct(c.cleanDayPct, c.cleanDayStep, n, c.cleanMaxPct);
+  return { pct, xp: Math.round(posXP(dayEntry) * pct / 100) };
+}
+export function cleanWeek(s, dayEntries, weekBusy, n) {
+  const c = cfg(s), pct = cleanPct(c.cleanWeekPct, c.cleanWeekStep, n, c.cleanMaxPct);
+  return { pct, xp: Math.round((dayEntries.reduce((a, d) => a + posXP(d), 0) + Math.max(0, weekBusy || 0)) * pct / 100) };
+}
+// XP earned before day `upto` (settled days and weeks, achievements unlocked before then), for the level at that time
+export function ledgerTotals(s, upto, z) {
+  const g = s.game || {}, t = { app: 0, busy: 0, life: 0, pen: 0, clean: 0, drain: 0 };
+  for (const [k, d] of Object.entries(g.ledger || {})) if (!upto || k < upto) { t.app += d.a || 0; t.busy += d.b || 0; t.life += d.l || 0; t.pen += d.p || 0; t.clean += d.cb || 0; }
+  for (const [wk, w] of Object.entries(g.weeks || {})) if (!upto || T.addDays(wk, 7) <= upto) { t.busy += w.b || 0; t.drain += w.drain || 0; t.clean += w.cb || 0; }
+  for (const at of Object.values(g.ach || {})) if (!upto || !z || T.dayKey(at, z) < upto) t.app += ACH_XP;
+  t.total = Math.max(0, t.app + t.busy + t.life + t.clean - t.pen - t.drain);
+  return t;
+}
+export const levelAt = (s, upto, z) => { const c = cfg(s), t = ledgerTotals(s, upto, z); return levelOf(t.total, t.life, c.pace, c.lifeCap / 100).level; };
+// Days on which a new level was reached: { dayKey: level }
+export function levelUps(s, z, ws = 1) {
+  const g = s.game || {}, c = cfg(s), out = {};
+  const keys = Object.keys(g.ledger || {}).sort();
+  if (!keys.length) return out;
+  const achBy = {}; for (const at of Object.values(g.ach || {})) { const k = T.dayKey(at, z); achBy[k] = (achBy[k] || 0) + ACH_XP; }
+  let tot = 0, life = 0, prev = 1;
+  for (const k of keys) {
+    const d = g.ledger[k];
+    tot += (d.a || 0) + (d.b || 0) + (d.l || 0) + (d.cb || 0) - (d.p || 0) + (achBy[k] || 0); life += d.l || 0;
+    const wk = T.addDays(k, -6), w = g.weeks?.[wk];
+    if (w && T.startOfWeek(wk, ws) === wk) tot += (w.b || 0) + (w.cb || 0) - (w.drain || 0);
+    const L = levelOf(Math.max(0, tot), life, c.pace, c.lifeCap / 100).level;
+    if (L > prev) out[k] = L;
+    prev = Math.max(prev, L);
+  }
+  return out;
+}
+// Recent averages from the ledger (for the drain graphs): XP per day and per week by type, the level, the clean streaks
+export function gameStats(s, todayKey, z) {
+  const g = s.game || {}, led = g.ledger || {};
+  const keys = Object.keys(led).sort().filter((k) => k < todayKey).slice(-28);
+  const day = { app: 0, busy: 0, life: 0 };
+  for (const k of keys) { day.app += Math.max(0, led[k].a || 0); day.busy += Math.max(0, led[k].b || 0); day.life += Math.max(0, led[k].l || 0); }
+  const est = !keys.length;
+  for (const t of Object.keys(day)) day[t] = est ? { app: 25, busy: 120, life: 30 }[t] : day[t] / keys.length;
+  const wks = Object.values(g.weeks || {}).slice(-4), wb = wks.length ? wks.reduce((a, w) => a + Math.max(0, w.b || 0), 0) / wks.length : 0;
+  const week = { app: day.app * 7, busy: day.busy * 7 + wb, life: day.life * 7 };
+  const level = levelAt(s, todayKey, z);
+  const last = keys.length ? led[keys[keys.length - 1]] : null;
+  const lastWk = Object.keys(g.weeks || {}).sort().pop();
+  return { day, week, est, level, scale: drainScale(s, level), rank: tierOf(level), cleanDays: last?.cs || 0, cleanWeeks: lastWk ? g.weeks[lastWk].cs || 0 : 0 };
+}
+// For a drain: what each hour would cost now, and what keeping clean would win
+export function drainCurve(s, d, st) {
+  const c = cfg(s), types = d.types?.length ? d.types : ['app', 'busy', 'life'];
+  const dayXP = types.reduce((a, t) => a + st.day[t], 0), weekXP = types.reduce((a, t) => a + st.week[t], 0);
+  const tol = Math.max(+d.free || 0, +d.tol || 0);
+  let H = Math.max(4, Math.ceil(tol) + 3);
+  for (let h = Math.ceil(tol) + 1; h <= 12; h++) { H = Math.max(H, h); if (drainPct(d, h, st.scale) >= (+d.maxPct || 75)) break; }
+  H = Math.min(12, H);
+  const bars = [];
+  for (let h = 1; h <= H; h++) {
+    const pct = drainPct(d, h, st.scale);
+    const base = d.per === 'day' || h <= tol + 1e-9 ? dayXP : weekXP;
+    bars.push({ h, pct, xp: Math.round(base * pct / 100), whole: d.per !== 'day' && h > tol + 1e-9 });
+  }
+  const allDay = st.day.app + st.day.busy + st.day.life, allWeek = st.week.app + st.week.busy + st.week.life;
+  const cd = Math.round(allDay * cleanPct(c.cleanDayPct, c.cleanDayStep, st.cleanDays + 1, c.cleanMaxPct) / 100);
+  const cw = Math.round(allWeek * cleanPct(c.cleanWeekPct, c.cleanWeekStep, st.cleanWeeks + 1, c.cleanMaxPct) / 100);
+  return { bars, cleanDay: cd, cleanWeek: cw, dayXP: Math.round(dayXP), weekXP: Math.round(weekXP) };
+}
+export function drainCurveSVG(cv, d) {
+  const W = 300, Hh = 92, top = 14, base = 70, n = cv.bars.length + 1, bw = W / n;
+  const mx = Math.max(1, cv.cleanDay + cv.cleanWeek, ...cv.bars.map((b) => b.xp));
+  const y = (v) => base - (v / mx) * (base - top);
+  const win = cv.cleanDay + (d.per === 'week' ? cv.cleanWeek : 0);
+  const bar = (i, v, col, lab, sub, tip) => `<g><title>${tip}</title><rect x="${(i * bw + 3).toFixed(1)}" y="${y(v).toFixed(1)}" width="${(bw - 6).toFixed(1)}" height="${(base - y(v)).toFixed(1)}" rx="2" fill="${col}"/><text x="${(i * bw + bw / 2).toFixed(1)}" y="${(y(v) - 3).toFixed(1)}" text-anchor="middle" font-size="9" fill="currentColor">${lab}</text><text x="${(i * bw + bw / 2).toFixed(1)}" y="${base + 11}" text-anchor="middle" font-size="9" fill="currentColor" opacity=".7">${sub}</text></g>`;
+  return `<svg class="dr-chart" viewBox="0 0 ${W} ${Hh}" width="100%" role="img" aria-label="XP each hour of ${d.name} would cost">
+    <line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="currentColor" opacity=".25"/>
+    ${bar(0, win, '#2e9b5b', '+' + win, 'none', `Not detected: +${cv.cleanDay} for a clean day${d.per === 'week' ? ` and +${cv.cleanWeek} for a clean week` : ''}`)}
+    ${cv.bars.map((b, i) => bar(i + 1, b.xp, b.whole ? '#c0392b' : '#e67e22', b.xp ? '−' + b.xp : '0', b.h + ' h', `${b.h} h a ${d.per}: −${Math.round(b.pct)}% of ${b.whole ? 'the week' : d.per === 'week' ? 'each day you do it' : 'that day'} ≈ −${b.xp} XP${win ? `, and no clean bonus (+${win})` : ''}`)).join('')}
+    <text x="0" y="${Hh - 2}" font-size="8.5" fill="currentColor" opacity=".7">hours a ${d.per} → XP it costs (orange: % of the day, red: % of the week)</text>
+  </svg>`;
+}

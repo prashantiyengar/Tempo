@@ -26,6 +26,32 @@ function tzDatalist(id) {
 // Collapsible sections ("▾"): closed by default, with a one-line summary of what's inside while closed.
 // (localStorage 'tempo:expandAll' = '1' opens them all.)
 const expandAll = () => { try { return localStorage.getItem('tempo:expandAll') === '1'; } catch { return false; } };
+// A category picker like the goals' one: the chosen categories as chips and a button; the chips to pick from fold away when done.
+export function catPick(s, cls, sel, { none = 'None chosen' } = {}) {
+  sel = new Set(sel || []);
+  return `<div class="cp" data-cp="${esc(cls)}"><div class="cp-sum"><span class="cp-chips">${cpChips(s, [...sel], none)}</span><button type="button" class="btn small cp-open" aria-expanded="false">Choose categories…</button></div>
+    <div class="cp-grid g-pick" hidden>${C.ordered(s).map((c) => `<label class="cat-chip ${c.parent ? 'sub' : ''} ${sel.has(c.id) ? 'on' : ''}" style="--c:${esc(c.color)}" title="${esc(C.fullLabel(s, c))}"><input type="checkbox" class="${esc(cls)}" value="${esc(c.id)}" ${sel.has(c.id) ? 'checked' : ''} hidden><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</label>`).join('')}
+      <div class="cp-done-row"><button type="button" class="btn small primary cp-done">Done</button></div></div></div>`;
+}
+function cpChips(s, ids, none) {
+  const l = ids.map((id) => C.catById(s, id)).filter(Boolean);
+  return l.length ? l.map((c) => `<span class="cp-chip" style="--c:${esc(c.color)}">${c.icon ? esc(c.icon) + ' ' : ''}${esc(c.name)}</span>`).join('') : `<span class="muted cp-none">${esc(none)}</span>`;
+}
+export function wireCatPick(root, s, onChange) {
+  $$('.cp', root).forEach((cp) => {
+    if (cp.dataset.wired) return; cp.dataset.wired = '1';
+    const grid = $('.cp-grid', cp), btn = $('.cp-open', cp), none = $('.cp-none', cp)?.textContent || 'None chosen';
+    const show = (on) => { grid.hidden = !on; btn.setAttribute('aria-expanded', String(on)); btn.textContent = on ? 'Hide' : 'Choose categories…'; };
+    btn.onclick = () => show(grid.hidden);
+    $('.cp-done', cp).onclick = () => show(false);
+    grid.addEventListener('change', (e) => {
+      const x = e.target; if (!x.matches('input[type=checkbox]')) return;
+      x.closest('label').classList.toggle('on', x.checked);
+      setHTML($('.cp-chips', cp), cpChips(s, $$('input:checked', grid).map((i) => i.value), none));
+      onChange?.();
+    });
+  });
+}
 export function sect(id, title, body, { cls = '', open = false } = {}) {
   return `<details class="sect ${cls}" data-sect="${id}" ${open || expandAll() ? 'open' : ''}><summary><span class="sect-t">${title}</span><span class="sect-s"></span><span class="sect-caret" aria-hidden="true">▾</span></summary><div class="sect-b">${body}</div></details>`;
 }
@@ -950,9 +976,9 @@ export function settingsDialog(ctx) {
           const rest = new Set(g.restCats?.length ? g.restCats : C.ordered(s).filter((c) => /leisure|free|fun|social|hobby|family/i.test(c.name)).map((c) => c.id));
           return `<label class="chk"><input type="checkbox" name="gameOn" ${g.on ? 'checked' : ''}> Play Tempo as a game: earn XP for planning and doing things, and level up from 1 to 300</label>
           <label class="field"><span>Count XP from <em class="muted">(a date in the past counts what's already on your calendar, up to 180 days back)</em></span><input type="date" data-quick="off" name="gameStart" value="${esc(g.started || T.dayKey(Date.now(), s.tz))}" max="${T.dayKey(Date.now(), s.tz)}"></label>
-          <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b> (things that build long-term skills, e.g. reading, working out)</span><div class="g-catlist game-life">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gl-c" value="${esc(c.id)}" ${life.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
-          <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="g-catlist game-rest">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gr-c" value="${esc(c.id)}" ${rest.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
-          <div class="field"><span>Categories that never score</span><div class="g-catlist game-no">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gn-c" value="${esc(c.id)}" ${(g.noCats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+          <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b> (things that build long-term skills, e.g. reading, working out)</span><div class="game-life">${catPick(s, 'gl-c', life)}</div></div>
+          <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="game-rest">${catPick(s, 'gr-c', rest)}</div></div>
+          <div class="field"><span>Categories that never score</span><div class="game-no">${catPick(s, 'gn-c', g.noCats || [])}</div></div>
           <div class="field"><span>XP drains — activities that cost XP (e.g. gaming) <em class="muted">(changing them counts all days again)</em></span><div class="drain-list"></div><button type="button" class="btn small add-drain">+ Add a drain</button></div>
           <details class="game-adv"><summary class="small"><b>Advanced</b> — adjust the points and the pace</summary>
             <div class="game-cfg">${GM.CFG.map(([k, label, d, lo, hi, step]) => `<label class="field"><span>${esc(label)} <em class="muted">(default ${d})</em></span><input type="number" class="gc-v num" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${g.cfg?.[k] ?? d}"></label>`).join('')}</div>
@@ -1171,13 +1197,15 @@ export function settingsDialog(ctx) {
     };
     drawLeave();
     // XP drains editor
+    const gStats = GM.gameStats(s, T.dayKey(Date.now(), s.tz), s.tz);
+    const graph = (d) => { const cv = GM.drainCurve(s, d, gStats); return `${GM.drainCurveSVG(cv, d)}<span class="muted small">Now, at level ${gStats.level} (${esc(gStats.rank.name)}), drains cost ×${gStats.scale.toFixed(2)}. Based on ${gStats.est ? 'a typical' : 'your recent'} ${d.per === 'day' ? `day (≈${cv.dayXP} XP)` : `day (≈${cv.dayXP} XP) and week (≈${cv.weekXP} XP)`}. Not doing it wins the clean bonus: <b class="xp-c">+${cv.cleanDay}</b> for the day${d.per === 'week' ? ` and <b class="xp-c">+${cv.cleanWeek}</b> for the week` : ''}.</span>`; };
     const drawDrains = () => {
       const box = $('.drain-list', dlg); if (!box) return;
       const sentence = (d) => { const tol = Math.max(+d.free || 0, +d.tol || 0); return `${+d.free ? `The first ${d.free} h a ${d.per} are free. ` : ''}${tol > (+d.free || 0) ? `Up to ${tol} h a ${d.per}: −${d.basePct}% of the XP of ${d.per === 'week' ? 'each day you do it' : 'that day'}. ` : ''}Beyond: +${d.growPct}% per extra hour${d.per === 'week' ? ' of the whole week\'s XP' : ''}, at most ${d.maxPct}%. Costs ${d.types.length === 3 ? 'all' : d.types.join(' + ')} XP.`; };
       setHTML(box, drains.map((d, i) => `<div class="drain" data-i="${i}">
         <div class="row"><input class="dr-name" value="${esc(d.name || '')}" placeholder="Name, e.g. Gameplay" maxlength="30"><select class="dr-per"><option value="week" ${d.per !== 'day' ? 'selected' : ''}>per week</option><option value="day" ${d.per === 'day' ? 'selected' : ''}>per day</option></select><span class="grow"></span><button type="button" class="icon-btn dr-del" title="Remove" aria-label="Remove">✕</button></div>
         <label class="field"><span>Titles with these words</span><input class="dr-words" value="${esc((d.words || []).join(', '))}" placeholder="e.g. game, gaming, PlayStation"></label>
-        <div class="field"><span>…and/or these categories</span><div class="g-catlist dr-cats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" value="${esc(c.id)}" ${(d.cats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+        <div class="field"><span>…and/or these categories</span><div class="dr-cats">${catPick(s, 'dr-cat', d.cats || [])}</div></div>
         <div class="dr-nums">
           <label class="field"><span>Free (h)</span><input type="number" class="dr-free num" min="0" step="0.25" value="${d.free ?? 0}"></label>
           <label class="field"><span>Tolerated up to (h)</span><input type="number" class="dr-tol num" min="0" step="0.25" value="${d.tol ?? 2}"></label>
@@ -1187,23 +1215,27 @@ export function settingsDialog(ctx) {
         </div>
         <div class="row small">Costs: ${['app', 'busy', 'life'].map((t) => `<label class="chk"><input type="checkbox" class="dr-type" value="${t}" ${d.types.includes(t) ? 'checked' : ''}> ${t} XP</label>`).join(' ')}</div>
         <p class="muted small dr-say" style="margin:0">${esc(sentence(d))}</p>
+        <div class="dr-graph">${graph(d)}</div>
       </div>`).join('') || '<p class="muted small" style="margin:0">No drains. Add one for activities you want to cut down on — they cost XP the more you do them.</p>');
       $$('.drain', box).forEach((row) => {
         const d = drains[+row.dataset.i];
         const read = () => {
           d.name = $('.dr-name', row).value; d.per = $('.dr-per', row).value;
           d.words = $('.dr-words', row).value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
-          d.cats = $$('.dr-cats input:checked', row).map((x) => x.value);
+          d.cats = $$('.dr-cat:checked', row).map((x) => x.value);
           d.free = Math.max(0, +$('.dr-free', row).value || 0); d.tol = Math.max(0, +$('.dr-tol', row).value || 0);
           d.basePct = Math.min(100, Math.max(0, +$('.dr-base', row).value || 0)); d.growPct = Math.min(100, Math.max(0, +$('.dr-grow', row).value || 0)); d.maxPct = Math.min(100, Math.max(0, +$('.dr-max', row).value || 0));
           d.types = $$('.dr-type:checked', row).map((x) => x.value); if (!d.types.length) d.types = ['app', 'busy', 'life'];
           $('.dr-say', row).textContent = sentence(d);
+          setHTML($('.dr-graph', row), graph(d));
         };
+        wireCatPick(row, s, read);
         row.addEventListener('input', read); row.addEventListener('change', read);
         $('.dr-del', row).onclick = () => { drains.splice(+row.dataset.i, 1); drawDrains(); };
       });
     };
     drawDrains();
+    wireCatPick(dlg, s, () => updSects());
     $('.add-drain', dlg)?.addEventListener('click', () => { drains.push({ ...GM.DRAIN_DEFAULT, id: 'dr' + Math.random().toString(36).slice(2, 8), words: [...GM.DRAIN_DEFAULT.words], cats: [], types: [...GM.DRAIN_DEFAULT.types] }); drawDrains(); });
     $('.gc-reset', dlg)?.addEventListener('click', () => { $$('.gc-v', dlg).forEach((x) => { x.value = GM.CFG.find((c) => c[0] === x.dataset.k)[2]; }); });
     linkRange(f.lvFrom, f.lvTo);

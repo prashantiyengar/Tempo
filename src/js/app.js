@@ -295,7 +295,7 @@ function renderTimeGrid(days, items) {
     <div class="tg-head">
       <div class="tg-gutter"><span class="tz-label" title="${esc(z)}">${esc(tzAbbr())}</span></div>
       ${days.map((k) => `<div class="tg-dayhead ${k === todayK ? 'today' : ''} ${k < todayK ? 'past' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
-        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}${gameDayChip(k, items)}</div>`).join('')}
+        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}${levelFlag(k)}${gameDayChip(k, items)}</div>`).join('')}
     </div>
     <div class="tg-allday">
       <div class="tg-gutter small muted">all-day</div>
@@ -392,7 +392,7 @@ function renderMonth({ days, monthKey }, items) {
     const max = 4;
     const shown = list.length > max ? list.slice(0, max - 1) : list;
     const cell = el(`<div class="m-cell ${T.parseKey(k).m !== month ? 'out' : ''} ${k === todayK ? 'today' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
-      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK, { month: true })}${leaveTag(k, true)}
+      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK, { month: true })}${leaveTag(k, true)}${levelFlag(k)}
       <div class="m-items">
         ${shown.map((it) => it.allDay
           ? `<div class="chip allday ${!it.editable ? 'ro' : ''}" data-key="${esc(it.key)}" style="--c:${it.color}">${esc(it.title)}</div>`
@@ -674,6 +674,16 @@ function gameCtx(items) {
   };
   return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), goals: [], goalsAll, goalMinutes, history: s.history || [] };
 }
+// 🚩 on the day you reached a new level (today: as soon as it happens)
+function levelFlag(k) {
+  if (!gameOn()) return '';
+  const today = T.dayKey(Date.now(), tz());
+  let L = app.gameLevelUps?.[k];
+  if (k === today && app.gameToday) { const now = gameLevel(gameTotals()).level, before = GM.levelAt(set(), today, tz()); if (now > before) L = now; }
+  if (!L) return '';
+  const t = GM.tierOf(L), newRank = t.from === L;
+  return `<span class="lv-flag" data-lvflag="${L}" title="${esc(newRank ? `Level ${L} reached — new rank: ${t.name}` : `Level ${L} reached`)}">🚩<b>${L}</b></span>`;
+}
 function gameDayChip(k, items) {
   if (!gameOn()) return '';
   const today = T.dayKey(Date.now(), tz()), led = set().game?.ledger?.[k];
@@ -704,6 +714,11 @@ async function xpBreakdown(k, rect) {
     <div class="xb-net ${d.net < 0 ? 'xp-p' : ''}">${k > today ? 'Nothing earned yet' : `${d.net >= 0 ? '+' : ''}${d.net} XP`}${led && k < today && led.net !== d.net ? ` <span class="muted small">(counted as ${led.net >= 0 ? '+' : ''}${led.net} when the day was settled)</span>` : ''}</div>
     ${group('busy', 'Busy', 'xp-b')}${group('life', 'Life', 'xp-l')}${group('app', 'App', 'xp-a')}${group('pen', 'Rescheduling', 'xp-p')}
     ${(() => { const dl = drainLines(k), all = [...dl.day, ...dl.week]; if (!all.length) return ''; const tot = all.reduce((a, l) => a + l[1], 0); return `<div class="xb-g"><div class="xb-h xp-p"><b>XP drains</b><b>−${tot}</b></div>${all.map(([t, x, dk]) => `<div class="xb-l"><span>${esc(t)}${dk ? '' : ' <span class="muted">(this week)</span>'}</span><span>−${x}</span></div>`).join('')}</div>`; })()}
+    ${(() => { const wk = T.startOfWeek(k, s.weekStart ?? 1), w = T.addDays(wk, 6) === k ? s.game?.weeks?.[wk] : null, rows = [];
+      if (led?.cb && k < today) rows.push([`Clean day — no XP drains (${led.cs} in a row)`, led.cb]);
+      if (w?.cb) rows.push([`Clean week — no XP drains all week (${w.cs} in a row, ${w.cpct}%)`, w.cb]);
+      if (k === today && app.gameClean?.day) rows.push([`Keep today clean (day ${app.gameClean.days + 1} in a row): ${app.gameClean.dayPct}% of today's XP, added tonight`, app.gameClean.dayXP]);
+      return rows.length ? `<div class="xb-g"><div class="xb-h xp-c"><b>🧹 Clean bonus</b><b>+${rows.reduce((a, r) => a + r[1], 0)}</b></div>${rows.map(([t, x]) => `<div class="xb-l"><span>${esc(t)}</span><span>+${x}</span></div>`).join('')}</div>` : ''; })()}
     ${todo.length ? `<div class="xb-g"><div class="xb-h"><b>Still to earn</b><b>+${todo.reduce((a, o) => a + GM.sumXP(o.x), 0)}</b></div>${todo.map((o) => `<div class="xb-l"><span>${esc(o.it.title)}</span><span><span class="xp-b">${o.x.busy ? '+' + o.x.busy : ''}</span> <span class="xp-l">${o.x.life ? '+' + o.x.life : ''}</span></span></div>`).join('')}</div>` : ''}
     ${d.quests?.length && k <= today ? `<div class="xb-g"><div class="xb-h"><b>Quests</b></div>${d.quests.map((q) => `<div class="xb-l"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span></div>`).join('')}</div>` : ''}
   </div>`, (p, close) => {});
@@ -732,14 +747,16 @@ async function gameRefresh() {
     const s = set(), g = s.game, z = tz(), now = Date.now(), today = T.dayKey(now, z);
     g.started ||= today; g.ledger ||= {}; g.weeks ||= {}; g.ach ||= {};
     // new rules, or you adjusted them: count everything again
-    let changed = false;
-    if (g.rulesV !== GM.RULES_V || g.cfgHash !== GM.cfgHash(s)) { g.ledger = {}; g.weeks = {}; g.rulesV = GM.RULES_V; g.cfgHash = GM.cfgHash(s); app.gameToday = null; changed = true; try { localStorage.removeItem('tempo:gameLevel'); } catch { /* storage blocked */ } }
+    let changed = false, recount = false;
+    if (g.rulesV !== GM.RULES_V || g.cfgHash !== GM.cfgHash(s)) { g.ledger = {}; g.weeks = {}; g.rulesV = GM.RULES_V; g.cfgHash = GM.cfgHash(s); app.gameToday = null; changed = true; recount = true; try { localStorage.removeItem('tempo:gameLevel'); } catch { /* storage blocked */ } }
     const first = [g.started, T.addDays(today, -180)].sort()[1];
     const open = []; for (let k = first; k < today; k = T.addDays(k, 1)) if (!g.ledger[k]) open.push(k);
     // (from the start of the earliest goal period still open, so progress on goals is counted right)
     const goalFrom = Object.entries(s.goals || {}).filter(([key, l]) => (l || []).length && !key.startsWith('y')).map(([key, l]) => GM.goalPeriod(key, l[0], z)).filter((p) => p.to > (open[0] || today)).map((p) => p.from);
-    const items = await collectItems([[open[0] || today, ...goalFrom, today].sort()[0], T.addDays(today, 30)]);
+    const items = await collectItems([[open[0] || today, ...goalFrom, T.startOfWeek(today, s.weekStart ?? 1), today].sort()[0], T.addDays(today, 30)]);
     const ctx = gameCtx(items);
+    const drained = GM.hasDrains(s) ? GM.anyDrainHours(s, items, [open[0] || today, T.startOfWeek(today, s.weekStart ?? 1)].sort()[0], T.addDays(today, 1), now) : null;
+    let cleanNews = null;
     // goals reached by their rule: remember when, so reaching them earns XP that day
     for (const [key, l] of Object.entries(s.goals || {})) for (const gl of l || []) {
       if (!gl.rule || gl.autoDoneAt || gl.override === false) continue;
@@ -748,7 +765,14 @@ async function gameRefresh() {
     }
     for (const k of open) {
       const d = GM.dayXP(k, s, ctx, now);
-      g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
+      const e = g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
+      // a day without any XP drain: a bonus that grows with each clean day in a row
+      if (drained && !(drained[k] > 0)) {
+        e.cs = (g.ledger[T.addDays(k, -1)]?.cs || 0) + 1;
+        const cb = GM.cleanDay(s, e, e.cs); e.cb = cb.xp; e.net += cb.xp;
+        if (cb.xp) e.top = [[`Clean day — no XP drains (${e.cs} in a row, +${cb.pct}%)`, 'app', cb.xp], ...e.top].slice(0, 8);
+        if (k === T.addDays(today, -1)) cleanNews = { k, n: e.cs, xp: cb.xp };
+      } else if (drained) cleanNews = k === T.addDays(today, -1) ? { k, n: 0, broke: (g.ledger[T.addDays(k, -1)]?.cs || 0) } : cleanNews;
       changed = true;
     }
     // weeks that are over
@@ -758,8 +782,13 @@ async function gameRefresh() {
       if (!days.length) continue;
       const w = GM.weekXP(wk, s, days);
       const xps = {}; for (let i = 0; i < 7; i++) { const k = T.addDays(wk, i), l = g.ledger[k]; if (l) xps[k] = { app: l.a, busy: l.b, life: l.l }; }
-      const dr = GM.weekDrains(s, wk, xps, items, now);
-      g.weeks[wk] = { b: w.busy, fill: +w.fill.toFixed(3), pens: w.pens, drain: dr.total, dl: dr.lines }; changed = true;
+      const dr = GM.weekDrains(s, wk, xps, items, now, GM.drainScale(s, GM.levelAt(s, wk, z)));
+      const W = g.weeks[wk] = { b: w.busy, fill: +w.fill.toFixed(3), pens: w.pens, drain: dr.total, dl: dr.lines }; changed = true;
+      if (drained && !Array.from({ length: 7 }, (_, i) => drained[T.addDays(wk, i)] || 0).some((h) => h > 0) && days.length >= 4) {
+        W.cs = (g.weeks[T.addDays(wk, -7)]?.cs || 0) + 1;
+        const cw = GM.cleanWeek(s, days, w.busy, W.cs); W.cb = cw.xp; W.cpct = cw.pct;
+        if (T.addDays(wk, 14) > today) cleanNews = { k: 'w' + wk, ...(cleanNews || {}), week: W.cs, wxp: cw.xp };
+      }
       if (w.fill >= 0.6) unlock('full-week'); if (w.pens === 0 && days.length >= 5) unlock('clean-week');
     }
     app.gameToday = GM.dayXP(today, s, ctx, now);
@@ -767,7 +796,20 @@ async function gameRefresh() {
     { const wk = T.startOfWeek(today, s.weekStart ?? 1), xps = {};
       for (let i = 0; i < 7; i++) { const k = T.addDays(wk, i), l = g.ledger[k]; if (l) xps[k] = { app: l.a, busy: l.b, life: l.l }; }
       xps[today] = { app: app.gameToday.app, busy: app.gameToday.busy, life: app.gameToday.life };
-      app.gameDrain = { wk, ...GM.weekDrains(s, wk, xps, items, now) }; }
+      app.gameDrain = { wk, ...GM.weekDrains(s, wk, xps, items, now, GM.drainScale(s, GM.levelAt(s, wk, z))) };
+      // today / this week still clean?
+      app.gameClean = drained ? { day: !(drained[today] > 0), week: !Array.from({ length: 7 }, (_, i) => T.addDays(wk, i)).filter((k) => k <= today).some((k) => drained[k] > 0), days: g.ledger[T.addDays(today, -1)]?.cs || 0, weeks: g.weeks[T.addDays(wk, -7)]?.cs || 0 } : null;
+      if (app.gameClean) { const c = GM.cfg(s), t = app.gameToday; app.gameClean.dayPct = GM.cleanPct(c.cleanDayPct, c.cleanDayStep, app.gameClean.days + 1, c.cleanMaxPct); app.gameClean.weekPct = GM.cleanPct(c.cleanWeekPct, c.cleanWeekStep, app.gameClean.weeks + 1, c.cleanMaxPct); app.gameClean.dayXP = Math.round(Math.max(0, t.app + t.busy + t.life) * app.gameClean.dayPct / 100); } }
+    app.gameLevelUps = GM.levelUps(s, z, s.weekStart ?? 1);
+    // tell me about my clean streak (once per day)
+    if (cleanNews && !recount) {
+      let seen = ''; try { seen = localStorage.getItem('tempo:cleanSeen') || ''; } catch { /* storage blocked */ }
+      if (seen !== cleanNews.k) {
+        try { localStorage.setItem('tempo:cleanSeen', cleanNews.k); } catch { /* storage blocked */ }
+        const msg = cleanNews.n ? `🧹 Clean day — no XP drains! ${cleanNews.n} day${cleanNews.n > 1 ? 's' : ''} in a row: +${cleanNews.xp} XP${cleanNews.week ? ` · clean week ${cleanNews.week} in a row: +${cleanNews.wxp} XP` : ''}` : cleanNews.week ? `🧹 Clean week ${cleanNews.week} in a row: +${cleanNews.wxp} XP` : cleanNews.broke ? `💧 Yesterday had an XP drain — your clean streak of ${cleanNews.broke} day${cleanNews.broke > 1 ? 's' : ''} starts again` : '';
+        if (msg) setTimeout(() => toast(msg, { ms: 6000, noUndo: true }), 600);
+      }
+    }
     // achievements
     function unlock(id) { if (!g.ach[id]) { g.ach[id] = now; changed = true; const a = GM.ACHIEVEMENTS.find((x) => x[0] === id); if (a) setTimeout(() => toast(`🏆 Achievement: ${a[1]} ${a[2]} — ${a[3]} (+${GM.ACH_XP} XP)`, { ms: 6000, noUndo: true }), 300); } }
     const tot = gameTotals();
@@ -781,20 +823,23 @@ async function gameRefresh() {
     if (lv >= 20) unlock('level-20'); if (lv >= 50) unlock('level-50'); if (lv >= 100) unlock('level-100');
     if (changed) await gameSave();
     renderGamePanel();
+    // redraw the calendar when its level flags (🚩) changed
+    const sig = JSON.stringify([app.gameLevelUps, lv]);
+    if (app.gameLvSig !== sig) { const first = app.gameLvSig === undefined; app.gameLvSig = sig; if (!first || Object.keys(app.gameLevelUps).length || lv > GM.levelAt(s, today, z)) setTimeout(() => render(), 0); }
   } catch (err) { console.warn('Tempo: game', err); }
   finally { gameBusy = false; }
 }
 const gameLevel = (tot) => { const c = GM.cfg(set()); return GM.levelOf(tot.total, tot.life, c.pace, c.lifeCap / 100); };
 function gameTotals() {
-  const g = set().game || {}, t = { app: 0, busy: 0, life: 0, pen: 0 };
-  for (const d of Object.values(g.ledger || {})) { t.app += d.a || 0; t.busy += d.b || 0; t.life += d.l || 0; t.pen += d.p || 0; }
+  const g = set().game || {}, t = { app: 0, busy: 0, life: 0, pen: 0, clean: 0 };
+  for (const d of Object.values(g.ledger || {})) { t.app += d.a || 0; t.busy += d.b || 0; t.life += d.l || 0; t.pen += d.p || 0; t.clean += d.cb || 0; }
   t.drain = 0;
-  for (const w of Object.values(g.weeks || {})) { t.busy += w.b || 0; t.drain += w.drain || 0; }
+  for (const w of Object.values(g.weeks || {})) { t.busy += w.b || 0; t.drain += w.drain || 0; t.clean += w.cb || 0; }
   if (app.gameDrain && !g.weeks?.[app.gameDrain.wk]) t.drain += app.gameDrain.total || 0;
   t.pen += t.drain;
   t.app += Object.keys(g.ach || {}).length * GM.ACH_XP;
   const d = app.gameToday; if (d) { t.app += d.app; t.busy += d.busy; t.life += d.life; t.pen += d.pen; }
-  t.total = Math.max(0, t.app + t.busy + t.life - t.pen);
+  t.total = Math.max(0, t.app + t.busy + t.life + t.clean - t.pen);
   return t;
 }
 // The sidebar panel: rank emblem, level, progress, XP by type, streak, today, quests
@@ -814,7 +859,8 @@ function renderGamePanel() {
     <div class="gp-body" ${collapsed ? 'hidden' : ''}>
       <div class="gp-sub">${lv.max ? 'Highest level reached!' : lv.capped ? `Enough XP for level ${lv.level + 1}` : `${lv.into.toLocaleString()} / ${lv.span.toLocaleString()} XP to level ${lv.level + 1}`}${lv.capped ? `<br><b class="xp-l">🔒 ${lv.lifeNeed.toLocaleString()} more life XP</b> to unlock level ${lv.level + 1}` : ''}</div>
       <div class="gp-mix" title="Your XP by type"><i class="xp-a-bg" style="width:${share(tot.app)}%"></i><i class="xp-b-bg" style="width:${share(tot.busy)}%"></i><i class="xp-l-bg" style="width:${share(tot.life)}%"></i></div>
-      <div class="gp-types"><span class="xp-a">● App ${tot.app.toLocaleString()}</span><span class="xp-b">● Busy ${tot.busy.toLocaleString()}</span><span class="xp-l">● Life ${tot.life.toLocaleString()}</span>${tot.pen - tot.drain ? `<span class="xp-p">− ${(tot.pen - tot.drain).toLocaleString()} rescheduling</span>` : ''}${tot.drain ? `<span class="xp-p" title="XP drains (Settings → Game mode)">− ${tot.drain.toLocaleString()} drained</span>` : ''}</div>
+      <div class="gp-types"><span class="xp-a">● App ${tot.app.toLocaleString()}</span><span class="xp-b">● Busy ${tot.busy.toLocaleString()}</span><span class="xp-l">● Life ${tot.life.toLocaleString()}</span>${tot.pen - tot.drain ? `<span class="xp-p">− ${(tot.pen - tot.drain).toLocaleString()} rescheduling</span>` : ''}${tot.clean ? `<span class="xp-c" title="Bonuses for days and weeks without XP drains">+ ${tot.clean.toLocaleString()} clean</span>` : ''}${tot.drain ? `<span class="xp-p" title="XP drains (Settings → Game mode)">− ${tot.drain.toLocaleString()} drained</span>` : ''}</div>
+      ${(() => { const c = app.gameClean; if (!c) return ''; return `<div class="gp-clean ${c.day ? '' : 'broke'}" title="A day (and a week) without any XP drain earns a bonus that grows with each one in a row">🧹 Clean streak: <b>${c.days} day${c.days === 1 ? '' : 's'}</b> · <b>${c.weeks} week${c.weeks === 1 ? '' : 's'}</b><br><span class="small">${c.day ? `Keep today clean: <b class="xp-c">+${c.dayXP} XP</b> (${c.dayPct}% of today)` : 'An XP drain today — the day streak starts again tomorrow'}${c.week ? ` · a clean week earns ${c.weekPct}%` : ''}</span></div>`; })()}
       <div class="gp-row"><span title="Days in a row you used Tempo">🔥 ${streak} day${streak === 1 ? '' : 's'}</span><span title="Total XP">⭐ ${tot.total.toLocaleString()} XP</span>${d?.potential?.total ? `<span title="Still to earn today">🎯 +${d.potential.total} today</span>` : ''}</div>
       ${d?.quests?.length ? `<div class="gp-q"><b>Today's quests</b>${d.quests.map((q) => `<div class="gp-qi ${q.ok ? 'ok' : ''}"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span><i style="width:${Math.min(100, (q.have / q.goal) * 100)}%"></i></div>`).join('')}</div>` : ''}
       <div class="gp-row"><button type="button" class="link gp-more">Ranks, achievements & XP log</button></div>
@@ -847,7 +893,8 @@ async function gameDetails() {
     <ul class="small gd-rules"><li><b class="xp-b">Busy</b>: events you attend (longer ones earn more; ticked off ×1.2), task sessions you complete (each later session of a task is worth 8% more), finished tasks and projects, a full day (at least half of 7:00–23:00 planned), keeping to the plan, and a weekly bonus for how much of the week was planned.</li>
       <li><b class="xp-l">Life</b>: time in your life-growth categories (set in Settings → General → Game mode), sleep, some leisure, habits ticked off and goals reached. Going up levels needs a share of life XP — never more than a quarter.</li>
       <li><b class="xp-a">App</b>: opening Tempo each day (more for a streak), scheduling events and tasks (a fifth of what they're worth — the rest comes when you do them), starting projects, logging habits, achievements.</li>
-      <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — more each time the same task slips again within a week.</li></ul>
+      <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — more each time the same task slips again within a week.</li>
+      <li><b class="xp-p">XP drains</b> (Settings → Game mode): time on activities you want to cut down on costs a share of your XP — more the higher your rank. <b class="xp-c">Clean bonus</b>: a day without any drain earns a share of that day's XP, a week without any earns a share of the week's — growing with each one in a row. 🚩 on the calendar marks the days you went up a level.</li></ul>
   </div></div>`, () => {}, { cls: 'wide' });
 }
 // A short burst of fireworks over the page
@@ -2565,7 +2612,7 @@ async function renderPaperView(seq) {
   const goalsP = await paperGoals(wk, end, per, items);
   if (seq !== app.renderSeq) return;
   const spin = app.npSpin; app.npSpin = false;
-  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP, projects: paperProjects(items, r.from, r.weekEnd), habits: paperHabits(r.from, r.weekEnd) }));
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP, projects: paperProjects(items, r.from, r.weekEnd), habits: paperHabits(r.from, r.weekEnd), game: paperGame(r.from, r.weekEnd) }));
   if (spin && !matchMedia('(prefers-reduced-motion: reduce)').matches) { const np = $('.np', root); np?.classList.add('np-spin'); np?.addEventListener('animationend', () => np.classList.remove('np-spin'), { once: true }); }
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
@@ -2611,6 +2658,31 @@ async function renderPaperView(seq) {
 }
 // Goal progress for the paper: weekly and monthly (or the months / year for longer periods).
 // Habits in the paper: what was kept in the period, against the habit's frequency; score and streak
+// Game news for the paper: XP, level-ups, clean streak and drains in [from, to)
+function paperGame(from, to) {
+  if (!gameOn()) return null;
+  const s = set(), g = s.game || {}, z = tz(), today = T.dayKey(Date.now(), z), a = T.dayKey(from, z), b = T.dayKey(to - 1, z);
+  const tot = gameTotals(), lv = gameLevel(tot), tier = GM.tierOf(lv.level);
+  const lab = (k) => T.format(T.dayStart(k, z), z, { weekday: 'short', day: 'numeric', month: 'short' });
+  let xp = 0, clean = 0, best = null, drain = 0; const what = {};
+  const addDrain = (ls) => { const x = ls.reduce((y, l) => y + l[1], 0); xp -= x; drain += x; for (const l of ls) what[l[0].split(':')[0]] = 1; };
+  for (let k = a; k <= b && k <= today; k = T.addDays(k, 1)) {
+    const d = k === today ? (app.gameToday ? { net: app.gameToday.net } : null) : g.ledger?.[k];
+    if (d) {
+      const dl = drainLines(k), dr = dl.day.reduce((x, l) => x + l[1], 0);
+      const n = d.net - dr; xp += d.net; clean += d.cb || 0; addDrain(dl.day);
+      if (!best || n > best.xp) best = { label: lab(k), xp: n };
+    }
+    const wk = T.startOfWeek(k, s.weekStart ?? 1), w = T.addDays(wk, 6) === k ? g.weeks?.[wk] : null;
+    if (w) { xp += (w.b || 0) + (w.cb || 0); clean += w.cb || 0; addDrain(drainLines(k).week); }
+    else if (k === today && app.gameDrain) addDrain(drainLines(k).week);
+  }
+  const ups = Object.entries(app.gameLevelUps || {}).filter(([k]) => k >= a && k <= b && k < today).map(([k, L]) => ({ k, level: L, label: lab(k) }));
+  if (today >= a && today <= b && lv.level > GM.levelAt(s, today, z)) ups.push({ k: today, level: lv.level, label: 'today' });
+  const newRank = ups.some((u) => GM.tierOf(u.level).from > GM.tierOf(u.level - 1).from) ? tier.name : '';
+  const ach = Object.entries(g.ach || {}).filter(([, at]) => at >= from && at < to).map(([id]) => GM.ACHIEVEMENTS.find((x) => x[0] === id)).filter(Boolean).map((x) => `${x[1]} ${x[2]}`);
+  return { level: lv.level, rank: tier.name, emblem: GM.emblemSVG(lv.level, 54), total: tot.total, toNext: lv.max ? 0 : Math.max(0, lv.span - lv.into), xp, ups, newRank, clean, cleanOn: GM.hasDrains(s), cleanDays: app.gameClean?.days || 0, cleanWeeks: app.gameClean?.weeks || 0, drain, drainWhat: Object.keys(what).join(', '), ach, best };
+}
 function paperHabits(from, to) {
   const s = set(), z = tz(), a = T.dayKey(from, z), b = T.dayKey(to - 1, z), end = T.addDays(b, 1), today = T.dayKey(Date.now(), z);
   return HB.list(s).map((h) => {
