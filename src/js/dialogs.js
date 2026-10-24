@@ -914,6 +914,7 @@ export function settingsDialog(ctx) {
   let projects = (s.projects || []).map((p) => ({ ...p }));
   let wx = { unit: W.defaultUnit(s.tz), ...(s.weather || {}) };
   let leave = { ...(s.leave || {}) };
+  let drains = (s.game?.drains || []).map((d) => ({ ...d, cats: [...(d.cats || [])], words: [...(d.words || [])], types: [...(d.types || ['app', 'busy', 'life'])] }));
   let picSrc = (s.picSources?.length ? s.picSources : XT.DEFAULT_SOURCES).map((x) => ({ ...x }));
   let nprofiles = N.profiles(s).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) }));
   const tp = s.timePrefs || S.DEFAULT_SETTINGS.timePrefs;
@@ -952,6 +953,7 @@ export function settingsDialog(ctx) {
           <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b> (things that build long-term skills, e.g. reading, working out)</span><div class="g-catlist game-life">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gl-c" value="${esc(c.id)}" ${life.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
           <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="g-catlist game-rest">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gr-c" value="${esc(c.id)}" ${rest.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
           <div class="field"><span>Categories that never score</span><div class="g-catlist game-no">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gn-c" value="${esc(c.id)}" ${(g.noCats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+          <div class="field"><span>XP drains — activities that cost XP (e.g. gaming) <em class="muted">(changing them counts all days again)</em></span><div class="drain-list"></div><button type="button" class="btn small add-drain">+ Add a drain</button></div>
           <details class="game-adv"><summary class="small"><b>Advanced</b> — adjust the points and the pace</summary>
             <div class="game-cfg">${GM.CFG.map(([k, label, d, lo, hi, step]) => `<label class="field"><span>${esc(label)} <em class="muted">(default ${d})</em></span><input type="number" class="gc-v num" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${g.cfg?.[k] ?? d}"></label>`).join('')}</div>
             <button type="button" class="btn small ghost gc-reset">Back to the defaults</button>
@@ -1168,6 +1170,41 @@ export function settingsDialog(ctx) {
       $$('.lv-row', dlg).forEach((row) => { $('.lv-del', row).onclick = () => { const r = ranges[+row.dataset.i]; for (let k = r.from; k <= r.to; k = T.addDays(k, 1)) delete leave[k]; drawLeave(); updSects(); }; });
     };
     drawLeave();
+    // XP drains editor
+    const drawDrains = () => {
+      const box = $('.drain-list', dlg); if (!box) return;
+      const sentence = (d) => { const tol = Math.max(+d.free || 0, +d.tol || 0); return `${+d.free ? `The first ${d.free} h a ${d.per} are free. ` : ''}${tol > (+d.free || 0) ? `Up to ${tol} h a ${d.per}: −${d.basePct}% of the XP of ${d.per === 'week' ? 'each day you do it' : 'that day'}. ` : ''}Beyond: +${d.growPct}% per extra hour${d.per === 'week' ? ' of the whole week\'s XP' : ''}, at most ${d.maxPct}%. Costs ${d.types.length === 3 ? 'all' : d.types.join(' + ')} XP.`; };
+      setHTML(box, drains.map((d, i) => `<div class="drain" data-i="${i}">
+        <div class="row"><input class="dr-name" value="${esc(d.name || '')}" placeholder="Name, e.g. Gameplay" maxlength="30"><select class="dr-per"><option value="week" ${d.per !== 'day' ? 'selected' : ''}>per week</option><option value="day" ${d.per === 'day' ? 'selected' : ''}>per day</option></select><span class="grow"></span><button type="button" class="icon-btn dr-del" title="Remove" aria-label="Remove">✕</button></div>
+        <label class="field"><span>Titles with these words</span><input class="dr-words" value="${esc((d.words || []).join(', '))}" placeholder="e.g. game, gaming, PlayStation"></label>
+        <div class="field"><span>…and/or these categories</span><div class="g-catlist dr-cats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" value="${esc(c.id)}" ${(d.cats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+        <div class="dr-nums">
+          <label class="field"><span>Free (h)</span><input type="number" class="dr-free num" min="0" step="0.25" value="${d.free ?? 0}"></label>
+          <label class="field"><span>Tolerated up to (h)</span><input type="number" class="dr-tol num" min="0" step="0.25" value="${d.tol ?? 2}"></label>
+          <label class="field"><span>Cost while tolerated (%)</span><input type="number" class="dr-base num" min="0" max="100" step="1" value="${d.basePct ?? 10}"></label>
+          <label class="field"><span>Extra per hour beyond (%)</span><input type="number" class="dr-grow num" min="0" max="100" step="1" value="${d.growPct ?? 15}"></label>
+          <label class="field"><span>At most (%)</span><input type="number" class="dr-max num" min="0" max="100" step="1" value="${d.maxPct ?? 75}"></label>
+        </div>
+        <div class="row small">Costs: ${['app', 'busy', 'life'].map((t) => `<label class="chk"><input type="checkbox" class="dr-type" value="${t}" ${d.types.includes(t) ? 'checked' : ''}> ${t} XP</label>`).join(' ')}</div>
+        <p class="muted small dr-say" style="margin:0">${esc(sentence(d))}</p>
+      </div>`).join('') || '<p class="muted small" style="margin:0">No drains. Add one for activities you want to cut down on — they cost XP the more you do them.</p>');
+      $$('.drain', box).forEach((row) => {
+        const d = drains[+row.dataset.i];
+        const read = () => {
+          d.name = $('.dr-name', row).value; d.per = $('.dr-per', row).value;
+          d.words = $('.dr-words', row).value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
+          d.cats = $$('.dr-cats input:checked', row).map((x) => x.value);
+          d.free = Math.max(0, +$('.dr-free', row).value || 0); d.tol = Math.max(0, +$('.dr-tol', row).value || 0);
+          d.basePct = Math.min(100, Math.max(0, +$('.dr-base', row).value || 0)); d.growPct = Math.min(100, Math.max(0, +$('.dr-grow', row).value || 0)); d.maxPct = Math.min(100, Math.max(0, +$('.dr-max', row).value || 0));
+          d.types = $$('.dr-type:checked', row).map((x) => x.value); if (!d.types.length) d.types = ['app', 'busy', 'life'];
+          $('.dr-say', row).textContent = sentence(d);
+        };
+        row.addEventListener('input', read); row.addEventListener('change', read);
+        $('.dr-del', row).onclick = () => { drains.splice(+row.dataset.i, 1); drawDrains(); };
+      });
+    };
+    drawDrains();
+    $('.add-drain', dlg)?.addEventListener('click', () => { drains.push({ ...GM.DRAIN_DEFAULT, id: 'dr' + Math.random().toString(36).slice(2, 8), words: [...GM.DRAIN_DEFAULT.words], cats: [], types: [...GM.DRAIN_DEFAULT.types] }); drawDrains(); });
     $('.gc-reset', dlg)?.addEventListener('click', () => { $$('.gc-v', dlg).forEach((x) => { x.value = GM.CFG.find((c) => c[0] === x.dataset.k)[2]; }); });
     linkRange(f.lvFrom, f.lvTo);
     $('.lv-add', dlg).onclick = () => {
@@ -1381,6 +1418,7 @@ export function settingsDialog(ctx) {
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
         game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value), noCats: $$('.gn-c:checked', dlg).map((x) => x.value),
+          drains: drains.map((d) => ({ ...d, name: (d.name || '').trim() || 'Drain' })).filter((d) => d.cats.length || d.words.length),
           cfg: Object.fromEntries($$('.gc-v', dlg).map((x) => [x.dataset.k, x.value]).filter(([k, v]) => v !== '' && +v !== GM.CFG.find((c) => c[0] === k)[2]).map(([k, v]) => [k, +v])),
           ...(() => { const st0 = f.gameStart.value && f.gameStart.value <= T.dayKey(Date.now(), s.tz) ? f.gameStart.value : (s.game?.started || T.dayKey(Date.now(), s.tz)); return st0 !== s.game?.started ? { started: st0, ledger: {}, weeks: {} } : { started: st0 }; })(),
           active: f.gameOn.checked && !s.game?.on ? [...new Set([...(s.game?.active || []), T.dayKey(Date.now(), s.tz)])] : s.game?.active },

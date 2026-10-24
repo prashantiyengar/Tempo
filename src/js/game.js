@@ -35,7 +35,8 @@ export function cfg(s) {
   for (const [k, , d, lo, hi] of CFG) { const v = c[k]; o[k] = v == null || v === '' || !Number.isFinite(+v) ? d : Math.min(hi, Math.max(lo, +v)); }
   return o;
 }
-export const cfgHash = (s) => JSON.stringify(cfg(s));
+// Everything that changes how XP is counted: changing any of it counts all days again from the start.
+export const cfgHash = (s) => JSON.stringify([cfg(s), s?.game?.drains || [], s?.game?.lifeCats || [], s?.game?.restCats || [], s?.game?.noCats || []]);
 
 // ---------- levels ----------
 export const MAX_LEVEL = 300;
@@ -325,6 +326,71 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   return r;
 }
 function merge(iv) { iv.sort((a, b) => a[0] - b[0]); const out = []; for (const x of iv) { const l = out[out.length - 1]; if (l && x[0] <= l[1]) l[1] = Math.max(l[1], x[1]); else out.push([...x]); } return out; }
+
+// ---------- XP drains: categories (or words) that cost XP ----------
+// { id, name, cats, words, per: 'day' | 'week', free: hours with no cost, tol: hours tolerated, basePct: cost while
+//   tolerated (% of that day's XP), growPct: extra % for each hour beyond, maxPct: the most it can cost (% of the
+//   week's — or day's — XP), types: ['app','busy','life'] }
+// Example "Gameplay": weekly, tolerate 2 h at 10% of the XP of the days you played; beyond that +15% an hour of the
+// whole week's XP, up to 75%.
+export const DRAIN_DEFAULT = { name: 'Gameplay', cats: [], words: ['game', 'gaming'], per: 'week', free: 0, tol: 2, basePct: 10, growPct: 15, maxPct: 75, types: ['app', 'busy', 'life'] };
+const foldD = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+export function drainMatcher(d, s) {
+  const set = new Set(d.cats || []);
+  for (const c of s.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
+  const ws = (d.words || []).map((w) => foldD(String(w).trim())).filter(Boolean);
+  const re = ws.length ? new RegExp(`(^|[^\\p{L}\\p{N}])(${ws.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'u') : null;
+  return (it) => {
+    if (it.allDay || it.declined || (it.kind === 'chunk' && it.sess?.kind === 'waived')) return false;
+    if (set.size && set.has((it.kind === 'chunk' ? it.task?.categoryId : it.catId) || '__none')) return true;
+    return !!re && re.test(foldD(it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`));
+  };
+}
+// Hours of a drain per day in [fromKey, toKey) (elapsed only, overlaps counted once)
+export function drainHours(d, s, items, fromKey, toKey, now = Date.now()) {
+  const z = s.tz, m = drainMatcher(d, s), out = {};
+  for (let k = fromKey; k < toKey; k = T.addDays(k, 1)) {
+    const a = T.dayStart(k, z), b = Math.min(T.dayStart(T.addDays(k, 1), z), now);
+    const iv = items.filter(m).map((it) => [Math.max(it.start, a), Math.min(it.end, b)]).filter(([x, y]) => y > x).sort((x, y) => x[0] - y[0]);
+    let ms = 0, cs = -1, ce = -1;
+    for (const [x, y] of iv) { if (x > ce) { if (ce > cs) ms += ce - cs; cs = x; ce = y; } else ce = Math.max(ce, y); }
+    if (ce > cs) ms += ce - cs;
+    out[k] = ms / T.HOUR;
+  }
+  return out;
+}
+export function drainPct(d, h) {
+  const free = +d.free || 0, tol = Math.max(free, +d.tol || 0);
+  if (h <= free + 1e-9) return 0;
+  if (h <= tol + 1e-9) return +d.basePct || 0;
+  return Math.min(+d.maxPct || 75, (+d.basePct || 0) + (+d.growPct || 0) * (h - tol));
+}
+// What the drains cost in a week. dayXP: { k: { app, busy, life } } for the days of the week (XP before drains).
+// Returns { total, lines: [[label, cost, dayKey | null]] }
+export function weekDrains(s, wk, dayXPs, items, now = Date.now()) {
+  const drains = (s.game?.drains || []).filter((d) => (d.cats || []).length || (d.words || []).length);
+  const days = Array.from({ length: 7 }, (_, i) => T.addDays(wk, i));
+  const xpOf = (k, types) => { const x = dayXPs[k]; return x ? types.reduce((a, t) => a + Math.max(0, x[t] || 0), 0) : 0; };
+  const lines = [];
+  for (const d of drains) {
+    const types = d.types?.length ? d.types : ['app', 'busy', 'life'];
+    const hrs = drainHours(d, s, items, wk, T.addDays(wk, 7), now);
+    const fh = (h) => (h >= 1 ? `${+h.toFixed(1)} h` : `${Math.round(h * 60)} min`);
+    if (d.per === 'day') {
+      for (const k of days) { const h = hrs[k] || 0, p = drainPct(d, h); if (p) lines.push([`${d.name}: ${fh(h)} that day → −${Math.round(p)}%`, Math.round(xpOf(k, types) * p / 100), k]); }
+      continue;
+    }
+    const H = days.reduce((a, k) => a + (hrs[k] || 0), 0), tol = Math.max(+d.free || 0, +d.tol || 0);
+    if (H <= tol + 1e-9) {
+      const p = drainPct(d, H);
+      if (p) for (const k of days) if ((hrs[k] || 0) > 0) lines.push([`${d.name}: ${fh(hrs[k])} (${fh(H)} this week, tolerated) → −${Math.round(p)}% of the day`, Math.round(xpOf(k, types) * p / 100), k]);
+    } else {
+      const p = drainPct(d, H), wkXP = days.reduce((a, k) => a + xpOf(k, types), 0);
+      lines.push([`${d.name}: ${fh(H)} this week, ${fh(H - tol)} over the ${fh(tol)} tolerated → −${Math.round(p)}% of the week`, Math.round(wkXP * p / 100), null]);
+    }
+  }
+  return { total: lines.reduce((a, l) => a + l[1], 0), lines: lines.filter((l) => l[1] > 0) };
+}
 
 // Week bonus (once the week is over): how much of the week's waking hours were planned, and keeping to the plan.
 export function weekXP(wk, s, days) {

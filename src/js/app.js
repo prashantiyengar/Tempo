@@ -677,11 +677,19 @@ function gameCtx(items) {
 function gameDayChip(k, items) {
   if (!gameOn()) return '';
   const today = T.dayKey(Date.now(), tz()), led = set().game?.ledger?.[k];
-  if (k < today && led) return `<button type="button" class="xp-chip ${led.net < 0 ? 'neg' : ''}" data-xpday="${k}" title="XP that day: ${led.net >= 0 ? '+' : ''}${led.net} — click for the breakdown">${led.net >= 0 ? '+' : ''}${led.net} XP</button>`;
+  const dr = drainLines(k).day.reduce((a, l) => a + l[1], 0);
+  if (k < today && led) { const n = led.net - dr; return `<button type="button" class="xp-chip ${n < 0 ? 'neg' : ''}" data-xpday="${k}" title="XP that day: ${n >= 0 ? '+' : ''}${n}${dr ? ` (after −${dr} drained)` : ''} — click for the breakdown">${n >= 0 ? '+' : ''}${n} XP</button>`; }
   if (k < (set().game?.started || today)) return '';
   const d = GM.dayXP(k, set(), gameCtx(items));
   if (k > today) return d.potential.total ? `<button type="button" class="xp-chip pot" data-xpday="${k}" title="XP you can earn by completing this day's events and sessions — click for details">+${d.potential.total} possible</button>` : '';
+  d.net -= dr;
   return `<button type="button" class="xp-chip ${d.net < 0 ? 'neg' : ''}" data-xpday="${k}" title="${esc(`${d.net >= 0 ? 'Earned' : 'Net'} ${d.net} XP so far${k === today && d.potential.total ? `, ${d.potential.total} more to earn today` : ''} — click for the breakdown`)}">${d.net >= 0 ? '+' : ''}${d.net}${k === today && d.potential.total ? ` <i>· +${d.potential.total} to go</i>` : ''}</button>`;
+}
+// Drain lines that belong to day k ([label, cost, dayKey|null]; null = the whole week)
+function drainLines(k) {
+  const g = set().game || {}, wk = T.startOfWeek(k, set().weekStart ?? 1);
+  const lines = g.weeks?.[wk]?.dl || (app.gameDrain?.wk === wk ? app.gameDrain.lines : []) || [];
+  return { day: lines.filter((l) => l[2] === k), week: lines.filter((l) => l[2] == null) };
 }
 // Click a day's XP: how the number came about (and what's still to earn that day)
 async function xpBreakdown(k, rect) {
@@ -695,6 +703,7 @@ async function xpBreakdown(k, rect) {
   popover(rect, `<div class="pop xb"><h3>🎮 ${esc(T.format(T.dayStart(k, z), z, { weekday: 'long', day: 'numeric', month: 'short' }))}</h3>
     <div class="xb-net ${d.net < 0 ? 'xp-p' : ''}">${k > today ? 'Nothing earned yet' : `${d.net >= 0 ? '+' : ''}${d.net} XP`}${led && k < today && led.net !== d.net ? ` <span class="muted small">(counted as ${led.net >= 0 ? '+' : ''}${led.net} when the day was settled)</span>` : ''}</div>
     ${group('busy', 'Busy', 'xp-b')}${group('life', 'Life', 'xp-l')}${group('app', 'App', 'xp-a')}${group('pen', 'Rescheduling', 'xp-p')}
+    ${(() => { const dl = drainLines(k), all = [...dl.day, ...dl.week]; if (!all.length) return ''; const tot = all.reduce((a, l) => a + l[1], 0); return `<div class="xb-g"><div class="xb-h xp-p"><b>XP drains</b><b>−${tot}</b></div>${all.map(([t, x, dk]) => `<div class="xb-l"><span>${esc(t)}${dk ? '' : ' <span class="muted">(this week)</span>'}</span><span>−${x}</span></div>`).join('')}</div>`; })()}
     ${todo.length ? `<div class="xb-g"><div class="xb-h"><b>Still to earn</b><b>+${todo.reduce((a, o) => a + GM.sumXP(o.x), 0)}</b></div>${todo.map((o) => `<div class="xb-l"><span>${esc(o.it.title)}</span><span><span class="xp-b">${o.x.busy ? '+' + o.x.busy : ''}</span> <span class="xp-l">${o.x.life ? '+' + o.x.life : ''}</span></span></div>`).join('')}</div>` : ''}
     ${d.quests?.length && k <= today ? `<div class="xb-g"><div class="xb-h"><b>Quests</b></div>${d.quests.map((q) => `<div class="xb-l"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span></div>`).join('')}</div>` : ''}
   </div>`, (p, close) => {});
@@ -747,10 +756,18 @@ async function gameRefresh() {
       if (g.weeks[wk]) continue;
       const days = Array.from({ length: 7 }, (_, i) => g.ledger[T.addDays(wk, i)]).filter(Boolean);
       if (!days.length) continue;
-      const w = GM.weekXP(wk, s, days); g.weeks[wk] = { b: w.busy, fill: +w.fill.toFixed(3), pens: w.pens }; changed = true;
+      const w = GM.weekXP(wk, s, days);
+      const xps = {}; for (let i = 0; i < 7; i++) { const k = T.addDays(wk, i), l = g.ledger[k]; if (l) xps[k] = { app: l.a, busy: l.b, life: l.l }; }
+      const dr = GM.weekDrains(s, wk, xps, items, now);
+      g.weeks[wk] = { b: w.busy, fill: +w.fill.toFixed(3), pens: w.pens, drain: dr.total, dl: dr.lines }; changed = true;
       if (w.fill >= 0.6) unlock('full-week'); if (w.pens === 0 && days.length >= 5) unlock('clean-week');
     }
     app.gameToday = GM.dayXP(today, s, ctx, now);
+    // drains of the week under way (worked out live)
+    { const wk = T.startOfWeek(today, s.weekStart ?? 1), xps = {};
+      for (let i = 0; i < 7; i++) { const k = T.addDays(wk, i), l = g.ledger[k]; if (l) xps[k] = { app: l.a, busy: l.b, life: l.l }; }
+      xps[today] = { app: app.gameToday.app, busy: app.gameToday.busy, life: app.gameToday.life };
+      app.gameDrain = { wk, ...GM.weekDrains(s, wk, xps, items, now) }; }
     // achievements
     function unlock(id) { if (!g.ach[id]) { g.ach[id] = now; changed = true; const a = GM.ACHIEVEMENTS.find((x) => x[0] === id); if (a) setTimeout(() => toast(`🏆 Achievement: ${a[1]} ${a[2]} — ${a[3]} (+${GM.ACH_XP} XP)`, { ms: 6000, noUndo: true }), 300); } }
     const tot = gameTotals();
@@ -771,7 +788,10 @@ const gameLevel = (tot) => { const c = GM.cfg(set()); return GM.levelOf(tot.tota
 function gameTotals() {
   const g = set().game || {}, t = { app: 0, busy: 0, life: 0, pen: 0 };
   for (const d of Object.values(g.ledger || {})) { t.app += d.a || 0; t.busy += d.b || 0; t.life += d.l || 0; t.pen += d.p || 0; }
-  for (const w of Object.values(g.weeks || {})) t.busy += w.b || 0;
+  t.drain = 0;
+  for (const w of Object.values(g.weeks || {})) { t.busy += w.b || 0; t.drain += w.drain || 0; }
+  if (app.gameDrain && !g.weeks?.[app.gameDrain.wk]) t.drain += app.gameDrain.total || 0;
+  t.pen += t.drain;
   t.app += Object.keys(g.ach || {}).length * GM.ACH_XP;
   const d = app.gameToday; if (d) { t.app += d.app; t.busy += d.busy; t.life += d.life; t.pen += d.pen; }
   t.total = Math.max(0, t.app + t.busy + t.life - t.pen);
@@ -794,7 +814,7 @@ function renderGamePanel() {
     <div class="gp-body" ${collapsed ? 'hidden' : ''}>
       <div class="gp-sub">${lv.max ? 'Highest level reached!' : lv.capped ? `Enough XP for level ${lv.level + 1}` : `${lv.into.toLocaleString()} / ${lv.span.toLocaleString()} XP to level ${lv.level + 1}`}${lv.capped ? `<br><b class="xp-l">🔒 ${lv.lifeNeed.toLocaleString()} more life XP</b> to unlock level ${lv.level + 1}` : ''}</div>
       <div class="gp-mix" title="Your XP by type"><i class="xp-a-bg" style="width:${share(tot.app)}%"></i><i class="xp-b-bg" style="width:${share(tot.busy)}%"></i><i class="xp-l-bg" style="width:${share(tot.life)}%"></i></div>
-      <div class="gp-types"><span class="xp-a">● App ${tot.app.toLocaleString()}</span><span class="xp-b">● Busy ${tot.busy.toLocaleString()}</span><span class="xp-l">● Life ${tot.life.toLocaleString()}</span>${tot.pen ? `<span class="xp-p">− ${tot.pen.toLocaleString()} rescheduling</span>` : ''}</div>
+      <div class="gp-types"><span class="xp-a">● App ${tot.app.toLocaleString()}</span><span class="xp-b">● Busy ${tot.busy.toLocaleString()}</span><span class="xp-l">● Life ${tot.life.toLocaleString()}</span>${tot.pen - tot.drain ? `<span class="xp-p">− ${(tot.pen - tot.drain).toLocaleString()} rescheduling</span>` : ''}${tot.drain ? `<span class="xp-p" title="XP drains (Settings → Game mode)">− ${tot.drain.toLocaleString()} drained</span>` : ''}</div>
       <div class="gp-row"><span title="Days in a row you used Tempo">🔥 ${streak} day${streak === 1 ? '' : 's'}</span><span title="Total XP">⭐ ${tot.total.toLocaleString()} XP</span>${d?.potential?.total ? `<span title="Still to earn today">🎯 +${d.potential.total} today</span>` : ''}</div>
       ${d?.quests?.length ? `<div class="gp-q"><b>Today's quests</b>${d.quests.map((q) => `<div class="gp-qi ${q.ok ? 'ok' : ''}"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span><i style="width:${Math.min(100, (q.have / q.goal) * 100)}%"></i></div>`).join('')}</div>` : ''}
       <div class="gp-row"><button type="button" class="link gp-more">Ranks, achievements & XP log</button></div>
@@ -3299,6 +3319,7 @@ async function openSettings() {
     await hoursChanged(before, r.settings);
     if (r.settings.sleepEvents && !before.sleepEvents) addSleepBlocks({ force: true });
     if (r.settings.game?.on && r.settings.game.started !== before.game?.started && before.game?.on) { app.gameToday = null; toast(`🎮 Counting XP from ${T.format(T.dayStart(r.settings.game.started, tz()), tz(), { day: 'numeric', month: 'long' })} — adding it up…`, { ms: 4000 }); gameRefresh(); }
+    if (r.settings.game?.on && before.game?.on && GM.cfgHash(r.settings) !== GM.cfgHash(before) && r.settings.game.started === before.game?.started) { app.gameToday = null; toast('🎮 Recounting your XP from the start with the new settings…', { ms: 4000, noUndo: true }); gameRefresh(); }
     if (r.settings.game?.on !== before.game?.on) { app.gameToday = null; if (r.settings.game?.on) { toast('🎮 Game mode on — earn XP and level up!', { ms: 5000 }); gameRefresh(); } renderGamePanel(); render(); }
     const addedLeave = Object.keys(r.settings.leave || {}).filter((k) => S.leaveOf(r.settings, k) && !S.leaveOf(before, k));
     if (addedLeave.length && (await afterLeave(addedLeave)) === 'back') { for (const k of addedLeave) delete set().leave[k]; await E.persist(st(), ['settings']); await render(); }
