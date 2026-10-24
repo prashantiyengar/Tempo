@@ -604,7 +604,9 @@ function habitCell(h, k) {
     const done = HB.isDone(h, k);
     return `<button type="button" class="hb-c num ${v > 0 ? 'on' : ''} ${done ? 'full' : ''} ${v === -1 ? 'skip' : ''}" data-k="${k}" style="--c:${h.color}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}">${v === -1 ? '»' : `<b>${v > 0 ? HB.fmtNum(v) : '0'}</b><small>${esc(h.unit || '')}</small>`}</button>`;
   }
-  return `<button type="button" class="hb-c ${v === 1 ? 'on' : v === -1 ? 'skip' : ''}" data-k="${k}" style="--c:${h.color}" aria-pressed="${v === 1}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}${v === -1 ? ' — skipped' : ''}">${v === 1 ? '✓' : v === -1 ? '»' : '✕'}</button>`;
+  const auto = HB.isAuto(h, k), hit = h.autoHit?.[k];
+  const why = auto ? (h.auto.mode === 'tick' ? (hit ? ` — ticked automatically: “${hit}”` : ' — nothing on the calendar matched') : (hit ? ` — unticked automatically: “${hit}”` : ' — ticked automatically: nothing matched')) : HB.autoOn(h) && HB.isManual(h, k) ? ' — set by hand' : '';
+  return `<button type="button" class="hb-c ${v === 1 ? 'on' : v === -1 ? 'skip' : ''} ${auto ? 'auto' : ''}" data-k="${k}" style="--c:${h.color}" aria-pressed="${v === 1}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}${v === -1 ? ' — skipped' : ''}${esc(why)}">${v === 1 ? '✓' : v === -1 ? '»' : '✕'}</button>`;
 }
 function renderHabits(box, { days = 5 } = {}) {
   const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
@@ -613,7 +615,7 @@ function renderHabits(box, { days = 5 } = {}) {
   setHTML(box, `<div class="hb-list" style="--hb-days:${days}">
       <div class="hb-row hb-headrow"><span class="hb-name"><button type="button" class="link hb-add" title="New habit">+ New${days > 4 ? ' habit' : ''}</button></span>${keys.map((k) => `<span class="hb-day"><b>${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }).slice(0, 3).toUpperCase())}</b>${T.parseKey(k).d}</span>`).join('')}</div>
       ${habits.map((h) => { const sc = HB.score(h, s, today); return `<div class="hb-row" data-id="${esc(h.id)}" style="--c:${h.color}">
-        <button type="button" class="hb-name" title="${esc(h.question || h.name)} — ${Math.round(sc * 100)}% · ${esc(HB.freqLabel(h))}">${ringSVG(sc, h.color)}<span class="hb-n">${esc(h.name)}</span></button>
+        <button type="button" class="hb-name" title="${esc(h.question || h.name)} — ${Math.round(sc * 100)}% · ${esc(HB.freqLabel(h))}">${ringSVG(sc, h.color)}<span class="hb-n">${esc(h.name)}</span>${HB.autoOn(h) ? `<span class="hb-autoic" title="Ticked automatically from your calendar: ${esc(h.auto.mode === 'tick' ? 'when' : 'unless')} a title contains ${esc(h.auto.words.join(', '))}">⚡</span>` : ''}</button>
         ${keys.map((k) => habitCell(h, k)).join('')}</div>`; }).join('') || `<p class="muted small empty">Track habits like exercise, reading or water: tick each day off, and watch the score ring fill up. <button type="button" class="link hb-add">Add your first habit</button></p>`}
       ${archived.length ? `<details class="hb-arch-l"><summary class="muted small">Archived (${archived.length})</summary>${archived.map((h) => `<button type="button" class="link hb-open-a" data-id="${esc(h.id)}">${esc(h.name)}</button>`).join(' · ')}</details>` : ''}
     </div>`);
@@ -647,11 +649,37 @@ function wireHabitCell(c, id) {
     putHabit(v.skip ? HB.setValue(h, k, -1) : HB.setValue(h, k, v.v === '' ? null : +v.v), 'habit amount');
   });
 }
+// Automatic habits: look at the events and task sessions of the days since "from" (up to 60 days back each time)
+// and tick / untick them. Runs after each refresh (at most every 2 minutes) and right after a habit is set up.
+let habitAutoAt = 0, habitAutoBusy = false;
+async function autoHabits({ force = false } = {}) {
+  const auto = (set().habits || []).filter((h) => HB.autoOn(h) && !h.archived);
+  if (!auto.length || habitAutoBusy || (!force && Date.now() - habitAutoAt < 2 * T.MIN)) return;
+  habitAutoBusy = true;
+  try {
+    const z = tz(), today = T.dayKey(Date.now(), z), back = T.addDays(today, -60);
+    const from = auto.reduce((a, h) => { const f = h.auto.from && h.auto.from > back ? h.auto.from : back; return f < a ? f : a; }, today);
+    const keys = []; for (let k = from; k <= today; k = T.addDays(k, 1)) keys.push(k);
+    const items = await collectItems([from, today]);
+    habitAutoAt = Date.now();
+    let changed = false;
+    const next = (set().habits || []).map((h) => {
+      if (!HB.autoOn(h) || h.archived) return h;
+      const nh = HB.applyAuto(h, items, keys, set(), Date.now());
+      if (JSON.stringify(nh.autoLog) !== JSON.stringify(h.autoLog || {}) || JSON.stringify(nh.autoHit) !== JSON.stringify(h.autoHit || {})) changed = true;
+      return nh;
+    });
+    if (changed) { set().habits = next; await E.persist(st(), ['settings']); syncSharedSoon(); refreshHabits(); }
+  } catch (err) { console.warn('Tempo: automatic habits', err); }
+  finally { habitAutoBusy = false; }
+}
 async function editHabit(h) {
   const r = await D.habitDialog(ctx, h);
   if (!r) return;
   if (r.delete) { await saveHabits((set().habits || []).filter((x) => x.id !== h.id), `delete habit “${h.name}”`); toast(`Deleted “${h.name}”`); return; }
+  if (JSON.stringify(r.auto || null) !== JSON.stringify(h?.auto || null)) r.autoLog = {}; // set up afresh
   await putHabit(r, h ? `edit habit “${r.name}”` : `new habit “${r.name}”`);
+  if (HB.autoOn(r)) await autoHabits({ force: true });
   if (!h) { app.sideTab = 'habits'; try { localStorage.setItem('tempo:sideTab', 'habits'); } catch { /* storage blocked */ } renderLater(); }
   return r;
 }
@@ -663,7 +691,7 @@ async function habitDetail(id) {
     const ser = HB.scoreSeries(h, s, today), sc = ser.length ? ser[ser.length - 1].sc : 0;
     const at = (k) => { const x = ser.find((q) => q.k === k); return x ? x.sc : 0; };
     const dm = sc - at(T.addDays(today, -30)), dy = sc - at(T.addDays(today, -365));
-    const total = Object.entries(h.log || {}).reduce((acc, [k, v]) => acc + (k > today ? 0 : HB.isNumber(h) ? (v > 0 ? +v : 0) : v === 1 ? 1 : 0), 0);
+    const total = [...new Set([...Object.keys(h.log || {}), ...Object.keys(h.autoLog || {})])].reduce((acc, k) => { const v = HB.val(h, k); return acc + (k > today ? 0 : HB.isNumber(h) ? (v > 0 ? +v : 0) : v === 1 ? 1 : 0); }, 0);
     const pctS = (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`;
     // score chart: last 26 weeks, one point a week
     const pts = []; for (let i = 26; i >= 0; i--) pts.push(at(T.addDays(today, -7 * i)));
@@ -1829,6 +1857,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     renderBanner();
   }
   markBaseline();
+  autoHabits();
   await handleProblems(problems);
 }
 

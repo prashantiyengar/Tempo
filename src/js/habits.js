@@ -25,7 +25,20 @@ export function freqLabel(h) {
 }
 export const fmtNum = (v) => (Math.abs(v) >= 100 || Number.isInteger(+v) ? String(Math.round(v)) : String(+(+v).toFixed(1)));
 
-export const val = (h, k) => h.log?.[k];
+// ---- Automatic ticks from what's on your calendar (yes/no habits) ----
+// h.auto = { mode: 'tick' | 'untick', words: ['run', 'jog'], from: 'YYYY-MM-DD' }
+//   tick:   a day is ticked when an event or task session that day contains one of the words, otherwise not
+//   untick: a day is ticked unless an event or task session contains one of them (e.g. "Didn't play computer games")
+// Only what has already started counts — never future items. The results are kept in h.autoLog { day: 1 | 0 }
+// (and h.autoHit { day: title }); anything you set by hand (h.log, where 0 = "not done") wins over them.
+export const autoOn = (h) => !!(h && h.type !== 'number' && h.auto && (h.auto.mode === 'tick' || h.auto.mode === 'untick') && (h.auto.words || []).some((w) => String(w).trim()));
+export const isManual = (h, k) => !!h.log && Object.prototype.hasOwnProperty.call(h.log, k);
+export const isAuto = (h, k) => autoOn(h) && !isManual(h, k) && h.autoLog?.[k] != null;
+export const val = (h, k) => {
+  if (isManual(h, k)) { const v = h.log[k]; return v === 0 ? null : v; }
+  if (autoOn(h) && h.autoLog?.[k] === 1) return 1;
+  return undefined;
+};
 const goalOf = (h) => (isNumber(h) ? +h.target || 1 : freqOf(h).times);
 export const isSkip = (h, k) => val(h, k) === -1;
 // how much of the day's share was done (0..1): yes/no 1 when ticked; numbers relative to the daily share of the target
@@ -41,8 +54,52 @@ export const isDone = (h, k) => (isNumber(h) ? (+val(h, k) || 0) > 0 && dayValue
 // Next state when a day is tapped: yes/no cycles not done → done → not done; skip is set separately.
 export function toggled(h, k) {
   const log = { ...(h.log || {}) };
+  if (autoOn(h)) {
+    // set the opposite of what's shown; when that's what the calendar says anyway, go back to automatic
+    const want = val(h, k) === 1 || val(h, k) === -1 ? 0 : 1;
+    const autoV = h.autoLog?.[k] === 1 ? 1 : h.autoLog?.[k] === 0 ? 0 : null;
+    if (val(h, k) === -1) delete log[k];
+    else if (autoV != null && want === autoV) delete log[k]; else log[k] = want;
+    return { ...h, log };
+  }
   if (val(h, k) === 1 || val(h, k) === -1) delete log[k]; else log[k] = 1;
   return { ...h, log };
+}
+// Words match at the start of a word, ignoring case and accents: "run" finds "Run", "running", "Morning run",
+// but not "brunch".
+const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export function matcher(words) {
+  const ws = (words || []).map((w) => fold(String(w).trim())).filter(Boolean);
+  if (!ws.length) return () => false;
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${ws.map(esc).join('|')})`, 'u');
+  return (text) => re.test(fold(text));
+}
+const itemTitle = (it) => (it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`);
+// Work out the automatic value for each of `keys` from the items (events and task sessions) of those days.
+export function applyAuto(h, items, keys, s, now = Date.now()) {
+  if (!autoOn(h)) return h;
+  const z = s.tz, today = T.dayKey(now, z), from = h.auto.from || (h.created ? T.dayKey(h.created, z) : today);
+  const has = matcher(h.auto.words);
+  const hits = {};
+  for (const it of items) {
+    if (it.start > now || it.declined) continue;
+    if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) continue;
+    const title = itemTitle(it);
+    if (!has(title)) continue;
+    const k = it.allDay ? it.startKey : T.dayKey(it.start, z);
+    if (!hits[k]) hits[k] = (it.task?.title || it.title || '').slice(0, 60);
+  }
+  const autoLog = { ...(h.autoLog || {}) }, autoHit = { ...(h.autoHit || {}) };
+  for (const k of keys) {
+    if (k > today || k < from) { delete autoLog[k]; delete autoHit[k]; continue; }
+    const hit = hits[k];
+    autoLog[k] = h.auto.mode === 'tick' ? (hit ? 1 : 0) : (hit ? 0 : 1);
+    if (hit) autoHit[k] = hit; else delete autoHit[k];
+  }
+  // older days outside `keys` keep what was worked out before; days before "from" go
+  for (const k of Object.keys(autoLog)) if (k < from || k > today) { delete autoLog[k]; delete autoHit[k]; }
+  return { ...h, autoLog, autoHit };
 }
 export function setValue(h, k, v) {
   const log = { ...(h.log || {}) };
@@ -52,7 +109,7 @@ export function setValue(h, k, v) {
 export const skipped = (h, k) => setValue(h, k, isSkip(h, k) ? null : -1);
 
 const firstKey = (h, s) => {
-  const logged = Object.keys(h.log || {}).sort()[0];
+  const logged = [...Object.keys(h.log || {}), ...(autoOn(h) ? Object.keys(h.autoLog || {}).filter((k) => h.autoLog[k] === 1) : [])].sort()[0];
   const made = h.created ? T.dayKey(h.created, s.tz) : null;
   return [logged, made].filter(Boolean).sort()[0] || T.dayKey(Date.now(), s.tz);
 };

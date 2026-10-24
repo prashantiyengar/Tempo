@@ -1963,6 +1963,17 @@ export function habitDialog(ctx, habit = null) {
         <label class="field"><span>Unit</span><input name="unit" value="${esc(h0.unit || '')}" placeholder="e.g. glasses, km, pages" maxlength="20"></label>
         <label class="field"><span>Per</span><select name="nper"><option value="day" ${f0.per === 'day' ? 'selected' : ''}>day</option><option value="week" ${f0.per === 'week' ? 'selected' : ''}>week</option><option value="month" ${f0.per === 'month' ? 'selected' : ''}>month</option></select></label>
       </div>
+      <fieldset class="box hb-auto"><legend>Automatic, from your calendar</legend>
+        <label class="field"><span>Tick it off by itself</span><select name="amode">
+          <option value="">No — I tick it off myself</option>
+          <option value="tick" ${h0.auto?.mode === 'tick' ? 'selected' : ''}>Tick a day when an event or task contains…</option>
+          <option value="untick" ${h0.auto?.mode === 'untick' ? 'selected' : ''}>Tick every day, except when an event or task contains…</option></select></label>
+        <div class="hb-auto-more">
+          <label class="field"><span>Words to look for in titles</span><input name="awords" value="${esc((h0.auto?.words || []).join(', '))}" placeholder="e.g. run, gym, swim (separate with commas)" autocomplete="off"></label>
+          <label class="field"><span>From</span><input type="date" data-quick="off" name="afrom" value="${esc(h0.auto?.from || T.addDays(T.dayKey(Date.now(), ctx.state.settings.tz), -30))}"></label>
+          <p class="muted small" style="margin:0">Only events and task sessions that have already started count, never future ones. Words match the start of a word, ignoring case — “run” finds “Morning run” and “Running”, not “Brunch”. A day you tick or untick yourself keeps your choice.</p>
+        </div>
+      </fieldset>
       <p class="muted small" style="margin:0">Tick a habit off in the list (click a day). Right-click or long-press a day to mark it skipped — a skipped day doesn't break your streak.</p>
     </div>
     <footer class="actions">${habit ? `<button type="button" class="btn ghost danger hb-del">Delete…</button><button type="button" class="btn ghost hb-arch">${habit.archived ? 'Unarchive' : 'Archive'}</button>` : ''}<span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">${habit ? 'Save' : 'Add habit'}</button></footer>
@@ -1974,6 +1985,8 @@ export function habitDialog(ctx, habit = null) {
       $('.hb-yesno', dlg).style.display = num ? 'none' : '';
       $('.hb-number', dlg).style.display = num ? '' : 'none';
       $('.hb-times', dlg).style.display = f.per.value === 'day' ? 'none' : '';
+      $('.hb-auto', dlg).style.display = num ? 'none' : '';
+      $('.hb-auto-more', dlg).style.display = f.amode.value ? '' : 'none';
     };
     f.addEventListener('change', sync); sync();
     $('.hb-del', dlg)?.addEventListener('click', async () => { if (await choose(`Delete “${h0.name}”?`, 'Its whole history goes too. (Archiving keeps it.)', [{ value: true, label: 'Delete the habit', danger: true }])) close({ delete: true }); });
@@ -1985,7 +1998,8 @@ export function habitDialog(ctx, habit = null) {
       const per = num ? f.nper.value : f.per.value;
       close({ ...h0, name, question: f.question.value.trim(), color: f.color.value || h0.color, type: num ? 'number' : 'yesno',
         freq: { per, times: num || per === 'day' ? 1 : Math.max(1, Math.min(per === 'week' ? 7 : 31, Math.round(+f.times.value || 1))) },
-        target: num ? Math.max(0.1, +f.target.value || 1) : 1, unit: num ? f.unit.value.trim() : '' });
+        target: num ? Math.max(0.1, +f.target.value || 1) : 1, unit: num ? f.unit.value.trim() : '',
+        auto: !num && f.amode.value && f.awords.value.trim() ? { mode: f.amode.value, words: [...new Set(f.awords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean))].slice(0, 12), from: f.afrom.value || T.dayKey(Date.now(), ctx.state.settings.tz) } : null });
     });
   }, { cls: 'narrow' });
 }
