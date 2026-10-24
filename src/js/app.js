@@ -538,6 +538,8 @@ async function saveProject(r, before) {
     toast(`Deleted project “${before.name}”`); return;
   }
   const p = r.project;
+  // the project's category goes on its tasks and events (ones without a category, or still on the old project category)
+  const pcat = p.catId ? C.catById(s, p.catId) : null, oldCat = before?.catId || null, catChanged = (p.catId || null) !== oldCat;
   const projectsBefore = JSON.parse(JSON.stringify(P.list(s))), createdEvents = [];
   let prevEventEnd = 0, made = 0;
   for (let i = 0; i < p.steps.length; i++) {
@@ -547,14 +549,17 @@ async function saveProject(r, before) {
       const fields = { title, earliestStart: Math.max(x.start || 0, p.sequential ? prevEventEnd : 0) || null, deadline: x.end, totalMinutes: Math.max(5, Math.round((+x.hours || 1) * 60)), projectId: p.id, projectName: p.name, projectStep: i + 1 };
       const t = x.ref && st().tasks.find((y) => y.id === x.ref);
       if (t) {
-        const changed = Object.entries(fields).some(([k, v]) => (t[k] ?? null) !== (v ?? null));
-        if (changed) replaceTask({ ...t, ...fields });
+        const recat = pcat && catChanged && (!t.categoryId || t.categoryId === oldCat);
+        const changed = recat || Object.entries(fields).some(([k, v]) => (t[k] ?? null) !== (v ?? null));
+        if (changed) replaceTask(recat ? C.applyCategory({ ...t, ...fields }, pcat) : { ...t, ...fields });
       } else {
-        const nt = buildDraft(fields);
+        const nt = buildDraft(pcat ? { ...fields, categoryId: pcat.id } : fields);
         st().tasks.push(nt); x.ref = nt.id; made++;
       }
     } else {
       const body = { summary: title, start: { dateTime: new Date(x.start).toISOString(), timeZone: z }, end: { dateTime: new Date(x.end).toISOString(), timeZone: z } };
+      const evCat = pcat && (!x.ref || catChanged) ? C.eventCategoryChanges({ extendedProperties: { private: { tempoProject: p.id, tempoStep: x.id } } }, pcat) : null;
+      if (evCat && x.ref) Object.assign(body, evCat);
       let done = false;
       if (x.ref) {
         try { await EV.updateEvent(st(), evRef(x.ref), body, 'this'); done = true; }
@@ -562,7 +567,7 @@ async function saveProject(r, before) {
       }
       if (!done) {
         const cal = ctx.defaultCalendar();
-        const ev = await EV.createEvent(st(), cal, { ...body, reminders: { useDefault: true }, extendedProperties: { private: { tempoProject: p.id, tempoStep: x.id } } });
+        const ev = await EV.createEvent(st(), cal, { ...body, reminders: { useDefault: true }, ...(evCat || {}), extendedProperties: { private: { ...(evCat?.extendedProperties.private || {}), tempoProject: p.id, tempoStep: x.id } } });
         x.ref = `${ev._calId || cal}|${ev.id}`; made++; createdEvents.push(x.ref);
       }
       prevEventEnd = Math.max(prevEventEnd, x.end);
@@ -672,7 +677,7 @@ function gameCtx(items) {
     if (GL.hasOwnMatch(g)) { const m = GL.goalMatch(g); return GL.timeIn(items, m.cats, from, to, now, s, m).done; }
     return GL.timeIn(items, GL.headCats(s, GL.headOf(g)), from, to, now, s).done;
   };
-  return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), goals: [], goalsAll, goalMinutes, history: s.history || [] };
+  return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), habitStreak: (h, k) => HB.streaks(h, s, k).current, goals: [], goalsAll, goalMinutes, history: s.history || [] };
 }
 // 🚩 on the day you reached a new level (today: as soon as it happens)
 function levelFlag(k) {
@@ -727,6 +732,7 @@ async function xpBreakdown(k, rect) {
 function gameXPLine(it) {
   if (!gameOn()) return '';
   const x = GM.itemXP(it, set());
+  if (x.drain) return `<div class="pop-row small xp-line">🎮 <b class="xp-p">💧 ${esc(x.why[0])}</b> <span class="muted">— and it costs XP (Settings → Game mode)</span></div>`;
   const parts = [x.busy ? `<b class="xp-b">+${x.busy} busy</b>` : '', x.life ? `<b class="xp-l">+${x.life} life</b>` : '', x.app ? `<b class="xp-a">+${x.app} app</b>` : ''].filter(Boolean);
   if (!parts.length) return '';
   return `<div class="pop-row small xp-line">🎮 ${x.done ? 'Earned' : 'Completing this earns'} ${parts.join(' ')} <span class="muted">(${esc(x.why.join(', '))})</span></div>`;
@@ -767,12 +773,12 @@ async function gameRefresh() {
       const d = GM.dayXP(k, s, ctx, now);
       const e = g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
       // a day without any XP drain: a bonus that grows with each clean day in a row
-      if (drained && !(drained[k] > 0)) {
+      if (drained && drained[k] === 0) {
         e.cs = (g.ledger[T.addDays(k, -1)]?.cs || 0) + 1;
-        const cb = GM.cleanDay(s, e, e.cs); e.cb = cb.xp; e.net += cb.xp;
+        const cb = GM.cleanDay(s, e, e.cs, GM.levelAt(s, k, z)); e.cb = cb.xp; e.net += cb.xp;
         if (cb.xp) e.top = [[`Clean day — no XP drains (${e.cs} in a row, +${cb.pct}%)`, 'app', cb.xp], ...e.top].slice(0, 8);
         if (k === T.addDays(today, -1)) cleanNews = { k, n: e.cs, xp: cb.xp };
-      } else if (drained) cleanNews = k === T.addDays(today, -1) ? { k, n: 0, broke: (g.ledger[T.addDays(k, -1)]?.cs || 0) } : cleanNews;
+      } else if (drained && drained[k] > 0) cleanNews = k === T.addDays(today, -1) ? { k, n: 0, broke: (g.ledger[T.addDays(k, -1)]?.cs || 0) } : cleanNews;
       changed = true;
     }
     // weeks that are over
@@ -784,9 +790,9 @@ async function gameRefresh() {
       const xps = {}; for (let i = 0; i < 7; i++) { const k = T.addDays(wk, i), l = g.ledger[k]; if (l) xps[k] = { app: l.a, busy: l.b, life: l.l }; }
       const dr = GM.weekDrains(s, wk, xps, items, now, GM.drainScale(s, GM.levelAt(s, wk, z)));
       const W = g.weeks[wk] = { b: w.busy, fill: +w.fill.toFixed(3), pens: w.pens, drain: dr.total, dl: dr.lines }; changed = true;
-      if (drained && !Array.from({ length: 7 }, (_, i) => drained[T.addDays(wk, i)] || 0).some((h) => h > 0) && days.length >= 4) {
+      if (drained && Array.from({ length: 7 }, (_, i) => drained[T.addDays(wk, i)]).every((h) => h === 0) && days.length >= 4) {
         W.cs = (g.weeks[T.addDays(wk, -7)]?.cs || 0) + 1;
-        const cw = GM.cleanWeek(s, days, w.busy, W.cs); W.cb = cw.xp; W.cpct = cw.pct;
+        const cw = GM.cleanWeek(s, days, w.busy, W.cs, GM.levelAt(s, wk, z)); W.cb = cw.xp; W.cpct = cw.pct;
         if (T.addDays(wk, 14) > today) cleanNews = { k: 'w' + wk, ...(cleanNews || {}), week: W.cs, wxp: cw.xp };
       }
       if (w.fill >= 0.6) unlock('full-week'); if (w.pens === 0 && days.length >= 5) unlock('clean-week');
@@ -798,8 +804,8 @@ async function gameRefresh() {
       xps[today] = { app: app.gameToday.app, busy: app.gameToday.busy, life: app.gameToday.life };
       app.gameDrain = { wk, ...GM.weekDrains(s, wk, xps, items, now, GM.drainScale(s, GM.levelAt(s, wk, z))) };
       // today / this week still clean?
-      app.gameClean = drained ? { day: !(drained[today] > 0), week: !Array.from({ length: 7 }, (_, i) => T.addDays(wk, i)).filter((k) => k <= today).some((k) => drained[k] > 0), days: g.ledger[T.addDays(today, -1)]?.cs || 0, weeks: g.weeks[T.addDays(wk, -7)]?.cs || 0 } : null;
-      if (app.gameClean) { const c = GM.cfg(s), t = app.gameToday; app.gameClean.dayPct = GM.cleanPct(c.cleanDayPct, c.cleanDayStep, app.gameClean.days + 1, c.cleanMaxPct); app.gameClean.weekPct = GM.cleanPct(c.cleanWeekPct, c.cleanWeekStep, app.gameClean.weeks + 1, c.cleanMaxPct); app.gameClean.dayXP = Math.round(Math.max(0, t.app + t.busy + t.life) * app.gameClean.dayPct / 100); } }
+      app.gameClean = drained && today in drained ? { day: drained[today] === 0, week: Array.from({ length: 7 }, (_, i) => T.addDays(wk, i)).filter((k) => k <= today).every((k) => drained[k] === 0), days: g.ledger[T.addDays(today, -1)]?.cs || 0, weeks: g.weeks[T.addDays(wk, -7)]?.cs || 0 } : null;
+      if (app.gameClean) { const c = GM.cfg(s), t = app.gameToday, cap = GM.cleanCap(s, GM.levelAt(s, today, z)); app.gameClean.cap = cap; app.gameClean.dayPct = GM.cleanPct(c.cleanDayPct, c.cleanDayStep, app.gameClean.days + 1, cap); app.gameClean.weekPct = GM.cleanPct(c.cleanWeekPct, c.cleanWeekStep, app.gameClean.weeks + 1, cap); app.gameClean.dayXP = Math.round(Math.max(0, t.app + t.busy + t.life) * app.gameClean.dayPct / 100); } }
     app.gameLevelUps = GM.levelUps(s, z, s.weekStart ?? 1);
     // tell me about my clean streak (once per day)
     if (cleanNews && !recount) {
@@ -860,7 +866,7 @@ function renderGamePanel() {
       <div class="gp-sub">${lv.max ? 'Highest level reached!' : lv.capped ? `Enough XP for level ${lv.level + 1}` : `${lv.into.toLocaleString()} / ${lv.span.toLocaleString()} XP to level ${lv.level + 1}`}${lv.capped ? `<br><b class="xp-l">🔒 ${lv.lifeNeed.toLocaleString()} more life XP</b> to unlock level ${lv.level + 1}` : ''}</div>
       <div class="gp-mix" title="Your XP by type"><i class="xp-a-bg" style="width:${share(tot.app)}%"></i><i class="xp-b-bg" style="width:${share(tot.busy)}%"></i><i class="xp-l-bg" style="width:${share(tot.life)}%"></i></div>
       <div class="gp-types"><span class="xp-a">● App ${tot.app.toLocaleString()}</span><span class="xp-b">● Busy ${tot.busy.toLocaleString()}</span><span class="xp-l">● Life ${tot.life.toLocaleString()}</span>${tot.pen - tot.drain ? `<span class="xp-p">− ${(tot.pen - tot.drain).toLocaleString()} rescheduling</span>` : ''}${tot.clean ? `<span class="xp-c" title="Bonuses for days and weeks without XP drains">+ ${tot.clean.toLocaleString()} clean</span>` : ''}${tot.drain ? `<span class="xp-p" title="XP drains (Settings → Game mode)">− ${tot.drain.toLocaleString()} drained</span>` : ''}</div>
-      ${(() => { const c = app.gameClean; if (!c) return ''; return `<div class="gp-clean ${c.day ? '' : 'broke'}" title="A day (and a week) without any XP drain earns a bonus that grows with each one in a row">🧹 Clean streak: <b>${c.days} day${c.days === 1 ? '' : 's'}</b> · <b>${c.weeks} week${c.weeks === 1 ? '' : 's'}</b><br><span class="small">${c.day ? `Keep today clean: <b class="xp-c">+${c.dayXP} XP</b> (${c.dayPct}% of today)` : 'An XP drain today — the day streak starts again tomorrow'}${c.week ? ` · a clean week earns ${c.weekPct}%` : ''}</span></div>`; })()}
+      ${(() => { const c = app.gameClean; if (!c) return ''; return `<div class="gp-clean ${c.day ? '' : 'broke'}" title="A day (and a week) without any XP drain earns a bonus that grows with each one in a row">🧹 Clean streak: <b>${c.days} day${c.days === 1 ? '' : 's'}</b> · <b>${c.weeks} week${c.weeks === 1 ? '' : 's'}</b><br><span class="small">${c.day ? `Keep today clean: <b class="xp-c">+${c.dayXP} XP</b> (${c.dayPct}% of today)` : 'An XP drain today — the day streak starts again tomorrow'}${c.week ? ` · a clean week earns ${c.weekPct}%` : ''} · cap ${c.cap}% at your rank</span></div>`; })()}
       <div class="gp-row"><span title="Days in a row you used Tempo">🔥 ${streak} day${streak === 1 ? '' : 's'}</span><span title="Total XP">⭐ ${tot.total.toLocaleString()} XP</span>${d?.potential?.total ? `<span title="Still to earn today">🎯 +${d.potential.total} today</span>` : ''}</div>
       ${d?.quests?.length ? `<div class="gp-q"><b>Today's quests</b>${d.quests.map((q) => `<div class="gp-qi ${q.ok ? 'ok' : ''}"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span><i style="width:${Math.min(100, (q.have / q.goal) * 100)}%"></i></div>`).join('')}</div>` : ''}
       <div class="gp-row"><button type="button" class="link gp-more">Ranks, achievements & XP log</button></div>
@@ -891,10 +897,10 @@ async function gameDetails() {
     ${days.map(([k, d]) => `<details class="gd-day"><summary><b>${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}</b> <span class="${d.net < 0 ? 'xp-p' : ''}">${d.net >= 0 ? '+' : ''}${d.net} XP</span> <span class="muted small">${Math.round((d.fill || 0) * 100)}% planned</span></summary>${(d.top || []).map(([l, ty, x]) => `<div class="gd-line"><span>${esc(l)}</span><b class="xp-${ty === 'pen' ? 'p' : ty[0]}">${x > 0 ? '+' : ''}${x}</b></div>`).join('')}</details>`).join('')}
     <h3 class="gd-h">How XP works</h3>
     <ul class="small gd-rules"><li><b class="xp-b">Busy</b>: events you attend (longer ones earn more; ticked off ×1.2), task sessions you complete (each later session of a task is worth 8% more), finished tasks and projects, a full day (at least half of 7:00–23:00 planned), keeping to the plan, and a weekly bonus for how much of the week was planned.</li>
-      <li><b class="xp-l">Life</b>: time in your life-growth categories (set in Settings → General → Game mode), sleep, some leisure, habits ticked off and goals reached. Going up levels needs a share of life XP — never more than a quarter.</li>
+      <li><b class="xp-l">Life</b>: time in your life-growth categories (set in Settings → General → Game mode), sleep, some leisure, habits ticked off (with small rewards for streaks that grow with your rank — a habit can be left out of the game in its settings) and goals reached. Going up levels needs a share of life XP — never more than a quarter.</li>
       <li><b class="xp-a">App</b>: opening Tempo each day (more for a streak), scheduling events and tasks (a fifth of what they're worth — the rest comes when you do them), starting projects, logging habits, achievements.</li>
       <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — more each time the same task slips again within a week.</li>
-      <li><b class="xp-p">XP drains</b> (Settings → Game mode): time on activities you want to cut down on costs a share of your XP — more the higher your rank. <b class="xp-c">Clean bonus</b>: a day without any drain earns a share of that day's XP, a week without any earns a share of the week's — growing with each one in a row. 🚩 on the calendar marks the days you went up a level.</li></ul>
+      <li><b class="xp-p">XP drains</b> (Settings → Game mode): time on activities you want to cut down on costs a share of your XP — more the higher your rank. <b class="xp-c">Clean bonus</b>: a day without any drain earns a share of that day's XP, a week without any earns a share of the week's — growing slowly with each one in a row, up to a cap that rises with your rank. Drains and bonus activities can be set for a while only (the next week, two weeks, month, 3 months or your own dates); bonus activities earn extra XP, and anything that counts as a drain never scores. 🚩 on the calendar marks the days you went up a level.</li></ul>
   </div></div>`, () => {}, { cls: 'wide' });
 }
 // A short burst of fireworks over the page
@@ -2060,6 +2066,7 @@ async function newTask(preset = {}) {
   if (!r?.task) return;
   let t = { ...r.task };
   if (preset.title && !t.title) t.title = preset.title;
+  t = projectCategory(t);
   if (!t.categoryId && set().askCategory !== false) t = await askCategoryOnce(t);
   t.rev = Date.now();
   st().tasks.push(t);
@@ -2080,7 +2087,7 @@ async function editTask(task) {
     return;
   }
   delete st().acks[task.id];
-  let nt = { ...r.task, frozen: task.frozen, planned: task.planned };
+  let nt = projectCategory({ ...r.task, frozen: task.frozen, planned: task.planned });
   // A new reading speed must not shift the pages already read.
   if (task.kind === 'reading' && nt.kind === 'reading' && S.pagesPerHour(task.reading || {}) !== S.pagesPerHour(nt.reading || {})) nt = S.withReadingSpeed({ ...nt, reading: task.reading }, nt.reading);
   replaceTask(nt);
@@ -2507,7 +2514,7 @@ function setupQuickAdd() {
     const t = buildDraft(parsed.draft);
     if (!(await D.checkTaskLimits(ctx, t))) return;
     inp.value = ''; show();
-    let nt = { ...t, rev: Date.now() };
+    let nt = projectCategory({ ...t, rev: Date.now() });
     if (!nt.categoryId && set().askCategory !== false) nt = await askCategoryOnce(nt);
     st().tasks.push(nt);
     app.pendingWhy = `you added “${nt.title}” (rank ${nt.rank})`;
@@ -2516,6 +2523,12 @@ function setupQuickAdd() {
     const ss = S.sessions(st().tasks.find((x) => x.id === nt.id) || nt);
     toast(`Added “${nt.title}” — ${ss.length} session${ss.length === 1 ? '' : 's'} planned`);
   });
+}
+// A task in a project with a category, and none of its own, gets the project's category
+function projectCategory(t) {
+  if (t.categoryId || !t.projectId) return t;
+  const c = P.byId(set(), t.projectId)?.catId;
+  return c && C.catById(set(), c) ? C.applyCategory(t, C.catById(set(), c)) : t;
 }
 // A full task from what the quick-add parser understood (same defaults as the task dialog).
 function buildDraft(d) {

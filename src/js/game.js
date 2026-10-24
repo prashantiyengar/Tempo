@@ -29,14 +29,33 @@ export const CFG = [
   ['goalXP', 'Goal XP (×)', 1, 0, 5, 0.1],
   ['lifeCap', 'Most of your XP that must be life XP to level up (%)', 25, 0, 50, 1],
   ['drainRankScale', 'XP drains cost more as you rise: extra % for each rank (every 5 levels)', 3, 0, 20, 0.5],
-  ['cleanDayPct', 'Clean-day bonus: % of the day\'s XP for a day without drains', 5, 0, 50, 1],
-  ['cleanDayStep', 'Clean-day bonus grows by this % for each day in a row', 1, 0, 20, 0.5],
-  ['cleanWeekPct', 'Clean-week bonus: % of the week\'s XP for a week without drains', 8, 0, 50, 1],
-  ['cleanWeekStep', 'Clean-week bonus grows by this % for each week in a row', 2, 0, 20, 0.5],
-  ['cleanMaxPct', 'Most a clean-day or clean-week bonus can be (%)', 25, 0, 100, 1],
+  ['cleanDayPct', 'Clean-day bonus: % of the day\'s XP for a day without drains', 4, 0, 50, 0.5],
+  ['cleanDayStep', 'Clean-day bonus grows by this % for each day in a row', 0.2, 0, 5, 0.05],
+  ['cleanWeekPct', 'Clean-week bonus: % of the week\'s XP for a week without drains', 5, 0, 50, 0.5],
+  ['cleanWeekStep', 'Clean-week bonus grows by this % for each week in a row', 0.5, 0, 10, 0.1],
+  ['cleanCapBase', 'Clean bonus cap at the first rank (%)', 6, 0, 50, 0.5],
+  ['cleanCapRank', 'Clean bonus cap: extra % for each rank (every 5 levels)', 0.25, 0, 5, 0.05],
+  ['cleanMaxPct', 'Clean bonus: never more than (%)', 15, 0, 100, 1],
+  ['habitXP', 'Habit ticked off (life XP)', 8, 0, 100, 1],
+  ['habitStreakXP', 'Habit streak: extra XP for each day (or period) in a row', 1, 0, 20, 0.5],
+  ['habitRankPct', 'Habit streak rewards grow by this % for each rank', 4, 0, 50, 1],
+  ['habitMilestoneXP', 'Habit streak milestone (7, 30, 100, 365 days; 4, 12, 52 weeks)', 20, 0, 500, 5],
+  ['boostPct', 'Bonus activities: extra XP (%) — the default for new ones', 50, 0, 300, 5],
 ];
 // How a clean streak's bonus grows: first period base %, then + step % for each period in a row, up to the maximum.
-export const cleanPct = (base, step, n, max) => (n > 0 ? Math.min(max, base + step * (n - 1)) : 0);
+export const cleanPct = (base, step, n, max) => (n > 0 ? +Math.min(max, base + step * (n - 1)).toFixed(2) : 0);
+// The cap on a clean bonus: higher ranks can earn a bit more
+export const cleanCap = (s, level = 1) => { const c = cfg(s); return +Math.min(c.cleanMaxPct, c.cleanCapBase + c.cleanCapRank * tierOf(Math.max(1, level)).index).toFixed(2); };
+// Time-limited drains and bonus activities: active on day k? (from / to are day keys; to is the first day it no longer counts)
+export const activeOn = (x, k) => (!x.from || k >= x.from) && (!x.to || k < x.to);
+export const PERIODS = [['always', 'Always'], ['1w', 'Next week'], ['2w', 'Next two weeks'], ['1m', 'Next month'], ['3m', 'Next 3 months'], ['custom', 'Custom period']];
+export function periodRange(kind, today) {
+  if (kind === '1w') return { from: today, to: T.addDays(today, 7) };
+  if (kind === '2w') return { from: today, to: T.addDays(today, 14) };
+  if (kind === '1m') return { from: today, to: T.addMonths(today, 1) };
+  if (kind === '3m') return { from: today, to: T.addMonths(today, 3) };
+  return { from: null, to: null };
+}
 export const RULES_V = 3; // when the rules change, the ledger is counted again
 export function cfg(s) {
   const o = {}, c = s?.game?.cfg || {};
@@ -44,7 +63,7 @@ export function cfg(s) {
   return o;
 }
 // Everything that changes how XP is counted: changing any of it counts all days again from the start.
-export const cfgHash = (s) => JSON.stringify([cfg(s), s?.game?.drains || [], s?.game?.lifeCats || [], s?.game?.restCats || [], s?.game?.noCats || []]);
+export const cfgHash = (s) => JSON.stringify([cfg(s), s?.game?.drains || [], s?.game?.boosts || [], (s?.habits || []).filter((h) => h.game === false).map((h) => h.id), s?.game?.lifeCats || [], s?.game?.restCats || [], s?.game?.noCats || []]);
 
 // ---------- levels ----------
 export const MAX_LEVEL = 300;
@@ -198,8 +217,17 @@ export function itemXP(it, s, now = Date.now()) {
   const g = gameOf(s), c = cfg(s);
   const out = { app: 0, busy: 0, life: 0, why: [], done: false, kind: it.kind };
   if (it.allDay || it.declined) return out;
-  const cat = catOf(it);
-  if (cat && ((g.noCats || []).includes(cat) || (g.noCats || []).includes(g._parents[cat]))) { out.why.push('a category that never scores'); out.done = it.kind === 'chunk' ? it.status === 'done' : it.end <= now; return out; }
+  const cat = catOf(it), day = T.dayKey(it.start, s.tz);
+  const isDone = () => (it.kind === 'chunk' ? it.status === 'done' || it.sess?.kind === 'done' : it.end <= now);
+  const dr = g._drains.find((d) => activeOn(d, day) && d._m(it));
+  if (dr) { out.why.push(`an XP drain (${dr.name || 'drain'}) — never scores`); out.done = isDone(); out.drain = true; return out; }
+  const boost = g._boosts.find((b) => activeOn(b, day) && b._m(it));
+  if (!boost && cat && ((g.noCats || []).includes(cat) || (g.noCats || []).includes(g._parents[cat]))) { out.why.push('a category that never scores'); out.done = isDone(); return out; }
+  if (boost) { const r = itemBase(it, s, now, g, c); const f = 1 + (+boost.pct || 0) / 100; r.app = Math.round(r.app * f); r.busy = Math.round(r.busy * f); r.life = Math.round(r.life * f); r.why.push(`bonus: ${boost.name || 'bonus activity'} +${boost.pct}%`); r.boost = boost.name; return r; }
+  return itemBase(it, s, now, g, c);
+}
+function itemBase(it, s, now, g, c) {
+  const out = { app: 0, busy: 0, life: 0, why: [], done: false, kind: it.kind };
   const m = Math.max(0, Math.min(600, (it.end - it.start) / T.MIN)), h = m / 60, cross = c.crossShare / 100;
   if (it.kind === 'chunk') {
     if (it.status === 'waived' || it.sess?.kind === 'waived') return out;
@@ -226,8 +254,12 @@ export const sumXP = (x) => x.app + x.busy + x.life;
 export function gameOf(s) {
   const g = s.game || {};
   const parents = {}; for (const c of s.categories || []) if (c.parent) parents[c.id] = c.parent;
-  return { ...g, lifeCats: g.lifeCats || [], restCats: g.restCats || [], noCats: g.noCats || [], _parents: parents };
+  const live = (l) => (l || []).filter((d) => (d.cats || []).length || (d.words || []).length).map((d) => ({ ...d, _m: drainMatcher(d, s) }));
+  const key = s.game?.drains, key2 = s.game?.boosts;
+  if (!gameOfCache || gameOfCache.d !== key || gameOfCache.b !== key2 || gameOfCache.c !== s.categories) gameOfCache = { d: key, b: key2, c: s.categories, drains: live(key), boosts: live(key2) };
+  return { ...g, lifeCats: g.lifeCats || [], restCats: g.restCats || [], noCats: g.noCats || [], _parents: parents, _drains: gameOfCache.drains, _boosts: gameOfCache.boosts };
 }
+let gameOfCache = null;
 
 // ---------- goals ----------
 // The period a goal belongs to: w:YYYY-MM-DD (that week), m:YYYY-MM (that month), y (12 months from when it was set)
@@ -288,7 +320,15 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   for (const p of ctx.projectsDone || []) if (p.at >= from && p.at < to) add('busy', 200, `completed project “${p.name}”`);
   // habits and goals
   let hDone = 0, hTotal = 0;
-  for (const h of ctx.habits) { hTotal++; if (ctx.habitDone(h, k)) { hDone++; add('life', 8, `habit: ${h.name}`); } }
+  const rankI = ctx.habits.length ? tierOf(ctx.level ?? levelAt(s, k, z)).index : 0;
+  for (const h of ctx.habits) {
+    if (h.game === false) continue;
+    hTotal++;
+    if (!ctx.habitDone(h, k)) continue;
+    hDone++; add('life', c.habitXP, `habit: ${h.name}`);
+    const n = ctx.habitStreak ? ctx.habitStreak(h, k) : 0;
+    if (n >= 2) { const hr = habitReward(s, n, rankI, h.freq?.per || 'day'); add('life', hr.xp, `habit streak: ${h.name} (${n} ${h.freq?.per && h.freq.per !== 'day' ? h.freq.per : 'day'}s in a row)`); if (hr.milestone) add('life', hr.milestone, `habit milestone: ${h.name} — ${n} ${h.freq?.per && h.freq.per !== 'day' ? h.freq.per : 'day'}s!`); }
+  }
   // goals: defining them (app XP), putting hours into them (life XP, bit by bit) and reaching them (life XP)
   for (const { g: gl, key } of ctx.goalsAll || []) {
     const v0 = goalValue(gl, key, s), gm = c.goalXP, v = { ...v0, define: Math.round(v0.define * gm), final: Math.round(v0.final * gm), progress: Math.round(v0.progress * gm) };
@@ -358,6 +398,7 @@ export function drainMatcher(d, s) {
 export function drainHours(d, s, items, fromKey, toKey, now = Date.now()) {
   const z = s.tz, m = drainMatcher(d, s), out = {};
   for (let k = fromKey; k < toKey; k = T.addDays(k, 1)) {
+    if (!activeOn(d, k)) continue;
     const a = T.dayStart(k, z), b = Math.min(T.dayStart(T.addDays(k, 1), z), now);
     const iv = items.filter(m).map((it) => [Math.max(it.start, a), Math.min(it.end, b)]).filter(([x, y]) => y > x).sort((x, y) => x[0] - y[0]);
     let ms = 0, cs = -1, ce = -1;
@@ -387,7 +428,7 @@ export function weekDrains(s, wk, dayXPs, items, now = Date.now(), scale = 1) {
     const hrs = drainHours(d, s, items, wk, T.addDays(wk, 7), now);
     const fh = (h) => (h >= 1 ? `${+h.toFixed(1)} h` : `${Math.round(h * 60)} min`);
     if (d.per === 'day') {
-      for (const k of days) { const h = hrs[k] || 0, p = drainPct(d, h, scale); if (p) lines.push([`${d.name}: ${fh(h)} that day → −${Math.round(p)}%`, Math.round(xpOf(k, types) * p / 100), k]); }
+      for (const k of days) { if (!activeOn(d, k)) continue; const h = hrs[k] || 0, p = drainPct(d, h, scale); if (p) lines.push([`${d.name}: ${fh(h)} that day → −${Math.round(p)}%`, Math.round(xpOf(k, types) * p / 100), k]); }
       continue;
     }
     const H = days.reduce((a, k) => a + (hrs[k] || 0), 0), tol = Math.max(+d.free || 0, +d.tol || 0);
@@ -435,15 +476,23 @@ export const ACH_XP = 60;
 
 
 // ---- Clean days and weeks (no XP drain at all), totals from the ledger, and when levels were reached
-export const hasDrains = (s) => (s.game?.drains || []).some((d) => (d.cats || []).length || (d.words || []).length);
+export const hasDrains = (s, k) => (s.game?.drains || []).some((d) => ((d.cats || []).length || (d.words || []).length) && (!k || activeOn(d, k)));
+// Habit streak reward: a little XP per day (period) in a row — more, and for longer streaks, the higher your rank
+export function habitReward(s, n, rankI, per = 'day') {
+  const c = cfg(s), mult = 1 + (c.habitRankPct / 100) * rankI, cap = 6 + rankI;
+  const xp = Math.round(c.habitStreakXP * Math.min(n - 1, cap) * mult);
+  const ms = per === 'day' ? [7, 30, 100, 365] : per === 'week' ? [4, 12, 52] : [3, 6, 12];
+  const i = ms.indexOf(n);
+  return { xp, milestone: i >= 0 ? Math.round(c.habitMilestoneXP * 2 ** i * mult) : 0, cap, mult };
+}
 const posXP = (d) => Math.max(0, d.a || 0) + Math.max(0, d.b || 0) + Math.max(0, d.l || 0);
 // Clean-day bonus for a settled day: streak n (this day included) and its XP
-export function cleanDay(s, dayEntry, n) {
-  const c = cfg(s), pct = cleanPct(c.cleanDayPct, c.cleanDayStep, n, c.cleanMaxPct);
+export function cleanDay(s, dayEntry, n, level = 1) {
+  const c = cfg(s), pct = cleanPct(c.cleanDayPct, c.cleanDayStep, n, cleanCap(s, level));
   return { pct, xp: Math.round(posXP(dayEntry) * pct / 100) };
 }
-export function cleanWeek(s, dayEntries, weekBusy, n) {
-  const c = cfg(s), pct = cleanPct(c.cleanWeekPct, c.cleanWeekStep, n, c.cleanMaxPct);
+export function cleanWeek(s, dayEntries, weekBusy, n, level = 1) {
+  const c = cfg(s), pct = cleanPct(c.cleanWeekPct, c.cleanWeekStep, n, cleanCap(s, level));
   return { pct, xp: Math.round((dayEntries.reduce((a, d) => a + posXP(d), 0) + Math.max(0, weekBusy || 0)) * pct / 100) };
 }
 // XP earned before day `upto` (settled days and weeks, achievements unlocked before then), for the level at that time
@@ -504,8 +553,9 @@ export function drainCurve(s, d, st) {
     bars.push({ h, pct, xp: Math.round(base * pct / 100), whole: d.per !== 'day' && h > tol + 1e-9 });
   }
   const allDay = st.day.app + st.day.busy + st.day.life, allWeek = st.week.app + st.week.busy + st.week.life;
-  const cd = Math.round(allDay * cleanPct(c.cleanDayPct, c.cleanDayStep, st.cleanDays + 1, c.cleanMaxPct) / 100);
-  const cw = Math.round(allWeek * cleanPct(c.cleanWeekPct, c.cleanWeekStep, st.cleanWeeks + 1, c.cleanMaxPct) / 100);
+  const cap = cleanCap(s, st.level);
+  const cd = Math.round(allDay * cleanPct(c.cleanDayPct, c.cleanDayStep, st.cleanDays + 1, cap) / 100);
+  const cw = Math.round(allWeek * cleanPct(c.cleanWeekPct, c.cleanWeekStep, st.cleanWeeks + 1, cap) / 100);
   return { bars, cleanDay: cd, cleanWeek: cw, dayXP: Math.round(dayXP), weekXP: Math.round(weekXP) };
 }
 export function drainCurveSVG(cv, d) {

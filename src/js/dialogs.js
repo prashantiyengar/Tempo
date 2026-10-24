@@ -884,7 +884,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
       if (!(await checkSpan(nt.repeat ? 'Repeating task' : 'Deadline', nt.deadline, s))) return;
       const others = st.tasks.filter((x) => x.id !== nt.id);
       if (nt.projectId === '__new') {
-        const proj = { id: S.newId('p'), name: nt.projectName, sequential: f.projSeq.checked, color: nt.color };
+        const proj = { id: S.newId('p'), name: nt.projectName, sequential: f.projSeq.checked, color: nt.color, catId: nt.categoryId || null };
         s.projects = [...(s.projects || []), proj];
         await ctx.saveSettings();
         nt = { ...nt, projectId: proj.id, projectStep: 1 };
@@ -941,6 +941,7 @@ export function settingsDialog(ctx) {
   let wx = { unit: W.defaultUnit(s.tz), ...(s.weather || {}) };
   let leave = { ...(s.leave || {}) };
   let drains = (s.game?.drains || []).map((d) => ({ ...d, cats: [...(d.cats || [])], words: [...(d.words || [])], types: [...(d.types || ['app', 'busy', 'life'])] }));
+  const boosts = (s.game?.boosts || []).map((b) => ({ ...b, cats: [...(b.cats || [])], words: [...(b.words || [])] }));
   let picSrc = (s.picSources?.length ? s.picSources : XT.DEFAULT_SOURCES).map((x) => ({ ...x }));
   let nprofiles = N.profiles(s).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r })) }));
   const tp = s.timePrefs || S.DEFAULT_SETTINGS.timePrefs;
@@ -978,8 +979,9 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Count XP from <em class="muted">(a date in the past counts what's already on your calendar, up to 180 days back)</em></span><input type="date" data-quick="off" name="gameStart" value="${esc(g.started || T.dayKey(Date.now(), s.tz))}" max="${T.dayKey(Date.now(), s.tz)}"></label>
           <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b> (things that build long-term skills, e.g. reading, working out)</span><div class="game-life">${catPick(s, 'gl-c', life)}</div></div>
           <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="game-rest">${catPick(s, 'gr-c', rest)}</div></div>
-          <div class="field"><span>Categories that never score</span><div class="game-no">${catPick(s, 'gn-c', g.noCats || [])}</div></div>
+          <div class="field"><span>Categories that never score</span><div class="game-no">${catPick(s, 'gn-c', g.noCats || [])}</div><span class="muted small gn-auto"></span></div>
           <div class="field"><span>XP drains — activities that cost XP (e.g. gaming) <em class="muted">(changing them counts all days again)</em></span><div class="drain-list"></div><button type="button" class="btn small add-drain">+ Add a drain</button></div>
+          <div class="field"><span>Bonus activities — they earn extra XP, e.g. for the next two weeks <em class="muted">(changing them counts all days again)</em></span><div class="boost-list"></div><button type="button" class="btn small add-boost">+ Add a bonus activity</button></div>
           <details class="game-adv"><summary class="small"><b>Advanced</b> — adjust the points and the pace</summary>
             <div class="game-cfg">${GM.CFG.map(([k, label, d, lo, hi, step]) => `<label class="field"><span>${esc(label)} <em class="muted">(default ${d})</em></span><input type="number" class="gc-v num" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${g.cfg?.[k] ?? d}"></label>`).join('')}</div>
             <button type="button" class="btn small ghost gc-reset">Back to the defaults</button>
@@ -1196,6 +1198,22 @@ export function settingsDialog(ctx) {
       $$('.lv-row', dlg).forEach((row) => { $('.lv-del', row).onclick = () => { const r = ranges[+row.dataset.i]; for (let k = r.from; k <= r.to; k = T.addDays(k, 1)) delete leave[k]; drawLeave(); updSects(); }; });
     };
     drawLeave();
+    // When a drain / bonus counts: always, the next week, two weeks, month, 3 months, or a custom period
+    const todayK = T.dayKey(Date.now(), s.tz);
+    const fmtK = (k) => T.format(T.dayStart(k, s.tz), s.tz, { weekday: 'short', day: 'numeric', month: 'short' });
+    const periodSay = (x) => (!x.from && !x.to ? 'Counts every day.' : x.to && x.to <= todayK ? `Ended ${fmtK(T.addDays(x.to, -1))}.` : `${x.from && x.from > todayK ? `From ${fmtK(x.from)}` : x.from === todayK ? 'From today' : x.from ? `Since ${fmtK(x.from)}` : 'Now'} until ${x.to ? fmtK(T.addDays(x.to, -1)) : 'further notice'}${x.to && x.to > todayK ? ` — ${Math.round((T.dayStart(x.to, s.tz) - T.dayStart(todayK, s.tz)) / T.DAY)} days left` : ''}.`);
+    const periodHTML = (x) => { const k = x.period || (x.from || x.to ? 'custom' : 'always'); return `<div class="row pr-row"><label class="field"><span>Counts</span><select class="pr-kind">${GM.PERIODS.map(([v, l]) => `<option value="${v}" ${v === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <label class="field pr-c" ${k === 'custom' ? '' : 'hidden'}><span>From</span><input type="date" data-quick="off" class="pr-from" value="${esc(x.from || todayK)}"></label><label class="field pr-c" ${k === 'custom' ? '' : 'hidden'}><span>Until (incl.)</span><input type="date" data-quick="off" class="pr-to" value="${esc(x.to ? T.addDays(x.to, -1) : T.addDays(todayK, 13))}"></label></div><p class="muted small pr-say" style="margin:0">${esc(periodSay(x))}</p>`; };
+    const readPeriod = (row, x, e) => {
+      const k = $('.pr-kind', row).value;
+      $$('.pr-c', row).forEach((el) => (el.hidden = k !== 'custom'));
+      if (k === 'custom') { const a = $('input.pr-from', row).value || todayK, b = $('input.pr-to', row).value || a; x.from = a; x.to = T.addDays(b < a ? a : b, 1); }
+      else if (k === 'always') { x.from = null; x.to = null; }
+      else if (e?.target?.classList.contains('pr-kind') || x.period !== k) Object.assign(x, GM.periodRange(k, todayK));
+      x.period = k;
+      $('.pr-say', row).textContent = periodSay(x);
+    };
+    const updNoAuto = () => { const el = $('.gn-auto', dlg); if (!el) return; const ids = [...new Set(drains.flatMap((d) => d.cats || []))]; el.textContent = ids.length ? `XP-drain categories never score anyway: ${ids.map((id) => C.catLabel(C.catById(s, id)) || id).join(', ')}.` : ''; };
     // XP drains editor
     const gStats = GM.gameStats(s, T.dayKey(Date.now(), s.tz), s.tz);
     const graph = (d) => { const cv = GM.drainCurve(s, d, gStats); return `${GM.drainCurveSVG(cv, d)}<span class="muted small">Now, at level ${gStats.level} (${esc(gStats.rank.name)}), drains cost ×${gStats.scale.toFixed(2)}. Based on ${gStats.est ? 'a typical' : 'your recent'} ${d.per === 'day' ? `day (≈${cv.dayXP} XP)` : `day (≈${cv.dayXP} XP) and week (≈${cv.weekXP} XP)`}. Not doing it wins the clean bonus: <b class="xp-c">+${cv.cleanDay}</b> for the day${d.per === 'week' ? ` and <b class="xp-c">+${cv.cleanWeek}</b> for the week` : ''}.</span>`; };
@@ -1214,12 +1232,14 @@ export function settingsDialog(ctx) {
           <label class="field"><span>At most (%)</span><input type="number" class="dr-max num" min="0" max="100" step="1" value="${d.maxPct ?? 75}"></label>
         </div>
         <div class="row small">Costs: ${['app', 'busy', 'life'].map((t) => `<label class="chk"><input type="checkbox" class="dr-type" value="${t}" ${d.types.includes(t) ? 'checked' : ''}> ${t} XP</label>`).join(' ')}</div>
+        ${periodHTML(d)}
         <p class="muted small dr-say" style="margin:0">${esc(sentence(d))}</p>
         <div class="dr-graph">${graph(d)}</div>
       </div>`).join('') || '<p class="muted small" style="margin:0">No drains. Add one for activities you want to cut down on — they cost XP the more you do them.</p>');
       $$('.drain', box).forEach((row) => {
         const d = drains[+row.dataset.i];
-        const read = () => {
+        const read = (e) => {
+          readPeriod(row, d, e); updNoAuto();
           d.name = $('.dr-name', row).value; d.per = $('.dr-per', row).value;
           d.words = $('.dr-words', row).value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
           d.cats = $$('.dr-cat:checked', row).map((x) => x.value);
@@ -1234,7 +1254,31 @@ export function settingsDialog(ctx) {
         $('.dr-del', row).onclick = () => { drains.splice(+row.dataset.i, 1); drawDrains(); };
       });
     };
-    drawDrains();
+    drawDrains(); updNoAuto();
+    // bonus activities editor
+    const drawBoosts = () => {
+      const box = $('.boost-list', dlg); if (!box) return;
+      setHTML(box, boosts.map((b, i) => `<div class="drain boost" data-i="${i}">
+        <div class="row"><input class="bo-name" value="${esc(b.name || '')}" placeholder="Name, e.g. Thesis sprint" maxlength="30"><label class="field inline"><span>Extra XP</span><input type="number" class="bo-pct num" min="0" max="300" step="5" value="${b.pct ?? 50}"> %</label><span class="grow"></span><button type="button" class="icon-btn bo-del" title="Remove" aria-label="Remove">✕</button></div>
+        <label class="field"><span>Titles with these words</span><input class="bo-words" value="${esc((b.words || []).join(', '))}" placeholder="e.g. thesis, xyz"></label>
+        <div class="field"><span>…and/or these categories</span><div class="bo-cats">${catPick(s, 'bo-cat', b.cats || [])}</div></div>
+        ${periodHTML(b)}
+      </div>`).join('') || '<p class="muted small" style="margin:0">No bonus activities. Add one to earn extra XP for something for a while — e.g. a category or a word in titles for the next two weeks.</p>');
+      $$('.boost', box).forEach((row) => {
+        const b = boosts[+row.dataset.i];
+        const read = (e) => {
+          readPeriod(row, b, e);
+          b.name = $('.bo-name', row).value; b.pct = Math.max(0, Math.min(300, +$('.bo-pct', row).value || 0));
+          b.words = $('.bo-words', row).value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
+          b.cats = $$('.bo-cat:checked', row).map((x) => x.value);
+        };
+        row.addEventListener('input', read); row.addEventListener('change', read);
+        wireCatPick(row, s, read);
+        $('.bo-del', row).onclick = () => { boosts.splice(+row.dataset.i, 1); drawBoosts(); };
+      });
+    };
+    drawBoosts();
+    $('.add-boost', dlg)?.addEventListener('click', () => { boosts.push({ id: 'bo' + Math.random().toString(36).slice(2, 8), name: '', words: [], cats: [], pct: GM.cfg(s).boostPct, period: '2w', ...GM.periodRange('2w', todayK) }); drawBoosts(); $$('.boost .bo-name', dlg).pop()?.focus(); });
     wireCatPick(dlg, s, () => updSects());
     $('.add-drain', dlg)?.addEventListener('click', () => { drains.push({ ...GM.DRAIN_DEFAULT, id: 'dr' + Math.random().toString(36).slice(2, 8), words: [...GM.DRAIN_DEFAULT.words], cats: [], types: [...GM.DRAIN_DEFAULT.types] }); drawDrains(); });
     $('.gc-reset', dlg)?.addEventListener('click', () => { $$('.gc-v', dlg).forEach((x) => { x.value = GM.CFG.find((c) => c[0] === x.dataset.k)[2]; }); });
@@ -1451,6 +1495,7 @@ export function settingsDialog(ctx) {
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
         game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value), noCats: $$('.gn-c:checked', dlg).map((x) => x.value),
           drains: drains.map((d) => ({ ...d, name: (d.name || '').trim() || 'Drain' })).filter((d) => d.cats.length || d.words.length),
+          boosts: boosts.map((b) => ({ ...b, name: (b.name || '').trim() || 'Bonus' })).filter((b) => b.cats.length || b.words.length),
           cfg: Object.fromEntries($$('.gc-v', dlg).map((x) => [x.dataset.k, x.value]).filter(([k, v]) => v !== '' && +v !== GM.CFG.find((c) => c[0] === k)[2]).map(([k, v]) => [k, +v])),
           ...(() => { const st0 = f.gameStart.value && f.gameStart.value <= T.dayKey(Date.now(), s.tz) ? f.gameStart.value : (s.game?.started || T.dayKey(Date.now(), s.tz)); return st0 !== s.game?.started ? { started: st0, ledger: {}, weeks: {} } : { started: st0 }; })(),
           active: f.gameOn.checked && !s.game?.on ? [...new Set([...(s.game?.active || []), T.dayKey(Date.now(), s.tz)])] : s.game?.active },
@@ -1944,6 +1989,7 @@ export function projectDialog(ctx, project = null) {
           <option value="prefix" ${p0.titleMode !== 'suffix' && p0.titleMode !== 'none' ? 'selected' : ''}>At the start — “Name: step”</option>
           <option value="suffix" ${p0.titleMode === 'suffix' ? 'selected' : ''}>At the end — “step — Name”</option>
           <option value="none" ${p0.titleMode === 'none' ? 'selected' : ''}>Not added</option></select></label>
+        <label class="field"><span>Category for its tasks and events</span><select name="catId"><option value="">— none —</option>${C.ordered(s).map((c) => `<option value="${esc(c.id)}" ${p0.catId === c.id ? 'selected' : ''}>${c.parent ? '↳ ' : ''}${esc(C.catLabel(c))}</option>`).join('')}</select></label>
         <label class="chk"><input type="checkbox" name="sequential" ${p0.sequential !== false ? 'checked' : ''}> Steps run in order (each starts after the previous is done)</label>
       </div>
       <div class="sub-h">Steps</div>
@@ -2034,7 +2080,7 @@ export function projectDialog(ctx, project = null) {
       const bad = !name ? 'Give the project a name.' : steps.find((x) => !x.title.trim()) ? 'Every step needs a title.'
         : steps.find((x) => !x.start || !x.end) ? 'Every step needs a start and an end.' : steps.find((x) => x.kind === 'task' && x.end <= x.start) ? 'A task ends before it starts.' : '';
       if (bad) { err.textContent = bad; err.hidden = false; if (!name) f.name.focus(); return; }
-      close({ project: { ...p0, name, titleMode: f.titleMode.value, sequential: f.sequential.checked, steps: steps.map((x) => ({ ...x, title: x.title.trim() })) }, removed });
+      close({ project: { ...p0, name, titleMode: f.titleMode.value, catId: f.catId.value || null, sequential: f.sequential.checked, steps: steps.map((x) => ({ ...x, title: x.title.trim() })) }, removed });
     });
   }, { cls: 'wide' });
 }
@@ -2061,6 +2107,7 @@ export function habitDialog(ctx, habit = null) {
         <label class="field"><span>Unit</span><input name="unit" value="${esc(h0.unit || '')}" placeholder="e.g. glasses, km, pages" maxlength="20"></label>
         <label class="field"><span>Per</span><select name="nper"><option value="day" ${f0.per === 'day' ? 'selected' : ''}>day</option><option value="week" ${f0.per === 'week' ? 'selected' : ''}>week</option><option value="month" ${f0.per === 'month' ? 'selected' : ''}>month</option></select></label>
       </div>
+      <label class="chk hb-game"><input type="checkbox" name="hgame" ${h0.game !== false ? 'checked' : ''}> 🎮 Counts in game mode — earns XP when ticked off, plus small rewards for streaks (bigger at higher ranks)</label>
       ${sect('hb-adv', 'Advanced: automatic tracking', `<div class="hb-auto">
         <label class="field"><span>Tick it off by itself</span><select name="amode">
           <option value="">No — I tick it off myself</option>
@@ -2116,7 +2163,7 @@ export function habitDialog(ctx, habit = null) {
       const name = f.name.value.trim(); if (!name) { f.name.focus(); return; }
       const num = f.type.value === 'number';
       const per = num ? f.nper.value : f.per.value;
-      close({ ...h0, name, question: f.question.value.trim(), color: f.color.value || h0.color, type: num ? 'number' : 'yesno',
+      close({ ...h0, name, question: f.question.value.trim(), color: f.color.value || h0.color, type: num ? 'number' : 'yesno', game: f.hgame.checked,
         freq: { per, times: num || per === 'day' ? 1 : Math.max(1, Math.min(per === 'week' ? 7 : 31, Math.round(+f.times.value || 1))) },
         target: num ? Math.max(0.1, +f.target.value || 1) : 1, unit: num ? f.unit.value.trim() : '',
         auto: (() => {

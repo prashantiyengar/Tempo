@@ -42,7 +42,7 @@ async def main():
         check('2. the drain day breaks the streak; it starts again after', not L['2026-10-14'].get('cb') and L['2026-10-15'].get('cs') == 1 and L['2026-10-23'].get('cs') == 9)
         c1, c9 = L['2026-10-05'], L['2026-10-13']
         pct = lambda e: e['cb'] / (e['a'] + e['b'] + e['l'])
-        check('3. the bonus grows with the streak (5% → 13% of the day)', abs(pct(c1) - 0.05) < 0.01 and abs(pct(c9) - 0.13) < 0.01, (round(pct(c1), 3), round(pct(c9), 3)))
+        check('3. the bonus grows slowly with the streak (4% → 5.6% of the day)', abs(pct(c1) - 0.04) < 0.006 and abs(pct(c9) - 0.056) < 0.006, (round(pct(c1), 3), round(pct(c9), 3)))
         W = gm['weeks']
         check('4. a week without drains earns a clean-week bonus; the week with the drain does not', W['2026-10-05'].get('cb', 0) > 0 and W['2026-10-05'].get('cs') == 1 and not W['2026-10-12'].get('cb') and W.get('2026-10-12', {}).get('cs') is None, (W['2026-10-05'].get('cb'), W['2026-10-12']))
         panel = await page.text_content('#game-panel')
@@ -82,10 +82,10 @@ async def main():
         # rank scaling: at level >= 5 a drain costs more than its base %
         lv = await page.evaluate("window.__tempo.app.gameLevelUps")
         await page.click('dialog[open] details.game-adv > summary')
-        await page.fill('dialog[open] .gc-v[data-k=cleanDayPct]', '10')
+        await page.fill('dialog[open] .gc-v[data-k=cleanDayPct]', '6')
         await page.click('dialog[open] button[type=submit]'); await page.wait_for_timeout(4500)
         L2 = await page.evaluate("window.__tempo.app.state.settings.game.ledger")
-        check('10. changing the clean bonus counts again (10% on the first clean day)', abs(L2['2026-10-05']['cb'] / (L2['2026-10-05']['a'] + L2['2026-10-05']['b'] + L2['2026-10-05']['l']) - 0.10) < 0.01)
+        check('10. changing the clean bonus counts again (6% on the first clean day)', abs(L2['2026-10-05']['cb'] / (L2['2026-10-05']['a'] + L2['2026-10-05']['b'] + L2['2026-10-05']['l']) - 0.06) < 0.006)
         sc = await page.evaluate("(async () => { const GM = await import('./js/game.js'); const s = window.__tempo.app.state.settings; return [GM.drainScale(s, 1), GM.drainScale(s, 12), GM.drainScale(s, 60), GM.drainPct(s.game.drains[0], 1, GM.drainScale(s, 60))]; })()")
         check('11. drains cost more the higher the rank (×1, ×1.06 at level 12, ×1.36 at level 60)', abs(sc[0] - 1) < 1e-9 and abs(sc[1] - 1.06) < 1e-9 and abs(sc[2] - 1.36) < 1e-6 and abs(sc[3] - 13.6) < 1e-6, sc)
         # newspaper
