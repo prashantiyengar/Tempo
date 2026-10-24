@@ -591,7 +591,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
   const b = t.bounds || s.bounds;
   const prog = task ? S.progress(task) : null;
   const rep = t.repeat || null;
-  const others = S.sortTasks(st.tasks.filter((x) => !x.archived && x.id !== t.id));
+  // tasks it can wait for: not finished ones (unless already chosen)
+  const others = S.sortTasks(st.tasks.filter((x) => !x.archived && x.id !== t.id && (t.after?.includes(x.id) || x.repeat || S.progress(x, now).pct < 100)));
   const projects = s.projects || [];
 
   const html = `
@@ -723,7 +724,8 @@ export function taskDialog(ctx, task = null, preset = {}) {
     // Deadline shortcuts, based on the task's own day bounds if set, otherwise the default ones
     $$('[data-dl]', dlg).forEach((b) => (b.onclick = () => {
       const bd = f.bmode.value === 'custom' ? { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: $$('input[name=bdays]:checked', dlg).map((c) => +c.value) } : s.bounds;
-      f.deadline.value = T.toDTInput(deadlinePreset(b.dataset.dl, bd, tz), tz);
+      // counted from "From" (don't start before) when it's set and later than now
+      f.deadline.value = T.toDTInput(deadlinePreset(b.dataset.dl, bd, tz, Math.max(Date.now(), T.fromDTInput(f.earliest.value, tz) ?? 0)), tz);
       $$('[data-dl]', dlg).forEach((x) => x.classList.toggle('on', x === b));
       update();
     }));

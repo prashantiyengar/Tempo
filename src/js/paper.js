@@ -299,3 +299,48 @@ export function pictureHTML(pic) {
   return `<figure class="np-figure"><a href="${esc(pic.page)}" target="_blank" rel="noopener"><img src="${esc(pic.thumb)}" alt="${esc(pic.title)}"${ar} decoding="async"></a>
     <figcaption><b>${esc(pic.title)}</b>${cap ? ` — ${esc(cap)}` : ''}${pic.desc && pic.desc !== pic.title ? `<br><span class="np-mute">${esc(pic.desc)}</span>` : ''}<br><span class="np-mute">${/wikimedia/.test(pic.page || '') ? 'Wikimedia Commons · ' : ''}${esc(pic.license)}</span></figcaption></figure>`;
 }
+
+// ---- Layout: the sections below the fold (goals, projects, habits, game, quote, outlook, corrections) are
+// arranged by their heights — two sections of similar height side by side (wider for the longer one), and a long
+// section across the whole page in two or three columns of its own, so the page looks even.
+export const FLOW = ['np-goals', 'np-proj', 'np-habits', 'np-game', 'np-words', 'np-out', 'np-corr'];
+export function layoutPaper(root) {
+  const grid = root?.querySelector?.('.np-grid'); if (!grid) return;
+  const secs = FLOW.map((c) => grid.querySelector(`:scope > section.${c}`)).filter(Boolean);
+  const reset = (el) => { el.style.gridColumn = ''; el.style.columnCount = ''; el.classList.remove('np-wide', 'np-right', 'np-flowed'); };
+  secs.forEach(reset);
+  if (getComputedStyle(grid).gridTemplateColumns.split(' ').length < 6) return; // phones: one column
+  secs.forEach((el) => el.classList.add('np-flowed'));
+  // natural height at half the page
+  const h = new Map();
+  for (const el of secs) { el.style.gridColumn = 'span 3'; el.style.alignSelf = 'start'; } // natural height, not stretched to its row
+  for (const el of secs) h.set(el, el.offsetHeight);
+  for (const el of secs) { el.style.gridColumn = ''; el.style.alignSelf = ''; }
+  const median = [...h.values()].sort((a, b) => a - b)[Math.floor(h.size / 2)] || 1;
+  const rest = [...secs], rows = [];
+  while (rest.length) {
+    const a = rest.shift(), ha = h.get(a);
+    const isLong = (x) => x > Math.max(360, 1.8 * median), longOne = isLong(ha);
+    // partner: the one among the next three whose height is closest
+    let best = -1, bd = Infinity;
+    if (!longOne) rest.slice(0, 3).forEach((b, i) => { const d = Math.abs(Math.log((h.get(b) + 1) / (ha + 1))); if (!isLong(h.get(b)) && d < bd) { bd = d; best = i; } });
+    if (best < 0 || bd > Math.log(4)) { rows.push([a]); continue; }
+    const [b] = rest.splice(best, 1);
+    rows.push([a, b]);
+  }
+  for (const r of rows) grid.append(...r); // the grid places them in this order
+  for (const r of rows) {
+    if (r.length === 1) {
+      const [a] = r, ha = h.get(a);
+      a.style.gridColumn = '1 / -1';
+      const n = ha > 900 ? 3 : ha > 220 ? 2 : 1;
+      if (n > 1) { a.style.columnCount = String(n); a.classList.add('np-wide'); }
+      continue;
+    }
+    // width split so both end about level: area ≈ height at half width × 3
+    const [a, b] = r, A = h.get(a) * 3, B = h.get(b) * 3;
+    let w = 3, bestD = Infinity;
+    for (const x of [2, 3, 4]) { const d = Math.abs(A / x - B / (6 - x)); if (d < bestD) { bestD = d; w = x; } }
+    a.style.gridColumn = `1 / ${1 + w}`; b.style.gridColumn = `${1 + w} / 7`; b.classList.add('np-right');
+  }
+}

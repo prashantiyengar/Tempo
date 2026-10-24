@@ -2649,6 +2649,12 @@ async function renderPaperView(seq) {
   if (seq !== app.renderSeq) return;
   const spin = app.npSpin; app.npSpin = false;
   setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP, projects: paperProjects(items, r.from, r.weekEnd), habits: paperHabits(r.from, r.weekEnd), game: paperGame(r.from, r.weekEnd) }));
+  NP.layoutPaper(root);
+  if (!app.npLayoutWired) {
+    app.npLayoutWired = true;
+    let tm = 0; const again = () => { clearTimeout(tm); tm = setTimeout(() => { if (app.view === 'review') NP.layoutPaper($('.np-wrap')); }, 150); };
+    window.addEventListener('resize', again); window.addEventListener('beforeprint', () => NP.layoutPaper($('.np-wrap'))); window.addEventListener('afterprint', again);
+  }
   if (spin && !matchMedia('(prefers-reduced-motion: reduce)').matches) { const np = $('.np', root); np?.classList.add('np-spin'); np?.addEventListener('animationend', () => np.classList.remove('np-spin'), { once: true }); }
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
@@ -2673,7 +2679,7 @@ async function renderPaperView(seq) {
   $('.np-pic-new', root).onclick = () => { visit.picLoad = null; loadPic(); };
   $('.np-pic-hist', root)?.addEventListener('click', () => { const d = $('.np-archive', root); if (d) { d.open = true; d.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
   // joke: an online one when available (once per visit), otherwise from our own list
-  const setJoke = (j) => { visit.joke = j; const host = $('.np-joke', root); if (host) { host.textContent = j.text; const src = host.nextElementSibling?.classList.contains('np-small') ? host.nextElementSibling : null; if (src) src.remove(); if (j.link) host.insertAdjacentHTML('afterend', `<p class="np-small np-mute">From <a href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.source)}</a></p>`); } };
+  const setJoke = (j) => { visit.joke = j; const host = $('.np-joke', root); if (host) { host.textContent = j.text; const src = host.nextElementSibling?.classList.contains('np-small') ? host.nextElementSibling : null; if (src) src.remove(); if (j.link) host.insertAdjacentHTML('afterend', `<p class="np-small np-mute">From <a href="${esc(j.link)}" target="_blank" rel="noopener">${esc(j.source)}</a></p>`); } NP.layoutPaper(root); };
   if (!visit.jokeLoaded) { visit.jokeLoaded = true; XT.getJoke().then((j) => { if (app.npVisit === visit) setJoke(j); }); }
   $('.np-joke-new', root).onclick = () => XT.getJoke().then(setJoke);
   $('.np-quote-new', root).onclick = () => { visit.quote = XT.randomQuote(); const q = $('.np-quote', root); if (q) setHTML(q, `“${esc(visit.quote.text)}”<cite>— ${esc(visit.quote.by)}</cite>`); };
