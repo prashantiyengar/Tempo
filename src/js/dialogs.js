@@ -2001,5 +2001,5 @@ export function habitDialog(ctx, habit = null) {
         target: num ? Math.max(0.1, +f.target.value || 1) : 1, unit: num ? f.unit.value.trim() : '',
         auto: !num && f.amode.value && f.awords.value.trim() ? { mode: f.amode.value, words: [...new Set(f.awords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean))].slice(0, 12), from: f.afrom.value || T.dayKey(Date.now(), ctx.state.settings.tz) } : null });
     });
-  }, { cls: 'narrow' });
+  });
 }
