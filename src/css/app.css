@@ -1252,3 +1252,9 @@ button.xp-chip:hover { filter: brightness(.95); text-decoration: underline; }
 .xb-l span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .g-xp { font-size: 11px; color: var(--xp-l); font-weight: 600; white-space: nowrap; }
 .g-xp-prev { margin: 0; background: var(--off); border-radius: 8px; padding: 6px 8px; }
+/* dialogs whose content is a div (ranks, habit page, AI console): the body scrolls, also on phones */
+dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console { display: flex; flex-direction: column; max-height: calc(100vh - 32px); }
+@media (max-width: 900px) { dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console { max-height: 100dvh; height: 100%; } }
+.game-cfg { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 12px; margin: 8px 0; }
+.game-cfg .field span { font-size: 12px; }
+.game-adv summary { cursor: pointer; }

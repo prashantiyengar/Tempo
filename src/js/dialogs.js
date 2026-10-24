@@ -13,6 +13,7 @@ import * as W from './weather.js';
 import * as XT from './extras.js';
 import * as P from './projects.js';
 import * as HB from './habits.js';
+import * as GM from './game.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -950,7 +951,13 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Count XP from <em class="muted">(a date in the past counts what's already on your calendar, up to 180 days back)</em></span><input type="date" data-quick="off" name="gameStart" value="${esc(g.started || T.dayKey(Date.now(), s.tz))}" max="${T.dayKey(Date.now(), s.tz)}"></label>
           <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b> (things that build long-term skills, e.g. reading, working out)</span><div class="g-catlist game-life">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gl-c" value="${esc(c.id)}" ${life.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
           <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="g-catlist game-rest">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gr-c" value="${esc(c.id)}" ${rest.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
-          <p class="muted small" style="margin:0">Sleep counts too (your sleep blocks or sleep category). Progress is kept with your settings, so it follows you to your other devices.</p>`;
+          <div class="field"><span>Categories that never score</span><div class="g-catlist game-no">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gn-c" value="${esc(c.id)}" ${(g.noCats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+          <details class="game-adv"><summary class="small"><b>Advanced</b> — adjust the points and the pace</summary>
+            <div class="game-cfg">${GM.CFG.map(([k, label, d, lo, hi, step]) => `<label class="field"><span>${esc(label)} <em class="muted">(default ${d})</em></span><input type="number" class="gc-v num" data-k="${k}" min="${lo}" max="${hi}" step="${step}" value="${g.cfg?.[k] ?? d}"></label>`).join('')}</div>
+            <button type="button" class="btn small ghost gc-reset">Back to the defaults</button>
+            <p class="muted small" style="margin:0">Changing these counts all your days again with the new values.</p>
+          </details>
+          <p class="muted small" style="margin:0">Sleep counts a little (your sleep blocks or sleep category). Progress is kept with your settings, so it follows you to your other devices.</p>`;
         })())}
         ${sect('s-weather', 'Weather', `
           <label class="chk"><input type="checkbox" name="wxOn" ${wx.on ? 'checked' : ''}> Show the forecast at the top of each of the next 14 days</label>
@@ -1161,6 +1168,7 @@ export function settingsDialog(ctx) {
       $$('.lv-row', dlg).forEach((row) => { $('.lv-del', row).onclick = () => { const r = ranges[+row.dataset.i]; for (let k = r.from; k <= r.to; k = T.addDays(k, 1)) delete leave[k]; drawLeave(); updSects(); }; });
     };
     drawLeave();
+    $('.gc-reset', dlg)?.addEventListener('click', () => { $$('.gc-v', dlg).forEach((x) => { x.value = GM.CFG.find((c) => c[0] === x.dataset.k)[2]; }); });
     linkRange(f.lvFrom, f.lvTo);
     $('.lv-add', dlg).onclick = () => {
       const a = f.lvFrom.value, b = f.lvTo.value || a;
@@ -1372,7 +1380,8 @@ export function settingsDialog(ctx) {
         picSources: picSrc.map((x) => ({ ...x, name: (x.name || '').trim() || 'Pictures', value: (x.value || '').trim() })),
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
-        game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value),
+        game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value), noCats: $$('.gn-c:checked', dlg).map((x) => x.value),
+          cfg: Object.fromEntries($$('.gc-v', dlg).map((x) => [x.dataset.k, x.value]).filter(([k, v]) => v !== '' && +v !== GM.CFG.find((c) => c[0] === k)[2]).map(([k, v]) => [k, +v])),
           ...(() => { const st0 = f.gameStart.value && f.gameStart.value <= T.dayKey(Date.now(), s.tz) ? f.gameStart.value : (s.game?.started || T.dayKey(Date.now(), s.tz)); return st0 !== s.game?.started ? { started: st0, ledger: {}, weeks: {} } : { started: st0 }; })(),
           active: f.gameOn.checked && !s.game?.on ? [...new Set([...(s.game?.active || []), T.dayKey(Date.now(), s.tz)])] : s.game?.active },
         sleepEvents: f.sleepEvents.checked, sleepCal: f.sleepCal.value,

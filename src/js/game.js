@@ -7,37 +7,72 @@
 // Past days are settled once into a ledger (settings.game.ledger, synced); today is worked out live.
 import * as T from './tz.js';
 
+// ---------- settings you can adjust (Settings → Game mode → Advanced) ----------
+// [key, label, default, min, max, step]
+export const CFG = [
+  ['pace', 'Level pace — XP needed per level (×)', 1, 0.25, 4, 0.05],
+  ['eventPerHour', 'Busy XP per hour of events', 24, 0, 200, 1],
+  ['sessionPerHour', 'Busy XP per hour of task sessions', 30, 0, 200, 1],
+  ['lifePerHour', 'Life XP per hour in life-growth categories', 30, 0, 200, 1],
+  ['crossShare', 'Busy XP that life-growth and leisure items also earn (% of normal)', 15, 0, 100, 1],
+  ['sleepPerHour', 'Life XP per hour of sleep', 2, 0, 50, 0.5],
+  ['leisurePerHour', 'Life XP per hour of leisure', 6, 0, 100, 1],
+  ['stageBonus', 'Extra XP for each later session of a task (%)', 8, 0, 50, 1],
+  ['schedShare', 'App XP for scheduling something (% of what it is worth)', 5, 0, 50, 1],
+  ['openXP', 'App XP for opening Tempo on a day', 15, 0, 200, 1],
+  ['streakXP', 'Extra app XP per day of a streak (up to 10 days)', 3, 0, 50, 1],
+  ['fullDayXP', 'Busy XP for a full day (half of 7:00–23:00 planned)', 40, 0, 300, 5],
+  ['keptXP', 'Busy XP for a day kept to the plan', 20, 0, 200, 5],
+  ['penalty', 'XP lost per reschedule (more if the same task slips again)', 8, 0, 100, 1],
+  ['weekFillXP', 'Weekly bonus for a fully planned week', 300, 0, 2000, 10],
+  ['questXP', 'Quest XP (×)', 1, 0, 5, 0.1],
+  ['goalXP', 'Goal XP (×)', 1, 0, 5, 0.1],
+  ['lifeCap', 'Most of your XP that must be life XP to level up (%)', 25, 0, 50, 1],
+];
+export const RULES_V = 3; // when the rules change, the ledger is counted again
+export function cfg(s) {
+  const o = {}, c = s?.game?.cfg || {};
+  for (const [k, , d, lo, hi] of CFG) { const v = c[k]; o[k] = v == null || v === '' || !Number.isFinite(+v) ? d : Math.min(hi, Math.max(lo, +v)); }
+  return o;
+}
+export const cfgHash = (s) => JSON.stringify(cfg(s));
+
 // ---------- levels ----------
 export const MAX_LEVEL = 300;
 // XP to go from level L to L+1: quick at first (level 20 in about a week of regular use, 50 in about a month),
 // then slower and slower.
+// (a busy week reaches about level 10–15; level 50 takes a couple of busy months; slower and slower after that)
 export function need(L) {
-  if (L < 20) return 120 + 10 * L;
-  if (L < 50) return 300 + 11 * (L - 20);
+  if (L < 20) return 150 + 25 * L;
+  if (L < 50) return 650 + 15 * (L - 20);
   const d = L - 50;
-  return Math.round(650 + 25 * d + 0.25 * d * d);
+  return Math.round(1100 + 30 * d + 0.3 * d * d);
 }
 const CUM = [0, 0];
 for (let L = 1; L <= MAX_LEVEL; L++) CUM[L + 1] = CUM[L] + need(L);
 export const xpFor = (L) => CUM[Math.max(1, Math.min(MAX_LEVEL, L))];
 // Part of all XP that must be life XP to go past level L — rising slowly, never more than a quarter.
-export function lifeShare(L) {
-  if (L <= 5) return 0;
-  if (L <= 20) return 0.08 * (L - 5) / 15;
-  if (L <= 50) return 0.08 + 0.07 * (L - 20) / 30;
-  if (L <= 150) return 0.15 + 0.10 * (L - 50) / 100;
-  return 0.25;
+export function lifeShare(L, cap = 0.25) {
+  let v;
+  if (L <= 5) v = 0;
+  else if (L <= 20) v = 0.08 * (L - 5) / 15;
+  else if (L <= 50) v = 0.08 + 0.07 * (L - 20) / 30;
+  else if (L <= 150) v = 0.15 + 0.10 * (L - 50) / 100;
+  else v = 0.25;
+  return Math.min(v * (cap / 0.25), cap);
 }
-export const lifeFor = (L) => Math.round(xpFor(L) * lifeShare(L));
+export const lifeFor = (L, cap = 0.25) => Math.round(xpFor(L) * lifeShare(L, cap));
 // Level from total XP and life XP. `capped`: enough XP for the next level, but not enough life XP yet.
-export function levelOf(total, life) {
+// `pace` scales the XP every level needs; `cap` is the most life XP can be asked for (share of all XP).
+export function levelOf(total, life, pace = 1, cap = 0.25) {
+  const t = total / pace, lf = life / pace;
   let L = 1;
-  while (L < MAX_LEVEL && total >= xpFor(L + 1)) L++;
+  while (L < MAX_LEVEL && t >= xpFor(L + 1)) L++;
   let lv = L;
-  while (lv > 1 && life < lifeFor(lv)) lv--;
+  while (lv > 1 && lf < lifeFor(lv, cap)) lv--;
   const capped = lv < L;
   const next = Math.min(MAX_LEVEL, lv + 1);
-  return { level: lv, into: total - xpFor(lv), span: xpFor(next) - xpFor(lv), capped, lifeNeed: capped ? lifeFor(lv + 1) - life : 0, nextLife: lifeFor(next), max: lv >= MAX_LEVEL };
+  return { level: lv, into: Math.round((t - xpFor(lv)) * pace), span: Math.round((xpFor(next) - xpFor(lv)) * pace), capped, lifeNeed: capped ? Math.round((lifeFor(lv + 1, cap) - lf) * pace) : 0, nextLife: Math.round(lifeFor(next, cap) * pace), max: lv >= MAX_LEVEL };
 }
 
 // ---------- ranks: a new one every 5 levels, each with a description and its own emblem ----------
@@ -148,27 +183,32 @@ const parentCat = (it, g) => g._parents?.[catOf(it)] || null;
 export const isSleepItem = (it, s) => !!(it.ev?.extendedProperties?.private?.tempoSleep || (s.sleepCategory && catOf(it) === s.sleepCategory) || /\bsleep\b|😴/i.test(it.title || ''));
 const isRest = (it, s, g) => !isSleepItem(it, s) && ((g.restCats || []).includes(catOf(it)) || /^leisure$/i.test(catOf(it) || ''));
 // What an item is worth when completed: { app, busy, life } and the reasons. `done` = it already counts.
+// Items count mostly as one kind: life-growth (and leisure) items earn life XP and only a little busy XP; other
+// items earn busy XP; sleep earns a little life XP. Categories set to "never score" earn nothing.
 export function itemXP(it, s, now = Date.now()) {
-  const g = gameOf(s);
+  const g = gameOf(s), c = cfg(s);
   const out = { app: 0, busy: 0, life: 0, why: [], done: false, kind: it.kind };
   if (it.allDay || it.declined) return out;
-  const m = Math.max(0, Math.min(600, (it.end - it.start) / T.MIN));
+  const cat = catOf(it);
+  if (cat && ((g.noCats || []).includes(cat) || (g.noCats || []).includes(g._parents[cat]))) { out.why.push('a category that never scores'); out.done = it.kind === 'chunk' ? it.status === 'done' : it.end <= now; return out; }
+  const m = Math.max(0, Math.min(600, (it.end - it.start) / T.MIN)), h = m / 60, cross = c.crossShare / 100;
   if (it.kind === 'chunk') {
     if (it.status === 'waived' || it.sess?.kind === 'waived') return out;
-    const stage = Math.min(3, Math.pow(1.08, Math.max(0, (it.sess?.index || 1) - 1)));
-    out.busy = Math.round((12 + 0.45 * m) * stage);
-    out.why.push(`task session${(it.sess?.index || 1) > 1 ? ` ${it.sess.index}/${it.sess.count} (×${stage.toFixed(2)} for a later stage)` : ''}`);
-    if (isLife(it, g)) { out.life = Math.round(0.55 * m * stage); out.why.push('life growth'); }
+    const stage = Math.min(3, Math.pow(1 + c.stageBonus / 100, Math.max(0, (it.sess?.index || 1) - 1)));
+    const busy = (6 + c.sessionPerHour * h) * stage;
+    const later = (it.sess?.index || 1) > 1 && c.stageBonus ? ` ${it.sess.index}/${it.sess.count} (×${stage.toFixed(2)} for a later stage)` : '';
+    if (isLife(it, g)) { out.life = Math.round(c.lifePerHour * h * stage); out.busy = Math.round(busy * cross); out.why.push(`life growth${later}`); }
+    else { out.busy = Math.round(busy); out.why.push(`task session${later}`); }
     out.done = it.status === 'done' || it.sess?.kind === 'done';
     return out;
   }
-  if (isSleepItem(it, s)) {
-    out.life = Math.round(Math.min(m, 540) * 0.03); out.why.push('sleep');
-  } else {
-    out.busy = Math.round(8 + 0.35 * Math.min(m, 480)); out.why.push('event');
-    if (it.evDone) { out.busy = Math.round(out.busy * 1.2); out.why.push('ticked off'); }
-    if (isLife(it, g)) { out.life = Math.round(0.5 * Math.min(m, 480)); out.why.push('life growth'); }
-    else if (isRest(it, s, g)) { out.life = Math.round(0.15 * Math.min(m, 240)); out.why.push('leisure'); }
+  if (isSleepItem(it, s)) { out.life = Math.round(Math.min(h, 9) * c.sleepPerHour); out.why.push('sleep'); }
+  else {
+    const busy = (4 + c.eventPerHour * Math.min(h, 8)) * (it.evDone ? 1.2 : 1);
+    if (isLife(it, g)) { out.life = Math.round(c.lifePerHour * Math.min(h, 8) * (it.evDone ? 1.2 : 1)); out.busy = Math.round(busy * cross); out.why.push('life growth'); }
+    else if (isRest(it, s, g)) { out.life = Math.round(c.leisurePerHour * Math.min(h, 4)); out.busy = Math.round(busy * cross); out.why.push('leisure'); }
+    else { out.busy = Math.round(busy); out.why.push('event'); }
+    if (it.evDone) out.why.push('ticked off ×1.2');
   }
   out.done = it.end <= now;
   return out;
@@ -177,7 +217,7 @@ export const sumXP = (x) => x.app + x.busy + x.life;
 export function gameOf(s) {
   const g = s.game || {};
   const parents = {}; for (const c of s.categories || []) if (c.parent) parents[c.id] = c.parent;
-  return { ...g, lifeCats: g.lifeCats || [], restCats: g.restCats || [], _parents: parents };
+  return { ...g, lifeCats: g.lifeCats || [], restCats: g.restCats || [], noCats: g.noCats || [], _parents: parents };
 }
 
 // ---------- goals ----------
@@ -213,6 +253,7 @@ export function goalValue(g, key, s) {
 const BAD = new Set(['moved', 'skipped', 'undone', 'resched']);
 // ctx: { items (events + sessions of the day and around it), tasks, projects, habits, goals (flat list with doneAt), history, active (days) }
 export function dayXP(k, s, ctx, now = Date.now()) {
+  const c = cfg(s);
   const z = s.tz, g = gameOf(s), from = T.dayStart(k, z), to = T.dayStart(T.addDays(k, 1), z);
   const r = { k, app: 0, busy: 0, life: 0, pen: 0, lines: [], potential: { app: 0, busy: 0, life: 0 }, quests: [] };
   const add = (type, xp, label) => { if (!xp) return; r[type] += xp; r.lines.push([label, type, xp]); };
@@ -229,19 +270,19 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   // scheduling: a fifth of what the item is worth, on the day you created it
   for (const it of ctx.items) {
     const c = it.kind === 'chunk' ? null : Date.parse(it.ev?.created || '') || null;
-    if (c && c >= from && c < to && !it.ev?.extendedProperties?.private?.tempoSleep) { const x = itemXP(it, s, now); add('app', Math.max(4, Math.round(sumXP(x) * 0.2)), `scheduled “${it.title}”`); }
+    if (c && c >= from && c < to && !it.ev?.extendedProperties?.private?.tempoSleep) { const x = itemXP(it, s, now); const v = Math.round(sumXP(x) * c.schedShare / 100); if (v) add('app', v, `scheduled “${it.title}”`); }
   }
-  for (const t of ctx.tasks) if (t.created >= from && t.created < to) add('app', 12, `planned task “${t.title}”`);
-  for (const p of ctx.projects) if (p.created >= from && p.created < to) add('app', 40, `started project “${p.name}”`);
+  for (const t of ctx.tasks) if (t.created >= from && t.created < to) add('app', Math.round(5 * c.schedShare / 5), `planned task “${t.title}”`);
+  for (const p of ctx.projects) if (p.created >= from && p.created < to) add('app', 20, `started project “${p.name}”`);
   // finished tasks and projects
   for (const t of ctx.tasks) { const last = t._finishedAt; if (last >= from && last < to) add('busy', 40 + 8 * (t._sessions || 1), `finished “${t.title}”`); }
   for (const p of ctx.projectsDone || []) if (p.at >= from && p.at < to) add('busy', 200, `completed project “${p.name}”`);
   // habits and goals
   let hDone = 0, hTotal = 0;
-  for (const h of ctx.habits) { hTotal++; if (ctx.habitDone(h, k)) { hDone++; add('life', 8, `habit: ${h.name}`); add('app', 2, `logged ${h.name}`); } }
+  for (const h of ctx.habits) { hTotal++; if (ctx.habitDone(h, k)) { hDone++; add('life', 8, `habit: ${h.name}`); } }
   // goals: defining them (app XP), putting hours into them (life XP, bit by bit) and reaching them (life XP)
   for (const { g: gl, key } of ctx.goalsAll || []) {
-    const v = goalValue(gl, key, s);
+    const v0 = goalValue(gl, key, s), gm = c.goalXP, v = { ...v0, define: Math.round(v0.define * gm), final: Math.round(v0.final * gm), progress: Math.round(v0.progress * gm) };
     if (v.define && gl.at >= from && gl.at < to) add('app', v.define, `set goal: ${gl.text}${v.ahead ? ' (ahead of time)' : ''}`);
     const at = gl.override === false ? null : gl.doneAt || gl.autoDoneAt;
     if (at >= from && at < to && (gl.done || gl.autoDoneAt)) add('life', v.final, `goal reached: ${gl.text}`);
@@ -254,21 +295,21 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   // using the app: a day you opened it, with a streak bonus
   if ((g.active || []).includes(k)) {
     let streak = 1; for (let d = T.addDays(k, -1); (g.active || []).includes(d) && streak < 30; d = T.addDays(d, -1)) streak++;
-    add('app', 20 + Math.min(40, 4 * (streak - 1)), streak > 1 ? `day ${streak} in a row` : 'opened Tempo');
+    add('app', Math.round(c.openXP + Math.min(10, streak - 1) * c.streakXP), streak > 1 ? `day ${streak} in a row` : 'opened Tempo');
   }
   // a full day: at least half of the waking day (07–23) filled with things other than sleep
   const wake0 = T.atTime(k, '07:00', z), wake1 = T.atTime(k, '23:00', z);
   const occ = merge(mine.filter((it) => !isSleepItem(it, s) && it.end <= now + T.DAY).map((it) => [Math.max(it.start, wake0), Math.min(it.end, wake1)]).filter(([a, b]) => b > a));
   const fill = occ.reduce((a, [x, y]) => a + (y - x), 0) / (wake1 - wake0);
-  if (to <= now && fill >= 0.5) add('busy', Math.round(40 + 80 * (Math.min(fill, 1) - 0.5)), `a full day (${Math.round(fill * 100)}% planned)`);
+  if (to <= now && fill >= 0.5) add('busy', Math.round(c.fullDayXP * (1 + 2 * (Math.min(fill, 1) - 0.5))), `a full day (${Math.round(fill * 100)}% planned)`);
   // rescheduling costs XP — more each time the same task slips again within a week
   const hist = (ctx.history || []).filter((h) => BAD.has(h.kind) && h.at >= from && h.at < to);
   for (const h of hist) {
     const again = (ctx.history || []).filter((x) => BAD.has(x.kind) && x.taskId && x.taskId === h.taskId && x.at < h.at && x.at > h.at - 7 * T.DAY).length;
-    const p = Math.min(40, 8 * (again + 1));
+    const p = Math.round(Math.min(5 * c.penalty, c.penalty * (again + 1)));
     r.pen += p; r.lines.push([`${again ? `rescheduled again (${again + 1}×)` : 'rescheduled'}${h.title ? `: ${h.title}` : ''}`, 'pen', -p]);
   }
-  if (to <= now && !hist.length && doneN >= 1) add('busy', 25, 'kept to the plan');
+  if (to <= now && !hist.length && doneN >= 1 && c.keptXP) add('busy', c.keptXP, 'kept to the plan');
   // daily quests
   const q = [
     { id: 'q-done', label: 'Complete 3 events or task sessions', have: doneN, goal: 3, xp: 30, type: 'busy' },
@@ -276,7 +317,7 @@ export function dayXP(k, s, ctx, now = Date.now()) {
     hTotal ? { id: 'q-habits', label: 'Tick off all your habits', have: hDone, goal: hTotal, xp: 25, type: 'life' }
       : { id: 'q-plan', label: 'Plan something for tomorrow', have: ctx.items.some((it) => it.start >= to && it.start < to + T.DAY && (Date.parse(it.ev?.created || '') >= from || it.kind === 'chunk')) ? 1 : 0, goal: 1, xp: 20, type: 'app' },
   ];
-  for (const x of q) { x.ok = x.have >= x.goal; if (x.ok) add(x.type, x.xp, `quest: ${x.label}`); }
+  for (const x of q) { x.xp = Math.round(x.xp * c.questXP); x.ok = x.have >= x.goal; if (x.ok && x.xp) add(x.type, x.xp, `quest: ${x.label}`); }
   r.quests = q;
   r.net = r.app + r.busy + r.life - r.pen;
   r.fill = fill; r.penN = hist.length; r.doneN = doneN;
@@ -290,7 +331,8 @@ export function weekXP(wk, s, days) {
   const fills = days.map((d) => d.fill || 0);
   const fill = fills.length ? fills.reduce((a, x) => a + x, 0) / fills.length : 0;
   const pens = days.reduce((a, d) => a + (d.penN || 0), 0);
-  const b = Math.round(300 * Math.min(1, fill)) + (pens <= 2 ? 100 : 0);
+  const c = cfg(s);
+  const b = Math.round(c.weekFillXP * Math.min(1, fill)) + (pens <= 2 ? Math.round(c.weekFillXP / 3) : 0);
   return { busy: b, fill, pens };
 }
 

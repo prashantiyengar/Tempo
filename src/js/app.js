@@ -722,13 +722,15 @@ async function gameRefresh() {
   try {
     const s = set(), g = s.game, z = tz(), now = Date.now(), today = T.dayKey(now, z);
     g.started ||= today; g.ledger ||= {}; g.weeks ||= {}; g.ach ||= {};
+    // new rules, or you adjusted them: count everything again
+    let changed = false;
+    if (g.rulesV !== GM.RULES_V || g.cfgHash !== GM.cfgHash(s)) { g.ledger = {}; g.weeks = {}; g.rulesV = GM.RULES_V; g.cfgHash = GM.cfgHash(s); app.gameToday = null; changed = true; try { localStorage.removeItem('tempo:gameLevel'); } catch { /* storage blocked */ } }
     const first = [g.started, T.addDays(today, -180)].sort()[1];
     const open = []; for (let k = first; k < today; k = T.addDays(k, 1)) if (!g.ledger[k]) open.push(k);
     // (from the start of the earliest goal period still open, so progress on goals is counted right)
     const goalFrom = Object.entries(s.goals || {}).filter(([key, l]) => (l || []).length && !key.startsWith('y')).map(([key, l]) => GM.goalPeriod(key, l[0], z)).filter((p) => p.to > (open[0] || today)).map((p) => p.from);
     const items = await collectItems([[open[0] || today, ...goalFrom, today].sort()[0], T.addDays(today, 30)]);
     const ctx = gameCtx(items);
-    let changed = false;
     // goals reached by their rule: remember when, so reaching them earns XP that day
     for (const [key, l] of Object.entries(s.goals || {})) for (const gl of l || []) {
       if (!gl.rule || gl.autoDoneAt || gl.override === false) continue;
@@ -758,13 +760,14 @@ async function gameRefresh() {
     const sessDone = st().tasks.reduce((a, t) => a + (t.frozen || []).filter((c) => c.status === 'done' && c.end >= T.dayStart(g.started, z)).length, 0);
     if (sessDone >= 25) unlock('sessions-25'); if (sessDone >= 100) unlock('sessions-100');
     if (tot.life >= 1000) unlock('life-1000'); if (tot.life >= 10000) unlock('life-10000');
-    const lv = GM.levelOf(tot.total, tot.life).level;
+    const lv = gameLevel(tot).level;
     if (lv >= 20) unlock('level-20'); if (lv >= 50) unlock('level-50'); if (lv >= 100) unlock('level-100');
     if (changed) await gameSave();
     renderGamePanel();
   } catch (err) { console.warn('Tempo: game', err); }
   finally { gameBusy = false; }
 }
+const gameLevel = (tot) => { const c = GM.cfg(set()); return GM.levelOf(tot.total, tot.life, c.pace, c.lifeCap / 100); };
 function gameTotals() {
   const g = set().game || {}, t = { app: 0, busy: 0, life: 0, pen: 0 };
   for (const d of Object.values(g.ledger || {})) { t.app += d.a || 0; t.busy += d.b || 0; t.life += d.l || 0; t.pen += d.p || 0; }
@@ -780,7 +783,7 @@ function renderGamePanel() {
   document.body.classList.toggle('game-on', gameOn());
   if (!gameOn()) { box.hidden = true; return; }
   box.hidden = false;
-  const g = set().game, tot = gameTotals(), lv = GM.levelOf(tot.total, tot.life), tier = GM.tierOf(lv.level), today = T.dayKey(Date.now(), tz());
+  const g = set().game, tot = gameTotals(), lv = gameLevel(tot), tier = GM.tierOf(lv.level), today = T.dayKey(Date.now(), tz());
   let streak = 0; for (let d = today; (g.active || []).includes(d); d = T.addDays(d, -1)) streak++;
   const d = app.gameToday;
   const pct = lv.max ? 100 : Math.min(100, (lv.into / Math.max(1, lv.span)) * 100);
@@ -809,12 +812,12 @@ function renderGamePanel() {
 }
 // Ranks (with their emblems), achievements and the XP log of the last days
 async function gameDetails() {
-  const g = set().game, tot = gameTotals(), lv = GM.levelOf(tot.total, tot.life);
+  const g = set().game, tot = gameTotals(), lv = gameLevel(tot);
   const days = Object.entries(g.ledger || {}).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14);
   const t = app.gameToday;
   await modal(`<div class="g-details"><header class="dlg-head"><h2>🎮 Level ${lv.level} · ${esc(GM.tierOf(lv.level).name)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
     <h3 class="gd-h">Ranks <span class="muted small">a new one every 5 levels</span></h3>
-    ${GM.ERAS.map((era, i) => { const next = GM.ERAS[i + 1]?.from || 999; const rs = GM.RANKS.filter(([L]) => L >= era.from && L < next); return `<div class="gd-era" style="--ec:${era.color}">${esc(era.name)} <span class="muted small">levels ${era.from}–${Math.min(300, next - 1)}</span></div><div class="gd-tiers">${rs.map(([L, n, , dsc]) => `<div class="gd-tier ${lv.level >= L ? 'got' : ''} ${GM.tierOf(lv.level).from === L ? 'cur' : ''}" title="${esc(dsc)}">${GM.emblemSVG(L, 54)}<b>${esc(n)}</b><span class="gd-desc">${esc(dsc)}</span><span class="muted small">level ${L}${lv.level < L ? ` · ${Math.max(0, GM.xpFor(L) - tot.total).toLocaleString()} XP to go` : ' ✓'}</span></div>`).join('')}</div>`; }).join('')}
+    ${GM.ERAS.map((era, i) => { const next = GM.ERAS[i + 1]?.from || 999; const rs = GM.RANKS.filter(([L]) => L >= era.from && L < next); return `<div class="gd-era" style="--ec:${era.color}">${esc(era.name)} <span class="muted small">levels ${era.from}–${Math.min(300, next - 1)}</span></div><div class="gd-tiers">${rs.map(([L, n, , dsc]) => `<div class="gd-tier ${lv.level >= L ? 'got' : ''} ${GM.tierOf(lv.level).from === L ? 'cur' : ''}" title="${esc(dsc)}">${GM.emblemSVG(L, 54)}<b>${esc(n)}</b><span class="gd-desc">${esc(dsc)}</span><span class="muted small">level ${L}${lv.level < L ? ` · ${Math.max(0, Math.round(GM.xpFor(L) * GM.cfg(set()).pace) - tot.total).toLocaleString()} XP to go` : ' ✓'}</span></div>`).join('')}</div>`; }).join('')}
     <h3 class="gd-h">Achievements <span class="muted small">${Object.keys(g.ach || {}).length}/${GM.ACHIEVEMENTS.length} · +${GM.ACH_XP} XP each</span></h3>
     <div class="gd-ach">${GM.ACHIEVEMENTS.map(([id, ic, n, d]) => `<div class="gd-a ${g.ach?.[id] ? 'got' : ''}" title="${esc(d)}"><span>${ic}</span><b>${esc(n)}</b><span class="muted small">${esc(d)}</span></div>`).join('')}</div>
     <h3 class="gd-h">XP log</h3>
