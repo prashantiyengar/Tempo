@@ -13,6 +13,7 @@ import * as C from './categories.js';
 import * as N from './notify.js';
 import * as GL from './goals.js';
 import * as P from './projects.js';
+import * as HB from './habits.js';
 import { parseTask, resolveDate } from './parse.js';
 
 export function createApi(h) {
@@ -276,6 +277,14 @@ export function createApi(h) {
     markDone: { params: 'session (id) | task + index', about: 'Mark a session done.', write: true, run: async (a) => {
       const { task, sess } = findSession(a.session, a.task, a.index);
       h.replaceTask(S.markDone(task, sess.id)); await h.saveTasks('AI: mark done'); await h.cycle(); return { done: sess.label };
+    } },
+    listHabits: { about: 'Habits with their score (0-100), current streak and the last 7 days.', run: () => { const s = h.set(), today = T.dayKey(Date.now(), tz()); return HB.list(s).map((x) => ({ name: x.name, type: x.type || 'yesno', frequency: HB.freqLabel(x), score: Math.round(HB.score(x, s, today) * 100), streak: HB.streaks(x, s, today).current, last7: Array.from({ length: 7 }, (_, i) => { const k = T.addDays(today, -i); const v = HB.val(x, k); return { day: k, value: v === 1 && x.type !== 'number' ? 'done' : v === -1 ? 'skipped' : v ?? null }; }) })); } },
+    checkHabit: { params: 'habit (name), day? (default today), done? (default true; false clears), value? (measurable habits), skip?', about: 'Tick a habit off for a day (or enter its amount, or mark the day skipped).', write: true, run: async (a) => {
+      const s = h.set(), x = HB.list(s).find((y) => y.name.toLowerCase() === String(a.habit || '').toLowerCase()) || HB.list(s).find((y) => y.name.toLowerCase().includes(String(a.habit || '').toLowerCase())) || err(`No habit "${a.habit}".`);
+      const k = a.day ? parseDay(a.day) : T.dayKey(Date.now(), tz());
+      const nx = a.skip ? HB.setValue(x, k, -1) : a.value != null ? HB.setValue(x, k, +a.value) : HB.setValue(x, k, a.done === false ? null : 1);
+      s.habits = s.habits.map((y) => (y.id === x.id ? nx : y)); await E.persist(h.st(), ['settings']); h.render?.();
+      return { habit: x.name, day: k, value: nx.log[k] ?? null };
     } },
     listProjects: { about: 'Projects with their steps (tasks and events, in order) and progress.', run: () => P.list(h.set()).map((p) => {
       const pr = P.progress(p, h.st().tasks);

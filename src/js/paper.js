@@ -90,7 +90,7 @@ export const PERIODS = {
 
 // extras: { orn: {left, right, top, motto}, joke: {text, source, link}, quote: {text, by} } — picture and online
 // horoscope are filled in afterwards (they load from the network) into .np-pic and .np-horo-live.
-export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] }, projects = [] }) {
+export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] }, projects = [], habits = [] }) {
   const z = s.tz;
   const P = PERIODS[period] || PERIODS.week;
   const rand = rng(r.reviewWeek + period);
@@ -165,7 +165,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         : say(reached * 2 >= allG.length ? PH.GOALS.most : PH.GOALS.few, { k: reached, n: allG.length });
   const bar = (p) => p.budget ? `<span class="np-gbar"><i style="width:${Math.min(100, (p.spent / p.budget) * 100)}%"></i></span>` : '';
   const headRow = (p) => (!p.goals.length && !p.spent) ? '' : `<div class="np-ghead"><div class="np-ghh"><b>${p.icon} ${esc(p.label)}</b> <span class="np-mute">${p.goals.length ? `${p.reached}/${p.goals.length} goals` : 'no goals'}${p.cats.length ? ` · ${dur(p.spent)}${p.budget ? ` of ${dur(p.budget)}` : ''}` : ''}</span>${bar(p)}</div>
-    ${p.goals.length ? `<ol class="np-goal-list">${p.goals.slice(0, 5).map((g) => `<li class="${g.done ? 'np-gdone' : ''}">${g.done ? '✓' : '○'} ${esc(g.text)}</li>`).join('')}${p.goals.length > 5 ? `<li class="np-mute">…${p.goals.length - 5} more</li>` : ''}</ol>` : ''}</div>`;
+    ${p.goals.length ? `<ol class="np-goal-list">${p.goals.slice(0, 5).map((g) => { const pg = (p.perGoal || []).find((q) => q.id === g.id); return `<li class="${g.done ? 'np-gdone' : ''}">${g.done ? '✓' : '○'} ${esc(g.text)}${pg && (pg.done || pg.planned) ? ` <span class="np-mute">(${dur(pg.done)}${pg.planned ? ` + ${dur(pg.planned)} scheduled` : ''}${g.budget ? ` of ${dur(g.budget)}` : ''})</span>` : ''}</li>`; }).join('')}${p.goals.length > 5 ? `<li class="np-mute">…${p.goals.length - 5} more</li>` : ''}</ol>` : ''}</div>`;
   const goalsHTML = `<h3 class="np-h3">${esc(gHead)}</h3>
     ${blocks.length && blocks.some((b) => b.prog.some((p) => p.goals.length || p.spent)) ? blocks.map((b) => { const rows = b.prog.map(headRow).join(''); return rows ? `<h4 class="np-h4">${esc(b.label)}</h4>${rows}` : ''; }).join('')
       : `<p class="np-small">Set goals under Work, Fitness and Personal in the <b>Goals</b> tab, and the paper will report on them.</p>`}
@@ -181,6 +181,15 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         ${projects.map((x) => `<div class="np-pj"><div class="np-ghh"><b>📁 ${esc(x.name)}</b> <span class="np-mute">${x.complete ? 'complete' : `${x.pct}% · ${x.steps}`}${x.done ? ` · ${dur(x.done)} ${P.this}` : ''}</span><span class="np-gbar"><i style="width:${x.pct}%"></i></span></div>
           ${x.finished.length ? `<p class="np-small">✓ ${x.finished.map((t) => esc(t)).join(' · ')}</p>` : ''}
           ${x.next && !x.complete ? `<p class="np-small np-mute">Next: ${esc(x.next.title)}${x.next.at ? ` (${esc(T.format(x.next.at, z, { weekday: 'short', day: 'numeric', month: 'short' }))})` : ''}${x.late ? ' — <b>behind schedule</b>' : ''}</p>` : ''}</div>`).join('')}
+      </section>`;
+  // ---- habits: kept / expected this period, score, streak, a square per day
+  const hbPct = habits.length ? Math.round(habits.reduce((a, x) => a + x.pct, 0) / habits.length) : 0;
+  const hbBest = habits.length ? [...habits].sort((a, b) => b.streak - a.streak || b.score - a.score)[0] : null;
+  const habitHTML = !habits.length ? '' : `<section class="np-habits">
+        <span class="np-kicker">${esc(K('habits'))}</span>
+        <h3 class="np-h3">${esc(say(hbPct >= 75 ? PH.HABIT_H.strong : hbPct >= 40 ? PH.HABIT_H.mid : PH.HABIT_H.weak, { pct: hbPct, best: hbBest?.name || '', streak: hbBest?.streak ? `${hbBest.streak}-${hbBest.streakUnit}` : '' }))}</h3>
+        ${habits.map((x) => `<div class="np-hb"><div class="np-ghh"><b>${esc(x.name)}</b> <span class="np-mute">${x.number ? `${x.done} / ${x.expected} ${esc(x.unit)}` : `${x.done} of ${x.expected} ${+x.expected === 1 ? 'time' : 'times'}`} · score ${Math.round(x.score * 100)}%${x.change ? ` (${x.change > 0 ? '+' : ''}${Math.round(x.change * 100)})` : ''}${x.streak ? ` · streak ${x.streak} ${x.streakUnit}${x.streak === 1 ? '' : 's'}` : ''}</span></div>
+          ${x.days.length ? `<div class="np-hbdays">${x.days.map((d) => `<i class="${d.v === 1 ? 'd' : d.v === -1 ? 's' : d.v > 0 ? 'p' : ''}" title="${esc(d.k)}"></i>`).join('')}</div>` : ''}</div>`).join('')}
       </section>`;
   const days = Array.from({ length: 7 }, (_, i) => T.addDays(T.dayKey(r.nextFrom, z), i));
   const maxL = Math.max(60, ...Object.values(r.load));
@@ -237,6 +246,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         ${goalsHTML}
       </section>
       ${projHTML}
+      ${habitHTML}
       <section class="np-words">
         <span class="np-kicker">${esc(K('words'))}</span>
         ${extras.quote ? `<blockquote class="np-quote">“${esc(extras.quote.text)}”<cite>— ${esc(extras.quote.by)}</cite></blockquote>` : ''}

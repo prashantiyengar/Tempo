@@ -161,6 +161,15 @@ export const PROJ_H = {
   quiet: ['{Quiet on the building sites|The scaffolding stands still|Projects on pause} {this ${noun}|for now}', 'No project work {recorded|logged} {this ${noun}|lately}'],
 };
 
+// ---------- habits ----------
+KICKERS.habits = ['Gewohnheiten', 'Gewohnheiten', 'Routinen', 'Tag für Tag', 'Die Strichliste'];
+export const HABIT_H = {
+  strong: ['{Creature of habit|Habits stick|Routine wins}: ${pct}% {kept|on track}', '{Clockwork|Like clockwork|Steady as a metronome}: habits at ${pct}%', '${best} {leads the way|sets the pace|is unstoppable}'],
+  mid: ['Habits {hold up|mostly hold|keep going}: ${pct}% {kept|done}', '{Some ups, some downs|Two steps forward|Work in progress} on the habit front', '${best} {holds steady|keeps the streak alive|stays the course}'],
+  weak: ['Habits {wobble|slip|need a nudge}: ${pct}% kept', '{The habit tracker sounds the alarm|Room to grow on the habit front|Fresh start next ${noun}?}', '{Missed days pile up|A quiet ${noun} for the routines}'],
+};
+
+// ---------- outlook ----------
 export const OUT_RISK = ['Storm warning for the to-do list', 'Deadlines loom', '{Choppy waters|Heavy weather|Rough seas} ahead', '{Brace yourself|Batten down the hatches}: deadlines {approach|close in}', 'Red flags on the horizon'];
 export const OUT_CLEAR = ['Clear skies ahead', 'Next ${noun} looks manageable', '{Smooth sailing|Fair weather|Calm waters} ahead', 'No {storms|clouds|alarms} on the horizon', '{The road ahead is clear|All systems go}'];
 

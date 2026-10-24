@@ -231,3 +231,40 @@ function applyQuick(inp, v) {
   }
   writeMs(inp, ms);
 }
+
+// From / To fields: when the user changes "from", "to" moves by the same amount (the length stays). Works for
+// date, time and datetime-local inputs. A "to" that is empty or would end before "from" starts at "from"
+// (+ minGap minutes). Programmatic changes count when dispatched as new CustomEvent('change', { detail: 'user' }).
+export function linkRange(a, b, { minGap = 0 } = {}) {
+  if (!a || !b) return;
+  const kind = a.type;
+  const num = (v) => {
+    if (!v) return null;
+    if (kind === 'time') { const [h, m] = v.split(':').map(Number); return (h * 60 + m) * 60000; }
+    return Date.parse(kind === 'date' ? `${v}T00:00:00Z` : `${v.slice(0, 16)}:00Z`);
+  };
+  const fmt = (ms) => {
+    if (kind === 'time') { const m = (((Math.round(ms / 60000)) % 1440) + 1440) % 1440; return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; }
+    const iso = new Date(ms).toISOString();
+    return kind === 'date' ? iso.slice(0, 10) : iso.slice(0, 16);
+  };
+  let prev = num(a.value);
+  const remember = () => { prev = num(a.value); };
+  a.addEventListener('focus', remember);
+  a.addEventListener('pointerdown', remember);
+  a.addEventListener('change', (e) => {
+    const cur = num(a.value);
+    const user = e.isTrusted || e.detail === 'user';
+    if (user && cur != null) {
+      const bv = num(b.value), gap = minGap * 60000;
+      let nv;
+      if (bv == null) nv = cur + gap;
+      else if (prev != null) nv = bv + (cur - prev);
+      else nv = bv; // "from" was empty before: keep "to" unless it's now too early
+      if (kind !== 'time' && nv < cur + gap) nv = cur + gap;
+      const out = fmt(nv);
+      if (out !== b.value) { b.value = out; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new Event('change', { bubbles: true })); }
+    }
+    prev = cur;
+  });
+}

@@ -4,7 +4,7 @@ import * as S from './scheduler.js';
 import * as G from './gcal.js';
 import { parseRRule, buildRRule, describe, WD, expand, sameRule } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
-import { $, $$, esc, modal, TASK_COLORS, setHTML, choose } from './ui.js';
+import { $, $$, esc, modal, TASK_COLORS, setHTML, choose, linkRange } from './ui.js';
 import * as C from './categories.js';
 import * as AC from './accounts.js';
 import * as N from './notify.js';
@@ -12,6 +12,7 @@ import * as A from './analysis.js';
 import * as W from './weather.js';
 import * as XT from './extras.js';
 import * as P from './projects.js';
+import * as HB from './habits.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -331,11 +332,11 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       if (!r.found) { note(esc(r.note)); return; }
       setEnd(r.end); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); note(esc(r.note));
     });
-    // From: move the start; the end stays unless the event would get shorter than 5 minutes
+    // From: move the start; the end moves with it (the length stays)
     $$('.st-add', dlg).forEach((b) => (b.onclick = () => {
-      const keepEnd = endMs(), ns = startMs() + +b.dataset.add * T.MIN;
+      const len = endMs() - startMs(), ns = startMs() + +b.dataset.add * T.MIN;
       const a = T.toDTInput(ns, zoneOf()); f.sDate.value = a.slice(0, 10); f.sTime.value = a.slice(11, 16);
-      setEnd(Math.max(keepEnd, ns + 5 * T.MIN)); showDur(); sync();
+      setEnd(ns + Math.max(5 * T.MIN, len)); f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); sync();
     }));
     $$('.dur-add', dlg).forEach((b) => (b.onclick = () => {
       const add = +b.dataset.add;
@@ -352,11 +353,20 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     f.addEventListener('input', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
     f.addEventListener('change', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
     f.addEventListener('input', sync);
+    // Changing "from" (date or time) moves "to" with it, keeping the length.
+    let snap = { s: startMs(), e: endMs() };
     f.addEventListener('change', (e) => {
-      if (e.target.name === 'sDate' && f.eDate.value < f.sDate.value) f.eDate.value = f.sDate.value;
-      if (e.target.name === 'sTime' && f.sDate.value === f.eDate.value && f.eTime.value <= f.sTime.value) {
-        f.eTime.value = T.hhmm(Math.min(23 * 60 + 55, T.parseHHMM(f.sTime.value) + s.defaultEventMinutes));
+      const user = e.isTrusted || e.detail === 'user';
+      if (user && (e.target.name === 'sDate' || e.target.name === 'sTime') && Number.isFinite(snap.s) && Number.isFinite(snap.e)) {
+        const ns = startMs();
+        if (Number.isFinite(ns)) { setEnd(ns + Math.max(f.allDay.checked ? 0 : 5 * T.MIN, snap.e - snap.s)); showDur(); }
+      } else {
+        if (e.target.name === 'sDate' && f.eDate.value < f.sDate.value) f.eDate.value = f.sDate.value;
+        if (e.target.name === 'sTime' && f.sDate.value === f.eDate.value && f.eTime.value <= f.sTime.value) {
+          f.eTime.value = T.hhmm(Math.min(23 * 60 + 55, T.parseHHMM(f.sTime.value) + s.defaultEventMinutes));
+        }
       }
+      snap = { s: startMs(), e: endMs() };
       sync();
     });
     sync();
@@ -692,7 +702,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
     }));
     if (!ctx.taskCalendars().length) $$('.google-only-t', dlg).forEach((e) => (e.style.display = 'none'));
     // ± buttons under From (don't start before) and To (deadline)
-    const nudgeDT = (inp, add, from) => { const v = T.fromDTInput(inp.value, tz) ?? from(); inp.value = T.toDTInput(Math.max(Date.now() - T.DAY * 365, v + add * T.MIN), tz); inp.dispatchEvent(new Event('change', { bubbles: true })); };
+    const nudgeDT = (inp, add, from) => { const v = T.fromDTInput(inp.value, tz) ?? from(); inp.value = T.toDTInput(Math.max(Date.now() - T.DAY * 365, v + add * T.MIN), tz); inp.dispatchEvent(new CustomEvent('change', { bubbles: true, detail: 'user' })); };
+    // "From" (don't start before) moves the deadline with it; it never ends up less than a day after it
+    linkRange(f.earliest, f.deadline, { minGap: 24 * 60 });
     const roundNow = () => Math.ceil(Date.now() / (15 * T.MIN)) * 15 * T.MIN;
     $$('.es-add', dlg).forEach((b) => (b.onclick = () => nudgeDT(f.earliest, +b.dataset.add, roundNow)));
     $$('.dl-add', dlg).forEach((b) => (b.onclick = () => { $$('[data-dl]', dlg).forEach((x) => x.classList.remove('on')); nudgeDT(f.deadline, +b.dataset.add, () => T.fromDTInput(f.earliest.value, tz) ?? roundNow()); }));
@@ -1135,6 +1147,7 @@ export function settingsDialog(ctx) {
       $$('.lv-row', dlg).forEach((row) => { $('.lv-del', row).onclick = () => { const r = ranges[+row.dataset.i]; for (let k = r.from; k <= r.to; k = T.addDays(k, 1)) delete leave[k]; drawLeave(); updSects(); }; });
     };
     drawLeave();
+    linkRange(f.lvFrom, f.lvTo);
     $('.lv-add', dlg).onclick = () => {
       const a = f.lvFrom.value, b = f.lvTo.value || a;
       if (!a) { f.lvFrom.focus(); return; }
@@ -1557,6 +1570,7 @@ export function customExportDialog(ctx, { cursor }) {
       <footer class="actions"><span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Export</button></footer>
     </form>`, (dlg, close) => {
     const f = $('form', dlg);
+    linkRange(f.from, f.to);
     const ws = s.weekStart ?? 1, wdays = s.bounds.days?.length ? s.bounds.days : [1, 2, 3, 4, 5];
     $$('[data-r]', dlg).forEach((b) => (b.onclick = () => {
       const r = b.dataset.r;
@@ -1880,6 +1894,18 @@ export function projectDialog(ctx, project = null) {
       $$('.pj-step', box).forEach((row) => {
         const i = +row.dataset.i;
         $('.ps-kind', row).onchange = () => { read(); const x = steps[i]; if (x.ref) { removed.push({ ...x, kind: x.kind === 'task' ? 'event' : 'task' }); x.ref = null; } if (x.kind === 'event' && x.start) { x.start = T.atTime(T.dayKey(x.start, tz), '10:00', tz); x.end = x.start + T.HOUR; } draw(); };
+        // changing a step's start moves its end with it (the length stays)
+        // (the end fields are updated in place, so typing in the start field isn't interrupted)
+        const moveEnd = (e) => {
+          if (!e.isTrusted) return;
+          const old = { ...steps[i] }; read(); const x = steps[i];
+          if (!(old.start && old.end && x.start && x.kind === old.kind)) return;
+          x.end = x.start + (old.end - old.start);
+          $('input.ps-ed', row).value = keyOf(x.end);
+          if (x.kind === 'event') $('input.ps-et', row).value = timeOf(x.end, '11:00');
+        };
+        $('input.ps-sd', row).addEventListener('change', moveEnd);
+        $('input.ps-st', row)?.addEventListener('change', moveEnd);
         $('.ps-up', row).onclick = () => { read(); [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; draw(); };
         $('.ps-down', row).onclick = () => { read(); [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]]; draw(); };
         $('.ps-del', row).onclick = () => { read(); const [x] = steps.splice(i, 1); if (x.ref) removed.push(x); draw(); };
@@ -1913,4 +1939,53 @@ export function projectDialog(ctx, project = null) {
       close({ project: { ...p0, name, titleMode: f.titleMode.value, sequential: f.sequential.checked, steps: steps.map((x) => ({ ...x, title: x.title.trim() })) }, removed });
     });
   }, { cls: 'wide' });
+}
+
+// ======================================================================================
+// Habit dialog (new / edit). Resolves the habit, { delete: true }, or null.
+// ======================================================================================
+export function habitDialog(ctx, habit = null) {
+  const h0 = habit || { id: HB.newId(), name: '', question: '', color: HB.COLORS[(ctx.state.settings.habits || []).length * 5 % HB.COLORS.length], type: 'yesno', freq: { times: 1, per: 'day' }, target: 1, unit: '', created: Date.now(), log: {} };
+  const f0 = h0.freq || { times: 1, per: 'day' };
+  const html = `<form class="habit-form" autocomplete="off" novalidate>
+    <header class="dlg-head"><h2>${habit ? 'Edit habit' : 'New habit'}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+    <div class="dlg-body">
+      <div class="seg hb-type"><label><input type="radio" name="type" value="yesno" ${h0.type !== 'number' ? 'checked' : ''}><span>Yes or no</span></label><label><input type="radio" name="type" value="number" ${h0.type === 'number' ? 'checked' : ''}><span>Measurable</span></label></div>
+      <label class="field"><span>Name</span><input name="name" value="${esc(h0.name)}" placeholder="e.g. Exercise, Meditate, Drink water" maxlength="60" autofocus></label>
+      <label class="field"><span>Question</span><input name="question" value="${esc(h0.question || '')}" placeholder="e.g. Did you exercise today?" maxlength="100"></label>
+      <div class="field"><span>Color</span><div class="swatches hb-colors">${HB.COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${h0.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
+      <div class="row hb-yesno">
+        <label class="field"><span>How often</span><select name="per"><option value="day" ${f0.per === 'day' ? 'selected' : ''}>Every day</option><option value="week" ${f0.per === 'week' ? 'selected' : ''}>Times per week</option><option value="month" ${f0.per === 'month' ? 'selected' : ''}>Times per month</option></select></label>
+        <label class="field hb-times"><span>Times</span><input type="number" name="times" min="1" max="31" value="${f0.times || 1}" class="num"></label>
+      </div>
+      <div class="row hb-number">
+        <label class="field"><span>Target</span><input type="number" name="target" min="0.1" step="any" value="${h0.target || 1}" class="num"></label>
+        <label class="field"><span>Unit</span><input name="unit" value="${esc(h0.unit || '')}" placeholder="e.g. glasses, km, pages" maxlength="20"></label>
+        <label class="field"><span>Per</span><select name="nper"><option value="day" ${f0.per === 'day' ? 'selected' : ''}>day</option><option value="week" ${f0.per === 'week' ? 'selected' : ''}>week</option><option value="month" ${f0.per === 'month' ? 'selected' : ''}>month</option></select></label>
+      </div>
+      <p class="muted small" style="margin:0">Tick a habit off in the list (click a day). Right-click or long-press a day to mark it skipped — a skipped day doesn't break your streak.</p>
+    </div>
+    <footer class="actions">${habit ? `<button type="button" class="btn ghost danger hb-del">Delete…</button><button type="button" class="btn ghost hb-arch">${habit.archived ? 'Unarchive' : 'Archive'}</button>` : ''}<span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">${habit ? 'Save' : 'Add habit'}</button></footer>
+  </form>`;
+  return modal(html, (dlg, close) => {
+    const f = $('form', dlg);
+    const sync = () => {
+      const num = f.type.value === 'number';
+      $('.hb-yesno', dlg).style.display = num ? 'none' : '';
+      $('.hb-number', dlg).style.display = num ? '' : 'none';
+      $('.hb-times', dlg).style.display = f.per.value === 'day' ? 'none' : '';
+    };
+    f.addEventListener('change', sync); sync();
+    $('.hb-del', dlg)?.addEventListener('click', async () => { if (await choose(`Delete “${h0.name}”?`, 'Its whole history goes too. (Archiving keeps it.)', [{ value: true, label: 'Delete the habit', danger: true }])) close({ delete: true }); });
+    $('.hb-arch', dlg)?.addEventListener('click', () => close({ ...h0, archived: !h0.archived }));
+    f.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const name = f.name.value.trim(); if (!name) { f.name.focus(); return; }
+      const num = f.type.value === 'number';
+      const per = num ? f.nper.value : f.per.value;
+      close({ ...h0, name, question: f.question.value.trim(), color: f.color.value || h0.color, type: num ? 'number' : 'yesno',
+        freq: { per, times: num || per === 'day' ? 1 : Math.max(1, Math.min(per === 'week' ? 7 : 31, Math.round(+f.times.value || 1))) },
+        target: num ? Math.max(0.1, +f.target.value || 1) : 1, unit: num ? f.unit.value.trim() : '' });
+    });
+  }, { cls: 'narrow' });
 }

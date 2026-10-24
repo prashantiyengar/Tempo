@@ -21,6 +21,7 @@ import * as NP from './paper.js';
 import * as XT from './extras.js';
 import * as GL from './goals.js';
 import * as P from './projects.js';
+import * as HB from './habits.js';
 
 const LOCAL_COLOR = '#5b7c99';
 const app = {
@@ -578,6 +579,130 @@ async function saveProject(r, before) {
   cycle();
 }
 
+// ======================================================================================
+// Habits (like the Loop Habit Tracker on Android): score ring, the last days to tick off, details with charts
+// ======================================================================================
+async function saveHabits(list, label) {
+  const before = set().habits || [];
+  set().habits = list;
+  await E.persist(st(), ['settings']);
+  syncSharedSoon();
+  if (label) pushUndo(label, async () => { set().habits = before; await E.persist(st(), ['settings']); syncSharedSoon(); refreshHabits(); });
+  refreshHabits();
+}
+const putHabit = (h, label) => saveHabits((set().habits || []).some((x) => x.id === h.id) ? set().habits.map((x) => (x.id === h.id ? h : x)) : [...(set().habits || []), h], label);
+function refreshHabits() {
+  const hl = $('#habit-list'); if (hl && !hl.hidden) renderHabits(hl, { days: 4 });
+  const gw = $('.g-habits .hb-host'); if (gw) renderHabits(gw, { days: 7 });
+  app.habitRedraw?.();
+  if (app.view === 'review') render();
+}
+const ringSVG = (pct, color, size = 26) => { const r = size / 2 - 3, c = 2 * Math.PI * r; return `<svg class="hb-ring" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true"><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="color-mix(in srgb, ${color} 18%, transparent)" stroke-width="4"/><circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="4" stroke-dasharray="${(c * pct).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 ${size / 2} ${size / 2})" stroke-linecap="butt"/></svg>`; };
+function habitCell(h, k) {
+  const v = HB.val(h, k);
+  if (HB.isNumber(h)) {
+    const done = HB.isDone(h, k);
+    return `<button type="button" class="hb-c num ${v > 0 ? 'on' : ''} ${done ? 'full' : ''} ${v === -1 ? 'skip' : ''}" data-k="${k}" style="--c:${h.color}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}">${v === -1 ? '»' : `<b>${v > 0 ? HB.fmtNum(v) : '0'}</b><small>${esc(h.unit || '')}</small>`}</button>`;
+  }
+  return `<button type="button" class="hb-c ${v === 1 ? 'on' : v === -1 ? 'skip' : ''}" data-k="${k}" style="--c:${h.color}" aria-pressed="${v === 1}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}${v === -1 ? ' — skipped' : ''}">${v === 1 ? '✓' : v === -1 ? '»' : '✕'}</button>`;
+}
+function renderHabits(box, { days = 5 } = {}) {
+  const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
+  const keys = Array.from({ length: days }, (_, i) => T.addDays(today, -i)); // newest first, like Loop
+  const habits = HB.list(s), archived = (s.habits || []).filter((h) => h.archived);
+  setHTML(box, `<div class="hb-list" style="--hb-days:${days}">
+      <div class="hb-row hb-headrow"><span class="hb-name"><button type="button" class="link hb-add" title="New habit">+ New${days > 4 ? ' habit' : ''}</button></span>${keys.map((k) => `<span class="hb-day"><b>${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }).slice(0, 3).toUpperCase())}</b>${T.parseKey(k).d}</span>`).join('')}</div>
+      ${habits.map((h) => { const sc = HB.score(h, s, today); return `<div class="hb-row" data-id="${esc(h.id)}" style="--c:${h.color}">
+        <button type="button" class="hb-name" title="${esc(h.question || h.name)} — ${Math.round(sc * 100)}% · ${esc(HB.freqLabel(h))}">${ringSVG(sc, h.color)}<span class="hb-n">${esc(h.name)}</span></button>
+        ${keys.map((k) => habitCell(h, k)).join('')}</div>`; }).join('') || `<p class="muted small empty">Track habits like exercise, reading or water: tick each day off, and watch the score ring fill up. <button type="button" class="link hb-add">Add your first habit</button></p>`}
+      ${archived.length ? `<details class="hb-arch-l"><summary class="muted small">Archived (${archived.length})</summary>${archived.map((h) => `<button type="button" class="link hb-open-a" data-id="${esc(h.id)}">${esc(h.name)}</button>`).join(' · ')}</details>` : ''}
+    </div>`);
+  $$('.hb-add', box).forEach((b) => (b.onclick = () => editHabit(null)));
+  $$('.hb-open-a', box).forEach((b) => (b.onclick = () => habitDetail(b.dataset.id)));
+  $$('.hb-row[data-id]', box).forEach((row) => {
+    const id = row.dataset.id;
+    $('.hb-name', row).onclick = () => habitDetail(id);
+    $$('.hb-c', row).forEach((c) => wireHabitCell(c, id));
+  });
+}
+// tap = tick / untick (or enter the amount); right-click or long-press = skip
+function wireHabitCell(c, id) {
+  let lp = null, long = false;
+  const k = c.dataset.k;
+  const skip = () => { const h = HB.byId(set(), id); if (h) putHabit(HB.skipped(h, k), 'skip a habit day'); };
+  // long-press only for touch / pen (a mouse uses right-click); the cell may be redrawn meanwhile, so check it's still there
+  c.addEventListener('pointerdown', (e) => { long = false; clearTimeout(lp); if (e.pointerType === 'mouse' || e.button !== 0) return; lp = setTimeout(() => { if (!c.isConnected) return; long = true; skip(); }, 550); });
+  for (const t of ['pointerup', 'pointerleave', 'pointercancel']) c.addEventListener(t, () => clearTimeout(lp));
+  c.addEventListener('contextmenu', (e) => { e.preventDefault(); if (!long) skip(); long = true; });
+  c.addEventListener('click', async () => {
+    if (long) { long = false; return; }
+    const h = HB.byId(set(), id); if (!h) return;
+    if (!HB.isNumber(h)) return putHabit(HB.toggled(h, k), HB.val(h, k) === 1 ? 'untick a habit' : 'tick off a habit');
+    const cur = HB.val(h, k) > 0 ? HB.val(h, k) : '';
+    const v = await modal(`<form class="choice hb-amount"><h2>${esc(h.name)}</h2><p class="muted small">${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'long' }))} · target ${esc(HB.freqLabel(h))}</p>
+      <label class="field"><span>Amount${h.unit ? ` (${esc(h.unit)})` : ''}</span><input name="v" type="number" step="any" min="0" value="${cur}" autofocus></label>
+      <div class="actions"><button type="button" class="btn ghost hb-sk">Skip this day</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
+    (dlg, close) => { const f = $('form', dlg); $('.hb-sk', dlg).onclick = () => close({ skip: true }); f.onsubmit = (e) => { e.preventDefault(); close({ v: f.v.value }); }; }, { cls: 'narrow' });
+    if (!v) return;
+    putHabit(v.skip ? HB.setValue(h, k, -1) : HB.setValue(h, k, v.v === '' ? null : +v.v), 'habit amount');
+  });
+}
+async function editHabit(h) {
+  const r = await D.habitDialog(ctx, h);
+  if (!r) return;
+  if (r.delete) { await saveHabits((set().habits || []).filter((x) => x.id !== h.id), `delete habit “${h.name}”`); toast(`Deleted “${h.name}”`); return; }
+  await putHabit(r, h ? `edit habit “${r.name}”` : `new habit “${r.name}”`);
+  if (!h) { app.sideTab = 'habits'; try { localStorage.setItem('tempo:sideTab', 'habits'); } catch { /* storage blocked */ } renderLater(); }
+  return r;
+}
+// The habit's own page: overview, score, history, calendar, streaks, weekdays (the Loop layout)
+async function habitDetail(id) {
+  const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
+  const draw = (dlg) => {
+    const h = HB.byId(set(), id); if (!h) return;
+    const ser = HB.scoreSeries(h, s, today), sc = ser.length ? ser[ser.length - 1].sc : 0;
+    const at = (k) => { const x = ser.find((q) => q.k === k); return x ? x.sc : 0; };
+    const dm = sc - at(T.addDays(today, -30)), dy = sc - at(T.addDays(today, -365));
+    const total = Object.entries(h.log || {}).reduce((acc, [k, v]) => acc + (k > today ? 0 : HB.isNumber(h) ? (v > 0 ? +v : 0) : v === 1 ? 1 : 0), 0);
+    const pctS = (v) => `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`;
+    // score chart: last 26 weeks, one point a week
+    const pts = []; for (let i = 26; i >= 0; i--) pts.push(at(T.addDays(today, -7 * i)));
+    const W = 520, Hh = 120, x = (i) => 8 + (i * (W - 16)) / (pts.length - 1), y = (v) => Hh - 10 - v * (Hh - 24);
+    const scoreSvg = `<svg class="hb-chart" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none">${[0.25, 0.5, 0.75, 1].map((g) => `<line x1="0" x2="${W}" y1="${y(g)}" y2="${y(g)}" class="hb-grid"/>`).join('')}<polyline fill="none" stroke="${h.color}" stroke-width="2.5" points="${pts.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}"/>${pts.map((v, i) => `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="${h.color}"><title>${Math.round(v * 100)}%</title></circle>`).join('')}</svg>`;
+    const hist = HB.history(h, s, 16, 'week', today), maxH = Math.max(1, ...hist.map((q) => Math.max(q.n, q.goal)));
+    const histSvg = `<div class="hb-bars">${hist.map((q) => `<div class="hb-bar" title="Week of ${esc(T.format(T.dayStart(q.from, z), z, { day: 'numeric', month: 'short' }))}: ${HB.fmtNum(q.n)}${HB.isNumber(h) ? ' ' + esc(h.unit || '') : ''}"><span class="hb-bv">${q.n ? HB.fmtNum(q.n) : ''}</span><i style="height:${(q.n / maxH) * 100}%;background:${h.color}"></i><span class="hb-bl">${T.parseKey(q.from).d}</span></div>`).join('')}</div>`;
+    // calendar: the last 20 weeks, a column per week, a row per weekday
+    const wk0 = T.addDays(T.startOfWeek(today, s.weekStart ?? 1), -19 * 7);
+    const cols = Array.from({ length: 20 }, (_, w) => Array.from({ length: 7 }, (_, d) => T.addDays(wk0, w * 7 + d)));
+    const cal = `<div class="hb-cal" style="--c:${h.color}">${cols.map((c) => `<div class="hb-calw"><span class="hb-calm">${T.parseKey(c[0]).d <= 7 ? esc(T.format(T.dayStart(c[0], z), z, { month: 'short' })) : ''}</span>${c.map((k) => { const v = HB.val(h, k), dv = HB.dayValue(h, k); return `<button type="button" class="hb-cd ${k > today ? 'fut' : ''} ${v === -1 ? 'skip' : ''}" data-k="${k}" style="--o:${k > today ? 0 : v === -1 ? 0.25 : dv ? 0.35 + 0.65 * dv : 0}" title="${esc(T.format(T.dayStart(k, z), z, { weekday: 'short', day: 'numeric', month: 'short' }))}${v != null ? ` — ${v === -1 ? 'skipped' : v === 1 && !HB.isNumber(h) ? 'done' : HB.fmtNum(v) + ' ' + (h.unit || '')}` : ''}" ${k > today ? 'disabled' : ''}>${T.parseKey(k).d}</button>`; }).join('')}</div>`).join('')}</div>`;
+    const stk = HB.streaks(h, s, today), maxS = Math.max(1, ...stk.top.map((r) => r.n));
+    const unit = (n) => `${n} ${stk.unit}${n === 1 ? '' : 's'}`;
+    const wd = HB.byWeekday(h, s, 365, today), maxW = Math.max(1, ...wd);
+    const order = [1, 2, 3, 4, 5, 6, 0].map((d) => (d + (s.weekStart ?? 1) - 1 + 7) % 7);
+    setHTML($('.hb-detail-body', dlg), `
+      <div class="hb-over">${ringSVG(sc, h.color, 64)}<div><b class="hb-big" style="color:${h.color}">${Math.round(sc * 100)}%</b><span class="muted small">Score</span></div>
+        <div><b>${pctS(dm)}</b><span class="muted small">Month</span></div><div><b>${pctS(dy)}</b><span class="muted small">Year</span></div><div><b>${HB.fmtNum(total)}</b><span class="muted small">${HB.isNumber(h) ? esc(h.unit || 'Total') : 'Total'}</span></div></div>
+      <h3 class="hb-h" style="color:${h.color}">Score</h3>${scoreSvg}
+      <h3 class="hb-h" style="color:${h.color}">History <span class="muted small">per week</span></h3>${histSvg}
+      <h3 class="hb-h" style="color:${h.color}">Calendar <span class="muted small">click a day to change it</span></h3>${cal}
+      <h3 class="hb-h" style="color:${h.color}">Best streaks <span class="muted small">current: ${unit(stk.current)} · best: ${unit(stk.best)}</span></h3>
+      <div class="hb-streaks">${stk.top.map((r) => `<div class="hb-st"><span class="muted small">${esc(T.format(T.dayStart(r.from, z), z, { day: 'numeric', month: 'short' }))}</span><i style="width:${Math.max(8, (r.n / maxS) * 100)}%;background:${h.color}">${r.n}</i><span class="muted small">${esc(T.format(T.dayStart(T.addDays(r.to, -1), z), z, { day: 'numeric', month: 'short' }))}</span></div>`).join('') || '<p class="muted small">No streak yet — tick off the first day.</p>'}</div>
+      <h3 class="hb-h" style="color:${h.color}">Frequency <span class="muted small">by weekday, last year</span></h3>
+      <div class="hb-wd">${order.map((d) => `<div><i style="width:${8 + (wd[d] / maxW) * 22}px;height:${8 + (wd[d] / maxW) * 22}px;background:${h.color};opacity:${wd[d] ? 0.35 + 0.65 * (wd[d] / maxW) : 0.12}" title="${wd[d]}"></i><span class="muted small">${esc(T.format(T.dayStart(T.addDays('2026-10-18', d), z), z, { weekday: 'short' }))}</span></div>`).join('')}</div>`);
+    $('.hb-detail-head', dlg).style.setProperty('--c', h.color);
+    $('.hb-detail-head h2', dlg).textContent = h.name;
+    $('.hb-detail-head .hb-sub', dlg).textContent = [h.question, HB.freqLabel(h)].filter(Boolean).join(' · ');
+    $$('.hb-cd', dlg).forEach((c) => wireHabitCell(c, id));
+  };
+  await modal(`<div class="hb-detail"><header class="dlg-head hb-detail-head"><div><h2></h2><div class="hb-sub small"></div></div><span class="grow"></span><button type="button" class="btn small hb-edit">Edit</button><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body hb-detail-body"></div></div>`, (dlg, close) => {
+    draw(dlg);
+    const redraw = () => { if (dlg.isConnected) draw(dlg); };
+    app.habitRedraw = redraw;
+    $('.hb-edit', dlg).onclick = async () => { const r = await editHabit(HB.byId(set(), id)); if (!HB.byId(set(), id)) close(); else redraw(); };
+  }, { cls: 'wide' });
+  app.habitRedraw = null;
+}
+
 function renderLater() {
   const box = $('#later-list'); if (!box) return;
   const tab = app.sideTab || 'tasks';
@@ -585,6 +710,7 @@ function renderLater() {
   $('#task-list').hidden = tab !== 'tasks';
   box.hidden = tab !== 'later';
   renderProjects(tab);
+  const hl = $('#habit-list'); if (hl) { hl.hidden = tab !== 'habits'; if (tab === 'habits') renderHabits(hl, { days: 4 }); }
   $('#btn-resched').hidden = tab !== 'tasks';
   const list = laterList();
   const n = $('#later-n'); if (n) n.textContent = list.length ? String(list.length) : '';
@@ -975,8 +1101,8 @@ function quickCreate(rect, sel, onClose) {
     $$('.dur-add', p).forEach((b) => (b.onclick = () => { sel.end = Math.max(sel.start + 5 * T.MIN, sel.end + +b.dataset.add * T.MIN); redraw(); }));
     $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start; sel.start = nowMin(); sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); });
     $('.en-now', p)?.addEventListener('click', () => { sel.end = Math.max(sel.start + 5 * T.MIN, nowMin()); redraw(); });
-    // From: move the start (the end stays, unless the event would get shorter than 5 minutes)
-    $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; redraw(); }));
+    // From: move the whole slot (the length stays)
+    $$('.st-add', p).forEach((b) => (b.onclick = () => { const d = +b.dataset.add * T.MIN; sel.start += d; sel.end += d; redraw(); }));
     // typed times: same day as the start; an end before the start means the next day
     const fromInputs = () => {
       const day = T.dayKey(sel.start, z);
@@ -985,7 +1111,9 @@ function quickCreate(rect, sel, onClose) {
       if (en <= st0) en = T.atTime(T.addDays(day, 1), f.qe.value || hhmm(sel.end), z);
       sel.start = st0; sel.end = en; redraw();
     };
-    if (f.qs) { f.qs.addEventListener('change', fromInputs); f.qe.addEventListener('change', fromInputs); f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
+    // changing From moves To with it (the length stays)
+    const fromStart = () => { const len = sel.end - sel.start; const day = T.dayKey(sel.start, z); sel.start = T.atTime(day, f.qs.value || hhmm(sel.start), z); sel.end = sel.start + Math.max(5 * T.MIN, len); redraw(); };
+    if (f.qs) { f.qs.addEventListener('change', fromStart); f.qe.addEventListener('change', fromInputs); f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
     $('.since-last', p)?.addEventListener('click', async () => {
       const ref = sel.start, nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;
       const r = await lastEventEnd({ ref: nowish ? null : ref });
@@ -2141,7 +2269,7 @@ async function renderPaperView(seq) {
   const goalsP = await paperGoals(wk, end, per, items);
   if (seq !== app.renderSeq) return;
   const spin = app.npSpin; app.npSpin = false;
-  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP, projects: paperProjects(items, r.from, r.weekEnd) }));
+  setHTML(root, tools + NP.renderPaper({ r, s, use, signId: s.zodiac || null, period: per, extras: visit, pics: XT.pictureHistory(), goals: goalsP, projects: paperProjects(items, r.from, r.weekEnd), habits: paperHabits(r.from, r.weekEnd) }));
   if (spin && !matchMedia('(prefers-reduced-motion: reduce)').matches) { const np = $('.np', root); np?.classList.add('np-spin'); np?.addEventListener('animationend', () => np.classList.remove('np-spin'), { once: true }); }
   root.scrollTop = scrollY;
   $('[data-np=all]', root).onchange = async (e) => { s.reviewAllEvents = e.target.checked; await E.persist(st(), ['settings']); render(); };
@@ -2186,6 +2314,15 @@ async function renderPaperView(seq) {
   }
 }
 // Goal progress for the paper: weekly and monthly (or the months / year for longer periods).
+// Habits in the paper: what was kept in the period, against the habit's frequency; score and streak
+function paperHabits(from, to) {
+  const s = set(), z = tz(), a = T.dayKey(from, z), b = T.dayKey(to - 1, z), end = T.addDays(b, 1), today = T.dayKey(Date.now(), z);
+  return HB.list(s).map((h) => {
+    const sm = HB.summary(h, s, a, end), stk = HB.streaks(h, s, today);
+    const days = T.daysBetween(a, end) <= 31 ? Array.from({ length: T.daysBetween(a, end) }, (_, i) => { const k = T.addDays(a, i); return { k, v: k > today ? null : HB.isNumber(h) ? (HB.isDone(h, k) ? 1 : HB.val(h, k) === -1 ? -1 : HB.val(h, k) > 0 ? 0.5 : 0) : HB.val(h, k) ?? 0 }; }) : [];
+    return { name: h.name, color: h.color, number: HB.isNumber(h), unit: h.unit || '', done: HB.fmtNum(sm.done), expected: HB.fmtNum(sm.expected), pct: sm.pct, score: sm.score, change: sm.change, streak: stk.current, streakUnit: stk.unit, days };
+  });
+}
 // Projects in the paper: time in the period, steps finished in it, overall progress and the next step
 function paperProjects(items, from, to) {
   const s = set(), now = Date.now(), tm = P.timeByProject(items, s, from, to, now);
@@ -2339,7 +2476,7 @@ async function renderGoalsView(seq) {
           <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}">
             <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
             ${catBox(g.cats, p, false, GL.goalWords(g))}
-            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud">⏱ ${pg ? hrs(pg.done) + (g.budget ? ' / ' : '') : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}</button>
+            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud" title="${pg ? `${hrs(pg.done)} done${pg.planned ? `, ${hrs(pg.planned)} scheduled` : ''} in this period` : ''}">⏱ ${pg ? `${hrs(pg.done)} done${pg.planned ? ` + ${hrs(pg.planned)} scheduled` : ''}${g.budget ? ' / ' : ''}` : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}</button>
             <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
 
         </div>`;
@@ -2350,12 +2487,14 @@ async function renderGoalsView(seq) {
   const root = $('.goals', view) || view.appendChild(el('<div class="goals"></div>'));
   const y0 = root.scrollTop;
   setHTML(root, `<p class="muted small g-intro">Goals under Work, Fitness and Personal: add one with <b>+</b> (optionally repeating every week or month). Rank them with ▲▼ (1 = most important), give them an optional time budget, and tick them off when reached. Time in the categories that count for each head (set once, used for every week, month and year) shows as progress. → moves a goal to another period. Trips on your calendar are listed as reminders.</p>
+    <h2 class="g-h">Habits</h2><section class="g-habits"><div class="hb-host"></div></section>
     <h2 class="g-h">Weeks</h2><div class="g-grid">${weeks.map(card).join('')}</div>
     <h2 class="g-h">Months <span class="g-mtoggle"><button type="button" data-m="3" class="${s.goalsMonths === 12 ? '' : 'on'}">Next 3</button><button type="button" data-m="12" class="${s.goalsMonths === 12 ? 'on' : ''}">Next 12</button></span></h2>
     ${sec.daysLeft <= 14 ? `<p class="muted small">${esc(monthName(sec.thisMonth))} has ${sec.daysLeft} day${sec.daysLeft === 1 ? '' : 's'} left — this week's and next week's goals cover it.</p>` : ''}
     <div class="g-grid">${months.map(card).join('')}</div>
     <h2 class="g-h">The year ahead</h2><div class="g-grid">${card(year)}</div>`);
   root.scrollTop = y0;
+  renderHabits($('.g-habits .hb-host', root), { days: 7 });
   $$('.g-mtoggle button', root).forEach((b) => (b.onclick = async () => { s.goalsMonths = +b.dataset.m; await E.persist(st(), ['settings']); render(); }));
   const targets = (exceptKey) => sec.list.filter((q) => q.key !== exceptKey).map((q) => ({ value: q.key, label: q.title || monthName(q.month), desc: q.kind === 'week' ? `${fmtD(q.from)} – ${fmtD(T.addDays(q.to, -1))}` : '' }));
   $$('.g-card', root).forEach((c) => {
@@ -2915,6 +3054,8 @@ async function renderAnalysisView(seq) {
   $$('[data-o]', root).forEach((c) => {
     if (c.dataset.o === 'csv') { c.onclick = () => { download(new Blob([A.toCsv(data, groups, z)], { type: 'text/csv' }), `tempo-analysis-${T.dayKey(rng.from, z)}.csv`); }; return; }
     c.onchange = () => {
+      // custom range: moving "From" moves "To" with it (same number of days)
+      if (c.dataset.o === 'from' && o.from && o.to && c.value) o.to = T.addDays(o.to, T.daysBetween(o.from, c.value));
       o[c.dataset.o] = c.value;
       if (o.period === 'custom' && !o.from) { o.from = T.dayKey(Date.now(), z); o.to = T.addDays(o.from, 13); }
       storeSet({ analysisOpts: o });
@@ -3126,6 +3267,7 @@ function bindToolbar() {
     { ic: '⧉', label: 'New task (split into sessions)', run: () => newTask({ kind: 'generic' }) },
     { ic: '📖', label: 'New reading plan', run: () => newTask({ kind: 'reading' }) },
     { ic: '📁', label: 'New project (a chain of tasks and events)', run: () => openProject(null) },
+    { ic: '✓', label: 'Habits', run: () => { app.view = 'goals'; render(); } },
     { ic: '⏰', label: 'Started late', run: () => startedLate() },
     { ic: '⏹', label: 'Finished early', run: () => finishedEarly() },
     { ic: '⤒', label: 'Fill time since last event', run: fillSinceLast },
