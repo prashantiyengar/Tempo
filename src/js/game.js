@@ -17,7 +17,7 @@ export const CFG = [
   ['lifePerHour', 'Life XP per hour in life-growth categories', 30, 0, 200, 1],
   ['crossShare', 'Busy XP that life-growth and leisure items also earn (% of normal)', 15, 0, 100, 1],
   ['sleepPerHour', 'Life XP per hour of sleep', 2, 0, 50, 0.5],
-  ['leisurePerHour', 'Life XP per hour of leisure', 6, 0, 100, 1],
+  ['leisurePerHour', 'Life XP per hour of leisure', 1.5, 0, 100, 0.5],
   ['stageBonus', 'Extra XP for each later session of a task (%)', 8, 0, 50, 1],
   ['schedShare', 'App XP for scheduling something (% of what it is worth)', 5, 0, 50, 1],
   ['openXP', 'App XP for opening Tempo on a day', 15, 0, 200, 1],

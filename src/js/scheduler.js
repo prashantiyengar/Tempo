@@ -705,6 +705,13 @@ export function markPartial(task, chunkId, { credit, start, end, squeeze = false
     frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), nc],
   };
 }
+// Kept going: the session now ends at `end` (a done session stays done and counts the extra time; others are pinned).
+export function extendSession(task, chunkId, end) {
+  const f = (task.frozen || []).find((x) => x.id === chunkId);
+  if (f && f.status === 'done') return { ...task, frozen: task.frozen.map((c) => (c.id === chunkId ? { ...c, end: Math.max(c.end, end), actualMin: Math.round((Math.max(c.end, end) - c.start) / T.MIN), credit: c.credit != null ? c.credit + Math.max(0, end - c.end) / T.MIN : c.credit, syncHash: null } : c)) };
+  const c = [...(task.planned || []), ...(task.frozen || [])].find((x) => x.id === chunkId);
+  return c ? pinSession(task, chunkId, c.start, Math.max(c.end, end)) : task;
+}
 // Finished a session early: it's done (all its work), ending at `end`; the rest of the slot becomes free.
 export function finishEarly(task, chunkId, end) {
   const ss = sessions(task).find((x) => x.id === chunkId);

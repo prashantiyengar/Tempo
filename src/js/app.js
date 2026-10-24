@@ -291,12 +291,13 @@ function renderTimeGrid(days, items) {
 
   const deadlines = st().tasks.filter((t) => !t.archived && Number.isFinite(+t.deadline) && +t.deadline > 0 && S.progress(t).pct < 100);
   const drawErrors = [];
+  const toNow = app.toNowIt = toNowItem(timed);
 
   const root = el(`<div class="tg" style="--hh:${hh}px;--ncol:${days.length}">
     <div class="tg-head">
       <div class="tg-gutter"><span class="tz-label" title="${esc(z)}">${esc(tzAbbr())}</span></div>
       ${days.map((k) => `<div class="tg-dayhead ${k === todayK ? 'today' : ''} ${k < todayK ? 'past' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
-        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}${levelFlag(k)}${gameDayChip(k, items)}</div>`).join('')}
+        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}${levelFlag(k)}${gameDayChip(k, items)}${dayMarks(k, todayK)}</div>`).join('')}
     </div>
     <div class="tg-allday">
       <div class="tg-gutter small muted">all-day</div>
@@ -366,12 +367,18 @@ function renderTimeGrid(days, items) {
       } catch (err) { drawErrors.push(['deadline of ' + t.title, err]); }
     }
     if (k === todayK) col.appendChild(el(`<div class="now" style="top:${(T.minutesOfDay(Date.now(), z) / 60) * hh}px"></div>`));
+    if (toNow && T.dayKey(toNow.end - 1, z) === k) {
+      const m = T.minutesOfDay(toNow.end, z) || 1440;
+      col.appendChild(el(`<button type="button" class="tonow-btn" data-tonow="${esc(toNow.key)}" style="top:${(m / 60) * hh + 2}px;--c:${toNow.color}" title="Still going? Extend “${esc(toNow.title)}” until now">⟶ until now</button>`));
+    }
     colsEl.appendChild(col);
   }
 
   if (drawErrors.length) { console.error('Tempo: items not drawn', drawErrors); toast(`${drawErrors.length} item(s) couldn't be drawn: ${drawErrors[0][0]} — ${drawErrors[0][1].message}`, { ms: 8000 }); }
 
   $$('.dn', root).forEach((b) => b.addEventListener('click', () => { app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
+  wireDayMarks(root);
+  wireToNow(root);
   $$('[data-leave]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); leaveMenu(b.dataset.leave, b.getBoundingClientRect()); }));
   $$('[data-xpday]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); xpBreakdown(b.dataset.xpday, b.getBoundingClientRect()); }));
   colsEl.addEventListener('pointerdown', onGridPointerDown);
@@ -393,7 +400,7 @@ function renderMonth({ days, monthKey }, items) {
     const max = 4;
     const shown = list.length > max ? list.slice(0, max - 1) : list;
     const cell = el(`<div class="m-cell ${T.parseKey(k).m !== month ? 'out' : ''} ${k === todayK ? 'today' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
-      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK, { month: true })}${leaveTag(k, true)}${levelFlag(k)}
+      <button class="m-dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK, { month: true })}${leaveTag(k, true)}${levelFlag(k)}${dayMarks(k, todayK)}
       <div class="m-items">
         ${shown.map((it) => it.allDay
           ? `<div class="chip allday ${!it.editable ? 'ro' : ''}" data-key="${esc(it.key)}" style="--c:${it.color}">${esc(it.title)}</div>`
@@ -404,8 +411,132 @@ function renderMonth({ days, monthKey }, items) {
   }
   $$('[data-goto]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
   $$('[data-leave]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); leaveMenu(b.dataset.leave, b.getBoundingClientRect()); }));
+  wireDayMarks(root);
   grid.addEventListener('pointerdown', onMonthPointerDown);
   return root;
+}
+
+// ======================================================================================
+// Notes (thoughts, newest first; a post-it on the days that have some) and day ratings (0–5 smileys, with a reason)
+// Both live in your settings, so they sync to your other devices.
+// ======================================================================================
+const SMILEYS = ['😫', '😞', '😕', '😐', '🙂', '😄'];
+const RATE_WORDS = ['Awful', 'Bad', 'Meh', 'OK', 'Good', 'Great'];
+const notesList = () => set().notes || [];
+const notesOn = (k) => notesList().filter((n) => T.dayKey(n.at, tz()) === k).sort((a, b) => a.at - b.at);
+async function saveNotes(list, label) {
+  const before = notesList();
+  set().notes = list;
+  await E.persist(st(), ['settings']); syncSharedSoon();
+  if (label) pushUndo(label, async () => { set().notes = before; await E.persist(st(), ['settings']); syncSharedSoon(); renderLater(); render(); });
+  renderLater(); render();
+}
+async function rateDay(k, v, why) {
+  const before = { ...(set().dayRatings || {}) }, r = { ...before };
+  if (v == null) delete r[k]; else r[k] = { v, ...(why ? { why: why.slice(0, 200) } : {}), at: Date.now() };
+  set().dayRatings = r;
+  await E.persist(st(), ['settings']); syncSharedSoon();
+  pushUndo(v == null ? 'clear the day rating' : 'rate the day', async () => { set().dayRatings = before; await E.persist(st(), ['settings']); syncSharedSoon(); render(); });
+  render();
+}
+// Under each date: the day's rating (or a faint smiley to rate it) and a post-it when the day has notes
+function dayMarks(k, todayK) {
+  const r = set().dayRatings?.[k], n = notesOn(k).length;
+  const rate = k <= todayK ? `<button type="button" class="dm-rate ${r ? 'set' : ''}" data-rate="${k}" title="${esc(r ? `${RATE_WORDS[r.v]} day (${r.v}/5)${r.why ? ` — ${r.why}` : ''} · click to change` : 'Rate this day (0–5)')}">${r ? SMILEYS[r.v] : '☺'}</button>` : '';
+  const note = n ? `<button type="button" class="dm-note" data-dnotes="${k}" title="${n} note${n > 1 ? 's' : ''} — click to read">🗒<b>${n > 1 ? n : ''}</b></button>` : '';
+  return rate || note ? `<span class="day-marks">${rate}${note}</span>` : '';
+}
+function wireDayMarks(root) {
+  $$('.day-marks button', root).forEach((b) => {
+    b.addEventListener('pointerdown', (e) => e.stopPropagation());
+    b.addEventListener('click', (e) => { e.stopPropagation(); if (b.dataset.rate) ratePopover(b.dataset.rate, b.getBoundingClientRect()); else dayNotes(b.dataset.dnotes); });
+  });
+}
+function ratePopover(k, rect) {
+  const r = set().dayRatings?.[k], z = tz();
+  popover(rect, `<form class="pop rate-pop"><h3>How was ${esc(k === T.dayKey(Date.now(), z) ? 'today' : T.format(T.dayStart(k, z), z, { weekday: 'long', day: 'numeric', month: 'short' }))}?</h3>
+      <div class="rate-row">${SMILEYS.map((sm, i) => `<button type="button" class="rate-b ${r?.v === i ? 'on' : ''}" data-v="${i}" title="${i} — ${RATE_WORDS[i]}"><span>${sm}</span><small>${i}</small></button>`).join('')}</div>
+      <input name="why" class="rate-why" placeholder="Why? (optional) e.g. good run, tough meeting" maxlength="200" value="${esc(r?.why || '')}" autocomplete="off">
+      <div class="actions">${r ? '<button type="button" class="btn small ghost rate-clear">Clear</button>' : ''}<span class="grow"></span><button class="btn small primary" ${r ? '' : 'disabled'}>Save</button></div></form>`, (p, close) => {
+    const f = $('form', p); let v = r?.v ?? null;
+    $$('.rate-b', p).forEach((b) => (b.onclick = () => { v = +b.dataset.v; $$('.rate-b', p).forEach((x) => x.classList.toggle('on', x === b)); $('button.primary', p).disabled = false; f.why.focus(); }));
+    $('.rate-clear', p)?.addEventListener('click', () => { close(); rateDay(k, null); });
+    f.onsubmit = (e) => { e.preventDefault(); if (v == null) return; close(); rateDay(k, v, f.why.value.trim()); };
+  });
+}
+const noteRow = (n, { day = true } = {}) => `<div class="note" data-id="${esc(n.id)}"><div class="note-t">${esc(n.text)}</div><div class="note-m"><span class="muted small">${esc(day ? T.format(n.at, tz(), { weekday: 'short', day: 'numeric', month: 'short' }) + ' · ' : '')}${esc(T.fmtTime(n.at, tz(), set().h12))}</span><span class="grow"></span><button type="button" class="link small note-edit">Edit</button><button type="button" class="icon-btn sm note-del" title="Delete note" aria-label="Delete note">✕</button></div></div>`;
+function wireNotes(box, after) {
+  $$('.note', box).forEach((r) => {
+    const n = notesList().find((x) => x.id === r.dataset.id); if (!n) return;
+    $('.note-del', r).onclick = async () => { await saveNotes(notesList().filter((x) => x.id !== n.id), 'delete a note'); toast('Note deleted'); after?.(); };
+    $('.note-edit', r).onclick = async () => {
+      const v = await modal(`<form class="choice"><h2>Edit note</h2><textarea name="v" rows="5" maxlength="2000" style="width:100%">${esc(n.text)}</textarea><div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
+        (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); close(f.v.value.trim()); }; setTimeout(() => f.v.focus(), 30); }, { cls: 'narrow' });
+      if (v == null) return;
+      await saveNotes(v ? notesList().map((x) => (x.id === n.id ? { ...x, text: v.slice(0, 2000), edited: Date.now() } : x)) : notesList().filter((x) => x.id !== n.id), 'edit a note');
+      after?.();
+    };
+  });
+}
+// The Notes tab: write a thought, read them all, newest first
+function renderNotes(box) {
+  const list = [...notesList()].sort((a, b) => b.at - a.at);
+  const z = tz(); let last = '';
+  // a redraw (sync, refresh) keeps what you're typing
+  const old = $('.note-add textarea', box), draft = old?.value || '', had = old && document.activeElement === old, sel = had ? [old.selectionStart, old.selectionEnd] : null;
+  setHTML(box, `<form class="note-add"><textarea name="t" rows="2" placeholder="A thought, an idea, something to remember…" maxlength="2000" aria-label="New note"></textarea><button class="btn small" type="submit">Add note</button></form>
+    ${list.length ? list.map((n) => { const k = T.dayKey(n.at, z), head = k !== last ? `<div class="note-day">${esc(T.format(n.at, z, { weekday: 'long', day: 'numeric', month: 'long' }))}</div>` : ''; last = k; return head + noteRow(n, { day: false }); }).join('') : '<p class="muted small empty">Jot down thoughts as they come. Each day with notes gets a little post-it under its date on the calendar.</p>'}`);
+  const f = $('.note-add', box);
+  if (draft) { f.t.value = draft; if (had) { f.t.focus(); f.t.setSelectionRange(...sel); } }
+  f.onsubmit = async (e) => { e.preventDefault(); const v = f.t.value.trim(); if (!v) return; f.t.value = ''; await saveNotes([...notesList(), { id: S.newId('n'), text: v.slice(0, 2000), at: Date.now() }], 'add a note'); $('#note-list .note-add textarea')?.focus(); };
+  f.t.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) f.requestSubmit(); });
+  wireNotes(box);
+}
+// One day's notes (from its post-it), with a box to add another to that day
+async function dayNotes(k) {
+  const z = tz(), today = T.dayKey(Date.now(), z);
+  await modal(`<div class="day-notes"><header class="dlg-head"><h2>🗒 ${esc(T.format(T.dayStart(k, z), z, { weekday: 'long', day: 'numeric', month: 'long' }))}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body"><div class="dn-list"></div>
+    <form class="note-add"><textarea name="t" rows="2" placeholder="Add a note to this day…" maxlength="2000"></textarea><button class="btn small" type="submit">Add note</button></form></div></div>`, (dlg, close) => {
+    const draw = () => { const l = notesOn(k); if (!l.length && !dlg.isConnected) return; setHTML($('.dn-list', dlg), l.map((n) => noteRow(n, { day: false })).join('') || '<p class="muted small">No notes on this day.</p>'); wireNotes($('.dn-list', dlg), draw); };
+    draw();
+    const f = $('.note-add', dlg);
+    f.onsubmit = async (e) => { e.preventDefault(); const v = f.t.value.trim(); if (!v) return; const at = k === today ? Date.now() : T.atTime(k, '12:00', z); await saveNotes([...notesList(), { id: S.newId('n'), text: v.slice(0, 2000), at }], 'add a note'); f.t.value = ''; draw(); };
+  }, { cls: 'narrow' });
+}
+
+// ======================================================================================
+// "Until now": the latest event or session that ended in the last 4 hours can be stretched to now (you kept going)
+// ======================================================================================
+function toNowItem(timed) {
+  const now = Date.now();
+  const busyNow = timed.some((it) => it.start <= now && it.end > now && !it.declined && it.ev?.transparency !== 'transparent' && !it.ev?.extendedProperties?.private?.tempoSleep && !(it.kind === 'chunk' && it.sess?.kind === 'waived'));
+  if (busyNow) return null;
+  const c = timed.filter((it) => it.editable && !it.declined && it.end <= now && it.end >= now - 4 * T.HOUR && now - it.end >= T.MIN && !it.ev?.extendedProperties?.private?.tempoSleep && !(it.kind === 'chunk' && (it.sess?.kind === 'waived' || it.status === 'waived')))
+    .sort((a, b) => b.end - a.end);
+  return c[0] || null;
+}
+function wireToNow(root) {
+  $$('[data-tonow]', root).forEach((b) => {
+    b.addEventListener('pointerdown', (e) => e.stopPropagation());
+    b.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const it = app.toNowIt; if (!it || it.key !== b.dataset.tonow) return;
+      const end = Math.floor(Date.now() / T.MIN) * T.MIN;
+      try {
+        if (it.kind === 'chunk') {
+          replaceTask(S.extendSession(it.task, it.sess.id, end));
+          await saveTasks(`extend “${it.task.title}” until now`);
+          toast(`“${it.task.title}” now runs until ${T.fmtTime(end, tz(), set().h12)}`);
+          return cycle();
+        }
+        setStatus('Saving…');
+        await EV.moveEvent(st(), it.ev, it.start, end, 'this');
+        undoableEventChange(`extend “${it.ev.summary || 'event'}” until now`, it.ev, 'this');
+        await afterEventChange();
+        toast(`“${it.title}” now runs until ${T.fmtTime(end, tz(), set().h12)}`);
+      } catch (err) { handleError(err); render(); }
+    });
+  });
 }
 
 // ======================================================================================
@@ -1104,18 +1235,22 @@ function renderLater() {
   box.hidden = tab !== 'later';
   renderProjects(tab);
   const hl = $('#habit-list'); if (hl) { hl.hidden = tab !== 'habits'; if (tab === 'habits') renderHabits(hl, { days: 4 }); }
+  const nl = $('#note-list'); if (nl) { nl.hidden = tab !== 'notes'; if (tab === 'notes') renderNotes(nl); }
+  const nn = $('#notes-n'); if (nn) nn.textContent = notesList().length ? String(notesList().length) : '';
   $('#btn-resched').hidden = tab !== 'tasks';
   const list = laterList();
   const n = $('#later-n'); if (n) n.textContent = list.length ? String(list.length) : '';
   const z = tz();
   const today = T.dayKey(Date.now(), z);
   const due = (x) => { if (!x.deadline) return ''; const k = T.dayKey(x.deadline, z), d = T.daysBetween(today, k); return `<span class="later-due ${d < 0 ? 'over' : d <= 3 ? 'soon' : ''}" title="Deadline">by ${esc(T.format(x.deadline, z, { weekday: 'short', day: 'numeric', month: 'short' }))}</span>`; };
+  const oldIn = $('.later-add input[name=t]', box), lDraft = oldIn?.value || '', lHad = oldIn && document.activeElement === oldIn;
   setHTML(box, `<form class="later-add"><input name="t" placeholder="Something to schedule later…" maxlength="300" autocomplete="off" aria-label="Add a note"><button class="btn small" type="submit">Add</button>
       <div class="later-more"><label title="How long it will likely take">⏱ <input name="h" type="number" min="0" step="0.25" placeholder="h" aria-label="Hours"></label><label title="Must be done by">by <input name="d" type="date" aria-label="Deadline"></label></div></form>
     ${list.length ? list.map((x) => `<div class="later-row" data-id="${esc(x.id)}">
       <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="later-meta">${x.minutes ? `<span class="later-dur">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}${due(x)}<span class="muted small">added ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span>${laterChip(x)}</span></button>
       <span class="later-acts"><button type="button" class="icon-btn sm l-task" title="Make it a task (Tempo finds the time)${laterTip(x)}">⧉</button><button type="button" class="icon-btn sm l-event" title="Put it on the calendar as an event${laterTip(x)}">📅</button><button type="button" class="icon-btn sm l-del" title="Remove">✕</button></span>
     </div>`).join('') : '<p class="muted small empty">Jot down things you need to schedule, but not right away. Turn one into a task or an event when you\'re ready.</p>'}`);
+  if (lDraft) { const i = $('.later-add input[name=t]', box); i.value = lDraft; if (lHad) i.focus(); }
   $('.later-add', box).onsubmit = async (e) => {
     e.preventDefault();
     const v = e.target.t.value.trim(); if (!v) return;

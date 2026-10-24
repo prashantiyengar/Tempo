@@ -665,7 +665,7 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .sl-ctl input[type=time] { padding: 2px 6px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .sl-ctl .chk { margin: 0; }
 /* sidebar: Tasks | Later tabs */
-.side-tabs { display: inline-flex; gap: 2px; }
+.side-tabs { display: inline-flex; flex-wrap: wrap; gap: 2px; }
 .side-tabs button { border: 0; background: none; font: inherit; text-transform: inherit; letter-spacing: inherit; color: var(--ink3, var(--ink2)); padding: 2px 6px; border-radius: 6px; cursor: pointer; font-weight: 600; }
 .side-tabs button.on { color: var(--ink); background: var(--off); }
 .side-tabs b { font-weight: 700; color: var(--accent); margin-left: 2px; }
@@ -1298,3 +1298,27 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .keep-box { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, #fbbc04 10%, var(--panel)); margin: 0 0 8px; }
 .keep-box[hidden] { display: none; }
 .keep-t { font-size: 13px; font-weight: 600; flex: 1; }
+
+.day-marks { display: inline-flex; gap: 2px; align-items: center; }
+.day-marks button { border: 0; background: none; padding: 0 2px; cursor: pointer; font-size: 13px; line-height: 1.2; border-radius: 4px; }
+.dm-rate:not(.set) { opacity: .28; filter: grayscale(1); }
+.dm-rate:not(.set):hover { opacity: .8; }
+.dm-note { background: #fff3a8 !important; color: #6b5a00; box-shadow: 1px 1px 0 rgba(0,0,0,.15); transform: rotate(-4deg); font-size: 11px !important; }
+.dm-note b { font-size: 9px; margin-left: 1px; }
+.rate-row { display: flex; gap: 4px; margin: 6px 0 8px; }
+.rate-b { display: flex; flex-direction: column; align-items: center; border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 6px; cursor: pointer; }
+.rate-b span { font-size: 22px; }
+.rate-b small { font-size: 10px; color: var(--muted); }
+.rate-b.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); }
+.rate-why { width: 100%; }
+.rate-pop .actions { display: flex; gap: 6px; margin-top: 8px; }
+.note-list { display: flex; flex-direction: column; gap: 6px; }
+.note-add { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.note-add textarea { width: 100%; resize: vertical; font: inherit; }
+.note-day { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-top: 4px; }
+.note { background: color-mix(in srgb, #fff3a8 45%, var(--panel)); border: 1px solid color-mix(in srgb, #e0c341 40%, var(--line)); border-radius: 8px; padding: 6px 8px; }
+.note-t { white-space: pre-wrap; font-size: 13px; }
+.note-m { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.day-notes .dn-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.tonow-btn { position: absolute; right: 4px; z-index: 6; font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--c, var(--accent)); color: var(--c, var(--accent)); background: var(--panel); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.tonow-btn:hover { background: color-mix(in srgb, var(--c, var(--accent)) 14%, var(--panel)); }
