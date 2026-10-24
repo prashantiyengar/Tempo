@@ -1292,3 +1292,9 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .np-wide > .np-kicker, .np-wide > .np-h3, .np-wide > .np-gm { column-span: all; }
 .np-wide > .np-kicker { display: block; }
 .np-wide .np-ghead, .np-wide .np-pj, .np-wide .np-hb, .np-wide .np-goal, .np-wide li, .np-wide blockquote, .np-wide .np-load { break-inside: avoid; }
+
+.gp-rec { font-size: 12px; line-height: 1.4; padding: 6px 8px; border-radius: 8px; background: rgba(255,213,79,.13); }
+.dr-adv summary { cursor: pointer; }
+.keep-box { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, #fbbc04 10%, var(--panel)); margin: 0 0 8px; }
+.keep-box[hidden] { display: none; }
+.keep-t { font-size: 13px; font-weight: 600; flex: 1; }

@@ -7,6 +7,7 @@
 // each day, against a target per day, week or month (e.g. 8 glasses a day, 20 km a week).
 import * as T from './tz.js';
 import { catMinutes, timingDay, timingText } from './goals.js';
+import { clipItems } from './scopes.js';
 
 export const COLORS = ['#d32f2f', '#e64a19', '#f57c00', '#ff8f00', '#f9a825', '#afb42b', '#7cb342', '#388e3c', '#00897b', '#00acc1', '#039be5', '#1976d2', '#303f9f', '#5e35b1', '#8e24aa', '#d81b60', '#5d4037', '#757575'];
 export const PER_DAYS = { day: 1, week: 7, month: 30 };
@@ -109,6 +110,7 @@ function applyHours(h, items, keys, s, now, from, today) {
 // Work out the automatic value for each of `keys` from the items (events and task sessions) of those days.
 export function applyAuto(h, items, keys, s, now = Date.now()) {
   if (!autoOn(h)) return h;
+  if (h.auto.scope) items = clipItems(items, h.auto.scope, s); // only what happened in the chosen hours
   const z = s.tz, today = T.dayKey(now, z), from = h.auto.from || (h.created ? T.dayKey(h.created, z) : today);
   if (h.auto.mode === 'hours') return applyHours(h, items, keys, s, now, from, today);
   if (h.auto.mode === 'timing') {

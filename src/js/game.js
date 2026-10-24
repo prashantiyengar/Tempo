@@ -6,6 +6,7 @@
 // Scheduling earns a little; completing earns most. Rescheduling costs XP, more each time the same task slips.
 // Past days are settled once into a ledger (settings.game.ledger, synced); today is worked out live.
 import * as T from './tz.js';
+import { clipItems } from './scopes.js';
 
 // ---------- settings you can adjust (Settings → Game mode → Advanced) ----------
 // [key, label, default, min, max, step]
@@ -40,6 +41,11 @@ export const CFG = [
   ['habitStreakXP', 'Habit streak: extra XP for each day (or period) in a row', 1, 0, 20, 0.5],
   ['habitRankPct', 'Habit streak rewards grow by this % for each rank', 4, 0, 50, 1],
   ['habitMilestoneXP', 'Habit streak milestone (7, 30, 100, 365 days; 4, 12, 52 weeks)', 20, 0, 500, 5],
+  ['recoverDays1', 'Win back drained XP: clean days in a row for the first part', 5, 1, 30, 1],
+  ['recoverPct1', '…the share won back then (%)', 75, 0, 100, 5],
+  ['recoverDays2', '…clean days in a row to win back all of it', 10, 2, 60, 1],
+  ['recoverStep', 'Each new drain needs this many more clean days (both steps)', 1, 0, 5, 1],
+  ['recoverBonusPct', 'Bonus for winning all of it back (% of what was lost)', 5, 0, 50, 1],
   ['laterXP', 'Scheduling something from Later (life XP)', 4, 0, 100, 1],
   ['laterPerWeek', '…plus this for each week it waited in Later', 2, 0, 50, 0.5],
   ['laterMaxWeeks', '…counting at most this many weeks', 26, 1, 104, 1],
@@ -60,7 +66,7 @@ export function periodRange(kind, today) {
   if (kind === '3m') return { from: today, to: T.addMonths(today, 3) };
   return { from: null, to: null };
 }
-export const RULES_V = 3; // when the rules change, the ledger is counted again
+export const RULES_V = 4; // when the rules change, the ledger is counted again
 export function cfg(s) {
   const o = {}, c = s?.game?.cfg || {};
   for (const [k, , d, lo, hi] of CFG) { const v = c[k]; o[k] = v == null || v === '' || !Number.isFinite(+v) ? d : Math.min(hi, Math.max(lo, +v)); }
@@ -223,7 +229,7 @@ export function itemXP(it, s, now = Date.now()) {
   if (it.allDay || it.declined) return out;
   const cat = catOf(it), day = T.dayKey(it.start, s.tz);
   const isDone = () => (it.kind === 'chunk' ? it.status === 'done' || it.sess?.kind === 'done' : it.end <= now);
-  const dr = g._drains.find((d) => activeOn(d, day) && d._m(it));
+  const dr = g._drains.find((d) => activeOn(d, day) && d._m(it) && (!d.scope || clipItems([it], d.scope, s).length));
   if (dr) { out.why.push(`an XP drain (${dr.name || 'drain'}) — never scores`); out.done = isDone(); out.drain = true; return out; }
   const boost = g._boosts.find((b) => activeOn(b, day) && b._m(it));
   if (!boost && cat && ((g.noCats || []).includes(cat) || (g.noCats || []).includes(g._parents[cat]))) { out.why.push('a category that never scores'); out.done = isDone(); return out; }
@@ -428,6 +434,7 @@ export function drainMatcher(d, s) {
 // Hours of a drain per day in [fromKey, toKey) (elapsed only, overlaps counted once)
 export function drainHours(d, s, items, fromKey, toKey, now = Date.now()) {
   const z = s.tz, m = drainMatcher(d, s), out = {};
+  if (d.scope) items = clipItems(items, d.scope, s); // only the hours the drain watches
   for (let k = fromKey; k < toKey; k = T.addDays(k, 1)) {
     if (!activeOn(d, k)) continue;
     const a = T.dayStart(k, z), b = Math.min(T.dayStart(T.addDays(k, 1), z), now);
@@ -601,4 +608,38 @@ export function drainCurveSVG(cv, d) {
     ${cv.bars.map((b, i) => bar(i + 1, b.xp, b.whole ? '#c0392b' : '#e67e22', b.xp ? '−' + b.xp : '0', b.h + ' h', `${b.h} h a ${d.per}: −${Math.round(b.pct)}% of ${b.whole ? 'the week' : d.per === 'week' ? 'each day you do it' : 'that day'} ≈ −${b.xp} XP${win ? `, and no clean bonus (+${win})` : ''}`)).join('')}
     <text x="0" y="${Hh - 2}" font-size="8.5" fill="currentColor" opacity=".7">hours a ${d.per} → XP it costs (orange: % of the day, red: % of the week)</text>
   </svg>`;
+}
+
+
+// ---- Winning back XP lost to drains. After a drain day, clean days in a row give it back: each clean day returns a
+// share "in trust"; at N1 days (5) the first part (75%) is yours for good; at N2 days (10) all of it, plus a 5% bonus.
+// A drain before N1 takes back everything given in trust; one between N1 and N2 takes back only what came after N1.
+// Each drain makes the next recovery need one more clean day for both steps.
+// days: [{ k, drain: bool, loss }] in order (settled days, plus today if it had a drain)
+export function recovery(s, days) {
+  const c = cfg(s), byDay = {}, line = (k, label, xp) => { if (xp) (byDay[k] ||= []).push([label, xp]); };
+  let eps = 0, cur = null, total = 0;
+  const fmtN = (n) => `${n} clean day${n === 1 ? '' : 's'}`;
+  const breakCur = (k) => {
+    if (!cur || cur.done) return;
+    const keep = cur.n >= cur.N1 ? cur.part1 : 0, lost = cur.paid - keep;
+    if (lost > 0) { line(k, `drain again: ${keep ? `kept the ${c.recoverPct1}% won back, ` : ''}lost ${lost} XP given in trust`, -lost); total -= lost; }
+    cur.paid = keep; cur.done = true;
+  };
+  for (const d of days) {
+    if (d.drain) {
+      if (cur && !cur.done && cur.n === 0) { cur.loss += d.loss; cur.part1 = Math.round(cur.loss * c.recoverPct1 / 100); continue; } // drain days in a row: one loss
+      breakCur(d.k);
+      if (d.loss > 0) { const N1 = c.recoverDays1 + c.recoverStep * eps, N2 = Math.max(N1 + 1, c.recoverDays2 + c.recoverStep * eps); cur = { from: d.k, loss: d.loss, n: 0, paid: 0, N1, N2, part1: Math.round(d.loss * c.recoverPct1 / 100), done: false }; eps++; }
+      else cur = null;
+      continue;
+    }
+    if (!cur || cur.done) continue;
+    cur.n++;
+    const target = cur.n <= cur.N1 ? Math.round(cur.part1 * cur.n / cur.N1) : cur.part1 + Math.round((cur.loss - cur.part1) * (cur.n - cur.N1) / (cur.N2 - cur.N1));
+    const pay = target - cur.paid; cur.paid = target; total += pay;
+    line(d.k, cur.n === cur.N1 ? `won back ${c.recoverPct1}% of ${cur.loss} XP lost to drains (${fmtN(cur.n)})` : `winning back drained XP: ${fmtN(cur.n)} of ${cur.n <= cur.N1 ? cur.N1 : cur.N2}${cur.n < cur.N1 ? ' (in trust)' : ''}`, pay);
+    if (cur.n >= cur.N2) { const bonus = Math.round(cur.loss * c.recoverBonusPct / 100); line(d.k, `won back all ${cur.loss} XP — bonus +${c.recoverBonusPct}%`, bonus); total += bonus; cur.done = true; cur.full = true; }
+  }
+  return { byDay, total, active: cur && !cur.done ? { ...cur, inTrust: cur.n < cur.N1 ? cur.paid : cur.paid - cur.part1 } : null, episodes: eps };
 }

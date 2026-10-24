@@ -2,6 +2,7 @@
 // Stored in settings.goals (synced like your other settings) as { "<key>": [{ id, text, done, at }] }, ranked by order.
 //   w:YYYY-MM-DD  week starting that day      m:YYYY-MM  calendar month      y  the next 12 months (rolling)
 import * as T from './tz.js';
+import { clipItems } from './scopes.js';
 
 export const weekKey = (wk) => `w:${wk}`;
 export const monthKey = (k) => `m:${k.slice(0, 7)}`;
@@ -120,6 +121,7 @@ export const ruleText = (r, s) => r.kind === 'timing' ? `${timingText(r)}${r.day
 // Status of a goal's rule over [fromKey, toKey): done (reached), failed (can't be reached any more), value text.
 export function ruleStatus(g, s, items, fromKey, toKey, now = Date.now()) {
   const r = g.rule; if (!r) return null;
+  if (r.scope) items = clipItems(items, r.scope, s); // only what happened in the chosen hours
   if (r.kind === 'timing') {
     // every day of the period, or on at least N days
     const today = T.dayKey(now, s.tz), total = T.daysBetween(fromKey, toKey);

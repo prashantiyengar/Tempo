@@ -14,6 +14,7 @@ import * as XT from './extras.js';
 import * as P from './projects.js';
 import * as HB from './habits.js';
 import * as GM from './game.js';
+import * as SC from './scopes.js';
 
 const WDN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const WDL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -960,7 +961,8 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Time format</span><select name="h12"><option value="0">24-hour</option><option value="1" ${s.h12 ? 'selected' : ''}>12-hour</option></select></label>
           <label class="field"><span>Hour height (px)</span><input type="number" name="hourHeight" min="28" max="120" value="${s.hourHeight}"></label>
           <label class="field"><span>Drag snapping (min)</span><select name="snapMinutes">${[5, 10, 15, 30, 60].map((v) => `<option ${v === s.snapMinutes ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-        </div>`)}
+        </div>
+        <label class="chk"><input type="checkbox" name="keepOn" ${s.keepOn ? 'checked' : ''}> Google Keep in the sidebar — <span class="muted small">buttons for a new note and your notes (Google doesn't let other sites show Keep inside them, so it opens in a small window beside Tempo)</span></label>`)}
         ${sect('s-events', 'New events', `<div class="grid3">
           <label class="field"><span>Default event length (min)</span><input type="number" name="defaultEventMinutes" min="5" step="5" value="${s.defaultEventMinutes}"></label>
           <label class="field"><span>“Since last event” starts this many minutes after it (0–15)</span><input type="number" name="sinceLastBuffer" min="0" max="15" step="1" value="${s.sinceLastBuffer || 0}"></label>
@@ -1183,7 +1185,12 @@ export function settingsDialog(ctx) {
         $('.per-add-rule', el2).onclick = () => { p.rules.push({ days: [6, 0], start: '10:00', end: '18:00' }); drawPeriods(); };
         $$('.per-rule', el2).forEach((rw) => {
           const r = p.rules[+rw.dataset.j];
-          $('.r-start', rw).onchange = (e) => { r.start = e.target.value || r.start; };
+          // a new start: keep the end if it's still a little after it (up to 3 h), otherwise an hour later
+          $('.r-start', rw).onchange = (e) => {
+            r.start = e.target.value || r.start;
+            const m = (x) => { const [h, mm] = String(x).split(':').map(Number); return h * 60 + mm; }, a = m(r.start), b = m(r.end);
+            if (!(b > a && b - a <= 180)) { const e2 = Math.min(23 * 60 + 59, a + 60); r.end = `${String(Math.floor(e2 / 60)).padStart(2, '0')}:${String(e2 % 60).padStart(2, '0')}`; $('.r-end', rw).value = r.end; }
+          };
           $('.r-end', rw).onchange = (e) => { r.end = e.target.value || r.end; };
           $$('.r-day', rw).forEach((c) => (c.onchange = () => { r.days = $$('.r-day:checked', rw).map((x) => +x.value); }));
           $('.r-del', rw).onclick = () => { p.rules.splice(+rw.dataset.j, 1); drawPeriods(); };
@@ -1236,6 +1243,9 @@ export function settingsDialog(ctx) {
         </div>
         <div class="row small">Costs: ${['app', 'busy', 'life'].map((t) => `<label class="chk"><input type="checkbox" class="dr-type" value="${t}" ${d.types.includes(t) ? 'checked' : ''}> ${t} XP</label>`).join(' ')}</div>
         ${periodHTML(d)}
+        <details class="dr-adv" ${d.scope ? 'open' : ''}><summary class="small"><b>Advanced</b> — which hours to watch</summary>
+          <label class="field"><span>Only count it during</span><select class="dr-scope">${SC.scopeOptions(s).map(([v, l]) => `<option value="${esc(v)}" ${(d.scope || '') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
+          <p class="muted small" style="margin:0">E.g. “Within the day bounds” only counts gaming on your work hours. Time periods are set in Settings → Scheduling.</p></details>
         <p class="muted small dr-say" style="margin:0">${esc(sentence(d))}</p>
         <div class="dr-graph">${graph(d)}</div>
       </div>`).join('') || '<p class="muted small" style="margin:0">No drains. Add one for activities you want to cut down on — they cost XP the more you do them.</p>');
@@ -1244,6 +1254,7 @@ export function settingsDialog(ctx) {
         const read = (e) => {
           readPeriod(row, d, e); updNoAuto();
           d.name = $('.dr-name', row).value; d.per = $('.dr-per', row).value;
+          if ($('.dr-scope', row).value) d.scope = $('.dr-scope', row).value; else delete d.scope;
           d.words = $('.dr-words', row).value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
           d.cats = $$('.dr-cat:checked', row).map((x) => x.value);
           d.free = Math.max(0, +$('.dr-free', row).value || 0); d.tol = Math.max(0, +$('.dr-tol', row).value || 0);
@@ -1481,7 +1492,7 @@ export function settingsDialog(ctx) {
       return {
         ...s,
         tz: T.isValidTz(f.tz.value.trim()) ? f.tz.value.trim() : s.tz,
-        weekStart: +f.weekStart.value, weekView: f.weekView.value, h12: f.h12.value === '1',
+        weekStart: +f.weekStart.value, weekView: f.weekView.value, h12: f.h12.value === '1', keepOn: f.keepOn.checked,
         hourHeight: Math.min(120, Math.max(28, +f.hourHeight.value || 48)),
         snapMinutes: +f.snapMinutes.value, defaultEventMinutes: +f.defaultEventMinutes.value || 60,
         bounds: { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: days('bdays') },
@@ -2138,6 +2149,7 @@ export function habitDialog(ctx, habit = null) {
         </div>
         <div class="hb-auto-from">
           <label class="field"><span>From</span><input type="date" data-quick="off" name="afrom" value="${esc(h0.auto?.from || T.addDays(T.dayKey(Date.now(), ctx.state.settings.tz), -30))}"></label>
+          <label class="field"><span>Only count what happens during <em class="muted">(e.g. reading “after hours”)</em></span><select name="ascope">${SC.scopeOptions(ctx.state.settings).map(([v, l]) => `<option value="${esc(v)}" ${(h0.auto?.scope || '') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
           <p class="muted small" style="margin:0">Only time that has already passed counts, never future events or tasks. A day you tick or untick yourself keeps your choice.</p>
         </div></div>`, { open: !!h0.auto })}
       <p class="muted small" style="margin:0">Tick a habit off in the list (click a day). Right-click or long-press a day to mark it skipped — a skipped day doesn't break your streak.</p>
@@ -2170,12 +2182,15 @@ export function habitDialog(ctx, habit = null) {
         freq: { per, times: num || per === 'day' ? 1 : Math.max(1, Math.min(per === 'week' ? 7 : 31, Math.round(+f.times.value || 1))) },
         target: num ? Math.max(0.1, +f.target.value || 1) : 1, unit: num ? f.unit.value.trim() : '',
         auto: (() => {
+          const a = autoOf(); return a && f.ascope.value ? { ...a, scope: f.ascope.value } : a;
+        })() });
+      function autoOf() {
           const fromK = f.afrom.value || T.dayKey(Date.now(), ctx.state.settings.tz);
           if (num || !f.amode.value) return null;
           if (f.amode.value === 'timing') { const cats = $$('input[name=tcat]:checked', dlg).map((x) => x.value), words = f.twords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean); return cats.length || words.length ? { mode: 'timing', which: f.twhich.value, time: f.ttime.value || '07:00', cats, words, from: fromK } : null; }
           if (f.amode.value === 'hours') { const cats = $$('input[name=acat]:checked', dlg).map((x) => x.value); return cats.length ? { mode: 'hours', cats, op: f.aop.value, hours: Math.max(0, +f.ahours.value || 0), per: f.aper.value, from: fromK } : null; }
           return f.awords.value.trim() ? { mode: f.amode.value, words: [...new Set(f.awords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean))].slice(0, 12), from: fromK } : null;
-        })() });
+      }
     });
   });
 }
