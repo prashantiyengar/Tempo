@@ -372,6 +372,7 @@ function renderTimeGrid(days, items) {
 
   $$('.dn', root).forEach((b) => b.addEventListener('click', () => { app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
   $$('[data-leave]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); leaveMenu(b.dataset.leave, b.getBoundingClientRect()); }));
+  $$('[data-xpday]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); xpBreakdown(b.dataset.xpday, b.getBoundingClientRect()); }));
   colsEl.addEventListener('pointerdown', onGridPointerDown);
   $('.ad-area', root).addEventListener('pointerdown', onAllDayPointerDown);
   return root;
@@ -663,17 +664,40 @@ function gameCtx(items) {
     return { ...t, _finishedAt: !t.repeat && pr.pct >= 100 && done.length ? Math.max(...done.map((c) => c.end)) : null, _sessions: S.sessions(t).length };
   });
   const projectsDone = P.list(s).map((p) => { const pr = P.progress(p, st().tasks, now, projectEventDone); return pr.complete ? { name: p.name, at: Math.max(0, ...pr.rows.map((r) => r.task?._finishedAt || r.st.end || 0), ...pr.rows.filter((r) => r.task).map((r) => Math.max(0, ...(r.task.frozen || []).filter((c) => c.status === 'done').map((c) => c.end)))) } : null; }).filter(Boolean);
-  const goals = Object.values(s.goals || {}).flat().filter((g) => g.done && g.doneAt);
-  return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), goals, history: s.history || [] };
+  const goalsAll = Object.entries(s.goals || {}).flatMap(([key, l]) => (l || []).map((g) => ({ g, key })));
+  // minutes that count towards a goal in [from, to): its "at least" hours rule, its own match, or its head's categories
+  const goalMinutes = (g, key, from, to) => {
+    const r = g.rule && g.rule.kind !== 'timing' && g.rule.op !== 'atMost' ? g.rule : null;
+    if (r) return GL.catMinutes(items, r.cats?.length ? r.cats : GL.goalCats(s, g), from, to, now, s);
+    if (GL.hasOwnMatch(g)) { const m = GL.goalMatch(g); return GL.timeIn(items, m.cats, from, to, now, s, m).done; }
+    return GL.timeIn(items, GL.headCats(s, GL.headOf(g)), from, to, now, s).done;
+  };
+  return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), goals: [], goalsAll, goalMinutes, history: s.history || [] };
 }
 function gameDayChip(k, items) {
   if (!gameOn()) return '';
   const today = T.dayKey(Date.now(), tz()), led = set().game?.ledger?.[k];
-  if (k < today && led) return `<span class="xp-chip ${led.net < 0 ? 'neg' : ''}" title="XP that day: ${led.net >= 0 ? '+' : ''}${led.net}">${led.net >= 0 ? '+' : ''}${led.net} XP</span>`;
+  if (k < today && led) return `<button type="button" class="xp-chip ${led.net < 0 ? 'neg' : ''}" data-xpday="${k}" title="XP that day: ${led.net >= 0 ? '+' : ''}${led.net} — click for the breakdown">${led.net >= 0 ? '+' : ''}${led.net} XP</button>`;
   if (k < (set().game?.started || today)) return '';
   const d = GM.dayXP(k, set(), gameCtx(items));
-  if (k > today) return d.potential.total ? `<span class="xp-chip pot" title="XP you can earn by completing this day's events and sessions">+${d.potential.total} possible</span>` : '';
-  return `<span class="xp-chip ${d.net < 0 ? 'neg' : ''}" title="${esc(`${d.net >= 0 ? 'Earned' : 'Net'} ${d.net} XP so far${k === today && d.potential.total ? `, ${d.potential.total} more to earn today` : ''}`)}">${d.net >= 0 ? '+' : ''}${d.net}${k === today && d.potential.total ? ` <i>· +${d.potential.total} to go</i>` : ''}</span>`;
+  if (k > today) return d.potential.total ? `<button type="button" class="xp-chip pot" data-xpday="${k}" title="XP you can earn by completing this day's events and sessions — click for details">+${d.potential.total} possible</button>` : '';
+  return `<button type="button" class="xp-chip ${d.net < 0 ? 'neg' : ''}" data-xpday="${k}" title="${esc(`${d.net >= 0 ? 'Earned' : 'Net'} ${d.net} XP so far${k === today && d.potential.total ? `, ${d.potential.total} more to earn today` : ''} — click for the breakdown`)}">${d.net >= 0 ? '+' : ''}${d.net}${k === today && d.potential.total ? ` <i>· +${d.potential.total} to go</i>` : ''}</button>`;
+}
+// Click a day's XP: how the number came about (and what's still to earn that day)
+async function xpBreakdown(k, rect) {
+  const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
+  const items = await collectItems([T.addDays(k, -1), T.addDays(k, 14)]);
+  const d = GM.dayXP(k, s, gameCtx(items)), led = s.game?.ledger?.[k];
+  const by = { busy: [], life: [], app: [], pen: [] };
+  for (const [l, ty, x] of d.lines) (by[ty] || by.app).push([l, x]);
+  const group = (ty, name, cls) => { const l = by[ty]; if (!l.length) return ''; const tot = l.reduce((a, [, x]) => a + x, 0); return `<div class="xb-g"><div class="xb-h ${cls}"><b>${name}</b><b>${tot > 0 ? '+' : ''}${tot}</b></div>${l.map(([t, x]) => `<div class="xb-l"><span>${esc(t)}</span><span>${x > 0 ? '+' : ''}${x}</span></div>`).join('')}</div>`; };
+  const todo = items.filter((it) => !it.allDay && T.dayKey(it.start, z) === k).map((it) => ({ it, x: GM.itemXP(it, s) })).filter((o) => !o.x.done && GM.sumXP(o.x) > 0);
+  popover(rect, `<div class="pop xb"><h3>🎮 ${esc(T.format(T.dayStart(k, z), z, { weekday: 'long', day: 'numeric', month: 'short' }))}</h3>
+    <div class="xb-net ${d.net < 0 ? 'xp-p' : ''}">${k > today ? 'Nothing earned yet' : `${d.net >= 0 ? '+' : ''}${d.net} XP`}${led && k < today && led.net !== d.net ? ` <span class="muted small">(counted as ${led.net >= 0 ? '+' : ''}${led.net} when the day was settled)</span>` : ''}</div>
+    ${group('busy', 'Busy', 'xp-b')}${group('life', 'Life', 'xp-l')}${group('app', 'App', 'xp-a')}${group('pen', 'Rescheduling', 'xp-p')}
+    ${todo.length ? `<div class="xb-g"><div class="xb-h"><b>Still to earn</b><b>+${todo.reduce((a, o) => a + GM.sumXP(o.x), 0)}</b></div>${todo.map((o) => `<div class="xb-l"><span>${esc(o.it.title)}</span><span><span class="xp-b">${o.x.busy ? '+' + o.x.busy : ''}</span> <span class="xp-l">${o.x.life ? '+' + o.x.life : ''}</span></span></div>`).join('')}</div>` : ''}
+    ${d.quests?.length && k <= today ? `<div class="xb-g"><div class="xb-h"><b>Quests</b></div>${d.quests.map((q) => `<div class="xb-l"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span></div>`).join('')}</div>` : ''}
+  </div>`, (p, close) => {});
 }
 // What an event / session is worth, for its popup
 function gameXPLine(it) {
@@ -698,11 +722,19 @@ async function gameRefresh() {
   try {
     const s = set(), g = s.game, z = tz(), now = Date.now(), today = T.dayKey(now, z);
     g.started ||= today; g.ledger ||= {}; g.weeks ||= {}; g.ach ||= {};
-    const first = [g.started, T.addDays(today, -35)].sort()[1];
+    const first = [g.started, T.addDays(today, -180)].sort()[1];
     const open = []; for (let k = first; k < today; k = T.addDays(k, 1)) if (!g.ledger[k]) open.push(k);
-    const items = await collectItems([open[0] || today, T.addDays(today, 30)].sort());
+    // (from the start of the earliest goal period still open, so progress on goals is counted right)
+    const goalFrom = Object.entries(s.goals || {}).filter(([key, l]) => (l || []).length && !key.startsWith('y')).map(([key, l]) => GM.goalPeriod(key, l[0], z)).filter((p) => p.to > (open[0] || today)).map((p) => p.from);
+    const items = await collectItems([[open[0] || today, ...goalFrom, today].sort()[0], T.addDays(today, 30)]);
     const ctx = gameCtx(items);
     let changed = false;
+    // goals reached by their rule: remember when, so reaching them earns XP that day
+    for (const [key, l] of Object.entries(s.goals || {})) for (const gl of l || []) {
+      if (!gl.rule || gl.autoDoneAt || gl.override === false) continue;
+      const per = GM.goalPeriod(key, gl, z);
+      if (GL.ruleStatus(gl, s, items, per.from, per.to, now)?.done) { gl.autoDoneAt = now; changed = true; }
+    }
     for (const k of open) {
       const d = GM.dayXP(k, s, ctx, now);
       g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
@@ -718,7 +750,7 @@ async function gameRefresh() {
     }
     app.gameToday = GM.dayXP(today, s, ctx, now);
     // achievements
-    function unlock(id) { if (!g.ach[id]) { g.ach[id] = now; changed = true; const a = GM.ACHIEVEMENTS.find((x) => x[0] === id); if (a) setTimeout(() => toast(`🏆 Achievement: ${a[1]} ${a[2]} — ${a[3]} (+${GM.ACH_XP} XP)`, { ms: 6000 }), 300); } }
+    function unlock(id) { if (!g.ach[id]) { g.ach[id] = now; changed = true; const a = GM.ACHIEVEMENTS.find((x) => x[0] === id); if (a) setTimeout(() => toast(`🏆 Achievement: ${a[1]} ${a[2]} — ${a[3]} (+${GM.ACH_XP} XP)`, { ms: 6000, noUndo: true }), 300); } }
     const tot = gameTotals();
     let streak = 0; for (let d = today; (g.active || []).includes(d); d = T.addDays(d, -1)) streak++;
     if (st().tasks.length) unlock('first-task'); if (P.list(s).length) unlock('first-project');
@@ -754,7 +786,7 @@ function renderGamePanel() {
   const pct = lv.max ? 100 : Math.min(100, (lv.into / Math.max(1, lv.span)) * 100);
   const share = (x) => (tot.app + tot.busy + tot.life ? (x / (tot.app + tot.busy + tot.life)) * 100 : 0);
   let collapsed = false; try { collapsed = localStorage.getItem('tempo:gameCollapsed') === '1'; } catch { /* storage blocked */ }
-  setHTML(box, `<button type="button" class="gp-head" aria-expanded="${!collapsed}">${GM.emblemSVG(lv.level, collapsed ? 30 : 46)}<span class="gp-t"><b>Level ${lv.level}</b><span>${esc(tier.name)}</span></span><span class="gp-today ${d && d.net < 0 ? 'neg' : ''}" title="XP today">${d ? `${d.net >= 0 ? '+' : ''}${d.net}` : ''}</span><span class="sec-caret">▾</span></button>
+  setHTML(box, `<button type="button" class="gp-head" aria-expanded="${!collapsed}">${GM.emblemSVG(lv.level, collapsed ? 30 : 46)}<span class="gp-t" title="${esc(tier.desc || '')}"><b>Level ${lv.level}</b><span>${esc(tier.name)}${tier.next ? ` · next: ${esc(tier.next.name)} at ${tier.next.from}` : ''}</span></span><span class="gp-today ${d && d.net < 0 ? 'neg' : ''}" title="XP today">${d ? `${d.net >= 0 ? '+' : ''}${d.net}` : ''}</span><span class="sec-caret">▾</span></button>
     <div class="gp-bar" title="${lv.into} / ${lv.span} XP to level ${lv.level + 1}"><i style="width:${pct}%;--tc:${tier.color}"></i></div>
     <div class="gp-body" ${collapsed ? 'hidden' : ''}>
       <div class="gp-sub">${lv.max ? 'Highest level reached!' : lv.capped ? `Enough XP for level ${lv.level + 1}` : `${lv.into.toLocaleString()} / ${lv.span.toLocaleString()} XP to level ${lv.level + 1}`}${lv.capped ? `<br><b class="xp-l">🔒 ${lv.lifeNeed.toLocaleString()} more life XP</b> to unlock level ${lv.level + 1}` : ''}</div>
@@ -771,7 +803,7 @@ function renderGamePanel() {
   if (prev && lv.level > prev) {
     const newTier = GM.tierOf(lv.level).from > GM.tierOf(prev).from;
     fireworks(newTier ? 3600 : 2200);
-    toast(newTier ? `🎉 New rank: ${tier.icon} ${tier.name} — level ${lv.level}!` : `🎉 Level ${lv.level}!`, { ms: 6000 });
+    toast(newTier ? `🎉 New rank: ${tier.icon} ${tier.name} — level ${lv.level}!` : `🎉 Level ${lv.level}!`, { ms: 6000, noUndo: true });
   }
   try { localStorage.setItem('tempo:gameLevel', String(lv.level)); } catch { /* storage blocked */ }
 }
@@ -781,7 +813,8 @@ async function gameDetails() {
   const days = Object.entries(g.ledger || {}).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14);
   const t = app.gameToday;
   await modal(`<div class="g-details"><header class="dlg-head"><h2>🎮 Level ${lv.level} · ${esc(GM.tierOf(lv.level).name)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
-    <h3 class="gd-h">Ranks</h3><div class="gd-tiers">${GM.TIERS.map(([L, n]) => `<div class="gd-tier ${lv.level >= L ? 'got' : ''}">${GM.emblemSVG(L, 54)}<b>${esc(n)}</b><span class="muted small">level ${L}${lv.level < L ? ` · ${(GM.xpFor(L) - tot.total).toLocaleString()} XP to go` : ' ✓'}</span></div>`).join('')}</div>
+    <h3 class="gd-h">Ranks <span class="muted small">a new one every 5 levels</span></h3>
+    ${GM.ERAS.map((era, i) => { const next = GM.ERAS[i + 1]?.from || 999; const rs = GM.RANKS.filter(([L]) => L >= era.from && L < next); return `<div class="gd-era" style="--ec:${era.color}">${esc(era.name)} <span class="muted small">levels ${era.from}–${Math.min(300, next - 1)}</span></div><div class="gd-tiers">${rs.map(([L, n, , dsc]) => `<div class="gd-tier ${lv.level >= L ? 'got' : ''} ${GM.tierOf(lv.level).from === L ? 'cur' : ''}" title="${esc(dsc)}">${GM.emblemSVG(L, 54)}<b>${esc(n)}</b><span class="gd-desc">${esc(dsc)}</span><span class="muted small">level ${L}${lv.level < L ? ` · ${Math.max(0, GM.xpFor(L) - tot.total).toLocaleString()} XP to go` : ' ✓'}</span></div>`).join('')}</div>`; }).join('')}
     <h3 class="gd-h">Achievements <span class="muted small">${Object.keys(g.ach || {}).length}/${GM.ACHIEVEMENTS.length} · +${GM.ACH_XP} XP each</span></h3>
     <div class="gd-ach">${GM.ACHIEVEMENTS.map(([id, ic, n, d]) => `<div class="gd-a ${g.ach?.[id] ? 'got' : ''}" title="${esc(d)}"><span>${ic}</span><b>${esc(n)}</b><span class="muted small">${esc(d)}</span></div>`).join('')}</div>
     <h3 class="gd-h">XP log</h3>
@@ -2664,6 +2697,12 @@ function syncSharedSoon() { clearTimeout(shareTimer); shareTimer = setTimeout(()
 async function saveGoals(goals, label) {
   const before = set().goals || {};
   set().goals = GL.prune(goals, T.dayKey(Date.now(), tz()));
+  // game mode: goals earn XP for the hours put in — days of the periods that changed are counted again
+  if (gameOn() && set().game.ledger) {
+    const z = tz(), changed = Object.keys({ ...before, ...set().goals }).filter((k) => JSON.stringify(before[k] || []) !== JSON.stringify(set().goals[k] || []) && !k.startsWith('y'));
+    for (const k of changed) { const per = GM.goalPeriod(k, {}, z); for (const d of Object.keys(set().game.ledger)) if (d >= per.from && d < per.to) delete set().game.ledger[d]; }
+    if (changed.length) setTimeout(() => gameRefresh(), 300);
+  }
   await E.persist(st(), ['settings']);
   syncSharedSoon();
   if (label) pushUndo(label, async () => { set().goals = before; await E.persist(st(), ['settings']); render(); });
@@ -2716,7 +2755,7 @@ async function renderGoalsView(seq) {
           <ol class="g-list">${p.goals.map((g, i) => { const pg = p.perGoal.find((q) => q.id === g.id); return `<li class="g-row ${g.done ? 'done' : ''}" data-id="${esc(g.id)}" ${g.ruleState ? `data-auto="${g.ruleState.done ? 1 : 0}"` : ''}>
             <span class="g-rank">${i + 1}</span><input type="checkbox" class="g-done" ${g.done ? 'checked' : ''} aria-label="Reached">
             ${catBox(g.cats, p, false, GL.goalWords(g))}
-            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud" title="${pg ? `${hrs(pg.done)} done${pg.planned ? `, ${hrs(pg.planned)} scheduled` : ''} in this period` : ''}">⏱ ${pg ? `${hrs(pg.done)} done${pg.planned ? ` + ${hrs(pg.planned)} scheduled` : ''}${g.budget ? ' / ' : ''}` : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}${g.ruleState ? ` <span class="g-rule-b ${g.ruleState.done ? 'ok' : g.ruleState.failed ? 'bad' : ''}" title="Reached automatically: ${esc(GL.ruleText(g.rule))}${g.override != null ? ' (you set it yourself)' : ''}">⚡ ${esc(g.ruleState.text)}</span>` : ''}</button>
+            <button type="button" class="g-text" title="Edit">${esc(g.text)}${g.budget || pg ? ` <span class="g-bud" title="${pg ? `${hrs(pg.done)} done${pg.planned ? `, ${hrs(pg.planned)} scheduled` : ''} in this period` : ''}">⏱ ${pg ? `${hrs(pg.done)} done${pg.planned ? ` + ${hrs(pg.planned)} scheduled` : ''}${g.budget ? ' / ' : ''}` : ''}${g.budget ? hrs(g.budget) : ''}</span>` : ''}${g.movedFrom ? ' <span class="g-moved" title="Carried over">↪</span>' : ''}${g.repeatId ? ` <span class="g-rep" title="Repeats every ${GL.repeatOf(s, g)?.every || 'period'}">↻</span>` : ''}${gameOn() && !g.done ? (() => { const v = GM.goalValue(g, x.key, s); return ` <span class="g-xp" title="${esc(`Reaching it: +${v.reach} XP${v.progress ? ` (+${v.progress} bit by bit as you put in the ${+v.hours.toFixed(1)} h, +${v.final} when reached)` : ''}${v.ahead ? ' — ×1.5 for planning it ahead' : ''}${g.repeatId ? ' — repeating goals earn a little less' : ''}`)}">🎮 +${v.reach}</span>`; })() : ''}${g.ruleState ? ` <span class="g-rule-b ${g.ruleState.done ? 'ok' : g.ruleState.failed ? 'bad' : ''}" title="Reached automatically: ${esc(GL.ruleText(g.rule))}${g.override != null ? ' (you set it yourself)' : ''}">⚡ ${esc(g.ruleState.text)}</span>` : ''}</button>
             <span class="g-acts"><button type="button" class="icon-btn sm g-up" title="Rank higher" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm g-down" title="Rank lower" ${i < p.goals.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm g-mv" title="Move to another period">→</button><button type="button" class="icon-btn sm g-del" title="Remove">✕</button></span></li>`; }).join('')}</ol>
 
         </div>`;
@@ -2798,6 +2837,7 @@ async function addGoalDialog(key, head0, x) {
       <div class="field"><span>Counts towards it</span><div class="row"><span class="g-addbox"></span><span class="muted small g-addbox-note">the head's categories</span></div></div>
       ${wordsFieldHTML([], 'either')}
       ${goalRuleHTML(null, every || 'year')}
+      ${gameOn() ? '<p class="small g-xp-prev"></p>' : ''}
       ${every ? `<label class="chk"><input type="checkbox" name="rep"> Repeat every ${every}</label>` : ''}
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Add goal</button></div></form>`,
   (dlg, close) => {
@@ -2814,7 +2854,7 @@ async function addGoalDialog(key, head0, x) {
     $('.g-addbox', dlg).addEventListener('click', () => setTimeout(drawAll, 50), true);
     f.onsubmit = (e) => { e.preventDefault(); const t = f.t.value.trim(); if (!t) { f.t.focus(); return; } const b = parseFloat(f.b.value); close({ text: t, head: f.h.value, budget: b > 0 ? b * 60 : null, cats, words: GL.parseWords(f.w.value), wmode: f.wm?.value || 'either', rule: readGoalRule(dlg), rep: !!f.rep?.checked }); };
     D.wireSects(dlg, { 'g-rule': () => { const r = readGoalRule(dlg); return r ? `⚡ ${GL.ruleText(r)}` : 'Off'; } });
-    wireGoalRule(dlg);
+    wireGoalRule(dlg); wireGoalXP(dlg, key);
   }, { cls: 'narrow' });
   if (!r) return;
   if (r.rep && every) {
@@ -2854,6 +2894,18 @@ function goalRuleHTML(r, every) {
       <label class="field"><span>Counted</span><select name="rper"><option value="period" ${!r?.per || r.per === 'period' ? 'selected' : ''}>in the whole ${every || 'period'}</option><option value="day" ${r?.per === 'day' ? 'selected' : ''}>every day</option>${every !== 'week' ? `<option value="week" ${r?.per === 'week' ? 'selected' : ''}>every week</option>` : ''}</select></label></div>
     <div class="field"><span>…in these categories <em class="muted">(none ticked = the goal's categories)</em></span><div class="g-catlist g-rcats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" name="rcat" value="${esc(c.id)}" ${(r?.cats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
     <p class="muted small" style="margin:0">Only time that has passed counts. Times of day: “ends before 07:00” with <i>sleep</i> is kept on a day when your sleep ended by 7 (not when you were still asleep at 7); “starts by 09:00” when something that counts started by 9. “At least” is reached as soon as you get there; “at most” is reached when the period ends without going over (and shows as missed as soon as you do). Ticking or unticking the goal yourself overrides it.</p>`, { open: !!r });
+}
+// Live "what will this goal be worth" line in the goal dialogs (game mode)
+function wireGoalXP(dlg, key, base = {}) {
+  const box = $('.g-xp-prev', dlg); if (!box) return;
+  const f = $('form', dlg);
+  const upd = () => {
+    const b = parseFloat(f.b?.value);
+    const g = { ...base, at: base.at || Date.now(), budget: b > 0 ? b * 60 : null, rule: readGoalRule(dlg), repeatId: base.repeatId || (f.rep?.checked ? 'r' : null) };
+    const v = GM.goalValue(g, key, set());
+    setHTML(box, `🎮 Defining it: <b class="xp-a">+${v.define}</b> · reaching it: <b class="xp-l">+${v.reach}</b>${v.progress ? ` <span class="muted">(half bit by bit over ${+v.hours.toFixed(1)} h)</span>` : ''}${v.ahead ? ' <span class="muted">×1.5 — planned ahead</span>' : ''}<br><span class="muted">More hours, and planning ahead (not repeating), earn more.</span>`);
+  };
+  f.addEventListener('input', upd); f.addEventListener('change', upd); upd();
 }
 const readGoalRule = (dlg) => {
   const f = $('form', dlg), cats = $$('input[name=rcat]:checked', dlg).map((x) => x.value);
@@ -2922,6 +2974,7 @@ async function editGoal(key, id) {
         <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
       ${wordsFieldHTML(GL.goalWords(g), g.wmode)}
       ${goalRuleHTML(g.rule, key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : 'year')}
+      ${gameOn() ? '<p class="small g-xp-prev"></p>' : ''}
       ${(() => { const every = key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : null; return every ? `<label class="chk"><input type="checkbox" name="rep" ${GL.repeatOf(s, g) ? 'checked' : ''}> Repeat every ${every}</label>` : ''; })()}
       <label class="chk"><input type="checkbox" name="d" ${g.done ? 'checked' : ''}> Reached</label>
       <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
@@ -2930,7 +2983,7 @@ async function editGoal(key, id) {
     const upd = () => syncWordsField(dlg, $$('input[name=c]:checked', dlg).length); f.addEventListener('input', upd); f.addEventListener('change', upd); upd();
     f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), words: GL.parseWords(f.w.value), wmode: f.wm.value, rule: readGoalRule(dlg), done: f.d.checked, rep: f.rep ? f.rep.checked : null }); };
     D.wireSects(dlg, { 'g-rule': () => { const r = readGoalRule(dlg); return r ? `⚡ ${GL.ruleText(r)}` : 'Off'; } });
-    wireGoalRule(dlg);
+    wireGoalRule(dlg); wireGoalXP(dlg, key, g);
   });
   if (!r) return;
   // repeat on / off (the copies already made stay)
@@ -3242,6 +3295,7 @@ async function openSettings() {
       || JSON.stringify(r.settings.notifyProfiles) !== JSON.stringify(before.notifyProfiles)) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     await hoursChanged(before, r.settings);
     if (r.settings.sleepEvents && !before.sleepEvents) addSleepBlocks({ force: true });
+    if (r.settings.game?.on && r.settings.game.started !== before.game?.started && before.game?.on) { app.gameToday = null; toast(`🎮 Counting XP from ${T.format(T.dayStart(r.settings.game.started, tz()), tz(), { day: 'numeric', month: 'long' })} — adding it up…`, { ms: 4000 }); gameRefresh(); }
     if (r.settings.game?.on !== before.game?.on) { app.gameToday = null; if (r.settings.game?.on) { toast('🎮 Game mode on — earn XP and level up!', { ms: 5000 }); gameRefresh(); } renderGamePanel(); render(); }
     const addedLeave = Object.keys(r.settings.leave || {}).filter((k) => S.leaveOf(r.settings, k) && !S.leaveOf(before, k));
     if (addedLeave.length && (await afterLeave(addedLeave)) === 'back') { for (const k of addedLeave) delete set().leave[k]; await E.persist(st(), ['settings']); await render(); }

@@ -40,25 +40,105 @@ export function levelOf(total, life) {
   return { level: lv, into: total - xpFor(lv), span: xpFor(next) - xpFor(lv), capped, lifeNeed: capped ? lifeFor(lv + 1) - life : 0, nextLife: lifeFor(next), max: lv >= MAX_LEVEL };
 }
 
-// ---------- ranks (a name and an emblem for each major level) ----------
-export const TIERS = [
-  [1, 'Seedling', '🌱', '#7cb342'], [10, 'Sprout', '🌿', '#43a047'], [20, 'Apprentice Planner', '📒', '#00897b'],
-  [30, 'Pathfinder', '🧭', '#039be5'], [40, 'Taskwright', '🛠️', '#3949ab'], [50, 'Timekeeper', '⏳', '#5e35b1'],
-  [75, 'Chronicler', '📜', '#8e24aa'], [100, 'Chronomancer', '🔮', '#d81b60'], [125, 'Rhythm Knight', '🛡️', '#e53935'],
-  [150, 'Habit Sage', '🦉', '#f4511e'], [175, 'Hourglass Warden', '⌛', '#fb8c00'], [200, 'Grand Strategist', '♟️', '#b8860b'],
-  [225, 'Archmage of Hours', '🧙', '#6d4c41'], [250, 'Eternal Architect', '🏛️', '#546e7a'], [275, 'Celestial Navigator', '🌌', '#283593'],
-  [300, 'Master of Time', '👑', '#c49a00'],
+// ---------- ranks: a new one every 5 levels, each with a description and its own emblem ----------
+// Ranks belong to eras (the colour and the shape of the emblem); within an era every rank has its own sign.
+export const ERAS = [
+  { from: 1, name: 'The Garden', color: '#6aa84f', shape: 'leaf' }, { from: 25, name: 'The Workshop', color: '#00897b', shape: 'shield' },
+  { from: 50, name: 'The Observatory', color: '#3949ab', shape: 'hex' }, { from: 100, name: 'The Citadel', color: '#8e24aa', shape: 'star' },
+  { from: 150, name: 'The High Peaks', color: '#d84315', shape: 'shield' }, { from: 200, name: 'The Golden Age', color: '#b8860b', shape: 'hex' },
+  { from: 250, name: 'The Firmament', color: '#283593', shape: 'star' },
 ];
-export const tierOf = (L) => { let t = TIERS[0], i = 0; TIERS.forEach((x, j) => { if (L >= x[0]) { t = x; i = j; } }); return { from: t[0], name: t[1], icon: t[2], color: t[3], index: i, next: TIERS[i + 1] || null }; };
-// The rank's emblem: a crest in the rank's colour with its sign, a star per rank reached and the level on a ribbon.
+export const RANKS = [
+  [1, 'Seedling', '🌱', 'You have planted the first seed: a calendar that works for you.'],
+  [5, 'Sprout', '🌿', 'Green shoots — you are checking in, planning ahead and following through.'],
+  [10, 'Sapling', '🪴', 'Roots are forming. A few good habits now hold you up on busy days.'],
+  [15, 'Bloom', '🌼', 'Your weeks have colour: work, rest and growth all find their place.'],
+  [20, 'Apprentice Planner', '📒', 'You plan your days before they plan you.'],
+  [25, 'Journeyman', '🧰', 'Tools in hand, you split big tasks into sessions and finish them.'],
+  [30, 'Pathfinder', '🧭', 'You find a way through crowded weeks without losing the thread.'],
+  [35, 'Cartographer', '🗺️', 'You map the weeks ahead — deadlines, trips and all.'],
+  [40, 'Taskwright', '🛠️', 'You build tasks the way a craftsman builds furniture: piece by piece, square and true.'],
+  [45, 'Artisan of Hours', '🎨', 'Your calendar has become a craft: balanced, deliberate, yours.'],
+  [50, 'Timekeeper', '⏳', 'You keep time — and time keeps its promises to you.'],
+  [55, 'Stargazer', '🔭', 'You look further ahead than most: months, not days.'],
+  [60, 'Navigator', '⚓', 'Steady hand on the wheel; storms of meetings no longer push you off course.'],
+  [65, 'Lamplighter', '🏮', 'You light the way for the evenings that matter: rest, family, reading.'],
+  [70, 'Chronicler', '📜', 'Your weeks tell a story worth reading in the Sunday paper.'],
+  [75, 'Scholar', '📚', 'Learning has become part of the rhythm of your week.'],
+  [80, 'Alchemist', '⚗️', 'You turn spare hours into skills, and skills into results.'],
+  [85, 'Clockmaker', '🕰️', 'Every gear of your week meshes with the next.'],
+  [90, 'Oracle', '🔮', 'You see the crunch weeks coming and plan around them.'],
+  [95, 'Sage of Seasons', '🍂', 'You plan by the season, not the day.'],
+  [100, 'Chronomancer', '🪄', 'A hundred levels: you bend time to your purpose.'],
+  [105, 'Warden', '🗝️', 'You guard your best hours like a keeper guards the keys.'],
+  [110, 'Rhythm Knight', '🛡️', 'Sworn to the rhythm: work, rest, grow, repeat.'],
+  [115, 'Paladin of Plans', '⚜️', 'Your plans hold even when the week tries to break them.'],
+  [120, 'Captain', '🎖️', 'You lead your days, and others notice.'],
+  [125, 'Strategist', '♟️', 'Every move on your calendar serves a longer game.'],
+  [130, 'Commander', '🏰', 'Your weeks run like a well-held fortress.'],
+  [135, 'Marshal', '🦅', 'Wide view, sharp focus — the eagle of the schedule.'],
+  [140, 'Lord of Lists', '📋', 'No task escapes you; none overwhelms you.'],
+  [145, 'Grand Planner', '🗓️', 'Your year has a shape, and you drew it.'],
+  [150, 'Habit Sage', '🦉', 'Your habits do the heavy lifting now.'],
+  [155, 'Mountaineer', '🧗', 'You climb the long projects one rope length at a time.'],
+  [160, 'Summit Seeker', '🏔️', 'The big goals are in sight — and within reach.'],
+  [165, 'Hourglass Warden', '⌛', 'Not a grain of sand slips through unplanned.'],
+  [170, 'Flamekeeper', '🔥', 'Your streaks burn bright and steady.'],
+  [175, 'Thunder Scholar', '⛈️', 'Bursts of deep work, then calm — you master both.'],
+  [180, 'Phoenix', '🐦‍🔥', 'Off weeks don\'t stop you; you rise again, stronger.'],
+  [185, 'Dragon Tamer', '🐉', 'Even the most fearsome deadlines eat from your hand.'],
+  [190, 'Titan', '🗿', 'A pillar of consistency.'],
+  [195, 'Colossus', '🏛️', 'What you have built through the years stands tall.'],
+  [200, 'Golden Strategist', '👑', 'Two hundred levels: a golden age of well-spent time.'],
+  [205, 'Archmage of Hours', '🧙', 'Your magic is simple: the right thing, at the right time.'],
+  [210, 'Gilded Sage', '📿', 'Calm, unhurried, and always on time.'],
+  [215, 'Lionheart', '🦁', 'Courage to say no — and to say yes to what matters.'],
+  [220, 'Sun Bearer', '☀️', 'Your days start bright and end well.'],
+  [225, 'Eternal Architect', '📐', 'You design years, not just weeks.'],
+  [230, 'Keeper of Legends', '🏆', 'Your achievements could fill a trophy room.'],
+  [235, 'High Chronicler', '🖋️', 'The story of your time is one of the great ones.'],
+  [240, 'Grandmaster', '🎓', 'Teacher of tempo: others could learn from your calendar.'],
+  [245, 'Legend', '🌟', 'Few have walked this far.'],
+  [250, 'Celestial Navigator', '🌌', 'You steer by the stars now.'],
+  [255, 'Comet Rider', '☄️', 'Fast and sure, you cross whole projects in a sweep.'],
+  [260, 'Moon Warden', '🌙', 'Rest is part of your mastery: the nights are planned too.'],
+  [265, 'Star Forger', '✨', 'You forge new skills out of the quiet hours.'],
+  [270, 'Galaxy Weaver', '🌀', 'All the threads of your life woven into one pattern.'],
+  [275, 'Astral Sage', '🪐', 'Planets keep orbits; so do your habits.'],
+  [280, 'Keeper of the Cosmos', '🔭', 'Your plans span years and still hold.'],
+  [285, 'Timeless One', '♾️', 'Time no longer happens to you; you happen to it.'],
+  [290, 'Sovereign of Seasons', '🌈', 'Every season of your life gets its due.'],
+  [295, 'Ascendant', '🕊️', 'One last climb.'],
+  [300, 'Master of Time', '💎', 'The summit: level 300. Your time is truly your own.'],
+];
+// kept for compatibility: the ranks as [level, name, icon, colour]
+export const eraOf = (L) => { let e = ERAS[0]; for (const x of ERAS) if (L >= x.from) e = x; return e; };
+export const TIERS = RANKS.map(([L, n, ic]) => [L, n, ic, eraOf(L).color]);
+export const tierOf = (L) => {
+  let i = 0; RANKS.forEach((x, j) => { if (L >= x[0]) i = j; });
+  const [from, name, icon, desc] = RANKS[i], era = eraOf(from);
+  return { from, name, icon, desc, color: era.color, era: era.name, shape: era.shape, index: i, next: RANKS[i + 1] ? { from: RANKS[i + 1][0], name: RANKS[i + 1][1] } : null };
+};
+// The rank's emblem: its era's shape and colour (lighter for the first ranks of the era), the rank's sign, a star
+// for each rank reached within the era, a laurel from level 50, and the level on a ribbon.
+const SHAPES = {
+  leaf: 'M50 6 C78 14 90 40 82 66 Q74 88 50 96 Q26 88 18 66 C10 40 22 14 50 6 Z',
+  shield: 'M50 6 L86 20 L82 62 Q76 84 50 96 Q24 84 18 62 L14 20 Z',
+  hex: 'M50 5 L88 27 L88 73 L50 95 L12 73 L12 27 Z',
+  star: 'M50 4 L61 30 L90 26 L72 50 L90 74 L61 70 L50 96 L39 70 L10 74 L28 50 L10 26 L39 30 Z',
+};
 export function emblemSVG(L, size = 64) {
-  const t = tierOf(L), id = 'em' + L + '-' + size, n = t.index;
-  const stars = Array.from({ length: Math.min(n, 15) }, (_, i) => { const a = Math.PI * (0.15 + (0.7 * i) / Math.max(1, Math.min(n, 15) - 1 || 1)); const x = 50 - 43 * Math.cos(a), y = 50 - 43 * Math.sin(a) + 4; return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-size="7" text-anchor="middle" fill="#ffd54f">★</text>`; }).join('');
-  return `<svg class="g-emblem" width="${size}" height="${size}" viewBox="0 0 100 100" aria-label="${t.name}"><defs><radialGradient id="${id}" cx="40%" cy="32%" r="75%"><stop offset="0" stop-color="#fff" stop-opacity=".55"/><stop offset=".45" stop-color="${t.color}"/><stop offset="1" stop-color="#1b1b2a"/></radialGradient></defs>
-    <path d="M50 6 L86 20 L82 62 Q76 84 50 96 Q24 84 18 62 L14 20 Z" fill="url(#${id})" stroke="#ffd54f" stroke-width="${n >= 10 ? 4 : n >= 5 ? 3 : 2}"/>
-    ${n >= 7 ? '<path d="M50 6 L86 20 L82 62 Q76 84 50 96 Q24 84 18 62 L14 20 Z" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="1" transform="translate(50 52) scale(.86) translate(-50 -52)"/>' : ''}
-    ${stars}<text x="50" y="58" font-size="34" text-anchor="middle">${t.icon}</text>
-    <rect x="26" y="70" width="48" height="16" rx="4" fill="#1b1b2a" stroke="#ffd54f" stroke-width="1.5"/><text x="50" y="82.5" font-size="11" font-weight="700" text-anchor="middle" fill="#ffd54f" font-family="system-ui, sans-serif">${L}</text></svg>`;
+  const t = tierOf(L), id = 'em' + t.from + '-' + size, era = eraOf(t.from);
+  const inEra = RANKS.filter((r) => r[0] >= era.from && r[0] <= t.from).length;
+  const path = SHAPES[t.shape] || SHAPES.shield;
+  const n = Math.min(inEra, 10);
+  const stars = Array.from({ length: n }, (_, i) => { const a = Math.PI * (0.12 + (0.76 * i) / Math.max(1, n - 1)); const x = 50 - 44 * Math.cos(a), y = 54 - 44 * Math.sin(a); return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-size="7" text-anchor="middle" fill="#ffd54f">★</text>`; }).join('');
+  const laurel = L >= 50 ? `<path d="M22 88 Q8 66 16 40" fill="none" stroke="#ffd54f" stroke-width="2.5" stroke-dasharray="4 3"/><path d="M78 88 Q92 66 84 40" fill="none" stroke="#ffd54f" stroke-width="2.5" stroke-dasharray="4 3"/>` : '';
+  const glow = L >= 200 ? `<circle cx="50" cy="50" r="46" fill="none" stroke="#fff7c2" stroke-opacity=".5" stroke-width="2"/>` : '';
+  return `<svg class="g-emblem" width="${size}" height="${size}" viewBox="0 0 100 100" aria-label="${t.name}"><defs><radialGradient id="${id}" cx="40%" cy="30%" r="80%"><stop offset="0" stop-color="#fff" stop-opacity=".6"/><stop offset=".45" stop-color="${t.color}"/><stop offset="1" stop-color="#151525"/></radialGradient></defs>
+    ${glow}${laurel}<path d="${path}" fill="url(#${id})" stroke="#ffd54f" stroke-width="${1.5 + Math.min(3, ERAS.indexOf(era) * 0.5)}"/>
+    ${stars}<text x="50" y="58" font-size="32" text-anchor="middle">${t.icon}</text>
+    <rect x="28" y="72" width="44" height="15" rx="4" fill="#151525" stroke="#ffd54f" stroke-width="1.5"/><text x="50" y="83.5" font-size="10.5" font-weight="700" text-anchor="middle" fill="#ffd54f" font-family="system-ui, sans-serif">${L}</text></svg>`;
 }
 
 // ---------- XP for one event or task session ----------
@@ -83,7 +163,7 @@ export function itemXP(it, s, now = Date.now()) {
     return out;
   }
   if (isSleepItem(it, s)) {
-    out.life = Math.round(Math.min(m, 540) * 0.1); out.why.push('sleep');
+    out.life = Math.round(Math.min(m, 540) * 0.03); out.why.push('sleep');
   } else {
     out.busy = Math.round(8 + 0.35 * Math.min(m, 480)); out.why.push('event');
     if (it.evDone) { out.busy = Math.round(out.busy * 1.2); out.why.push('ticked off'); }
@@ -98,6 +178,35 @@ export function gameOf(s) {
   const g = s.game || {};
   const parents = {}; for (const c of s.categories || []) if (c.parent) parents[c.id] = c.parent;
   return { ...g, lifeCats: g.lifeCats || [], restCats: g.restCats || [], _parents: parents };
+}
+
+// ---------- goals ----------
+// The period a goal belongs to: w:YYYY-MM-DD (that week), m:YYYY-MM (that month), y (12 months from when it was set)
+export function goalPeriod(key, g, z) {
+  if (key.startsWith('w:')) { const a = key.slice(2); return { from: a, to: T.addDays(a, 7), kind: 'week' }; }
+  if (key.startsWith('m:')) { const a = key.slice(2) + '-01'; return { from: a, to: T.addMonths(a, 1), kind: 'month' }; }
+  const a = g.at ? T.dayKey(g.at, z) : T.dayKey(Date.now(), z); return { from: a, to: T.addDays(a, 365), kind: 'year' };
+}
+// Hours a goal asks for (its time budget, or an "at least" hours rule), 0 if none
+export function goalHours(g, per) {
+  if (g.rule && g.rule.kind !== 'timing' && g.rule.op !== 'atMost' && +g.rule.hours > 0) {
+    const n = g.rule.per === 'day' ? (per.kind === 'week' ? 7 : per.kind === 'month' ? 30 : 365) : g.rule.per === 'week' ? (per.kind === 'month' ? 4 : per.kind === 'year' ? 52 : 1) : 1;
+    return +g.rule.hours * n;
+  }
+  return (+g.budget || 0) / 60;
+}
+// What a goal is worth: more for longer periods and more hours; ×1.5 when set before its period begins and not a
+// repeating goal (planning ahead), ×0.8 for repeating copies. Defining it earns a fifth; when it asks for hours,
+// half of its value comes bit by bit as you put the hours in, the rest when it's reached.
+export function goalValue(g, key, s) {
+  const per = goalPeriod(key, g, s.tz), hrs = goalHours(g, per);
+  const base = { week: 40, month: 90, year: 160 }[per.kind];
+  const ahead = !g.repeatId && g.at && g.at < T.dayStart(per.from, s.tz);
+  const mult = g.repeatId ? 0.8 : ahead ? 1.5 : 1;
+  const reach = Math.round((base + Math.min(300, 5 * hrs)) * mult);
+  const define = g.repeatId ? 0 : Math.round(reach * 0.2);
+  const progress = hrs > 0 ? Math.round(reach * 0.5) : 0;
+  return { reach, define, progress, final: reach - progress, hours: hrs, ahead, per };
 }
 
 // ---------- a day's XP ----------
@@ -130,7 +239,18 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   // habits and goals
   let hDone = 0, hTotal = 0;
   for (const h of ctx.habits) { hTotal++; if (ctx.habitDone(h, k)) { hDone++; add('life', 8, `habit: ${h.name}`); add('app', 2, `logged ${h.name}`); } }
-  for (const gl of ctx.goals) if (gl.doneAt >= from && gl.doneAt < to) add('life', 30, `goal reached: ${gl.text}`);
+  // goals: defining them (app XP), putting hours into them (life XP, bit by bit) and reaching them (life XP)
+  for (const { g: gl, key } of ctx.goalsAll || []) {
+    const v = goalValue(gl, key, s);
+    if (v.define && gl.at >= from && gl.at < to) add('app', v.define, `set goal: ${gl.text}${v.ahead ? ' (ahead of time)' : ''}`);
+    const at = gl.override === false ? null : gl.doneAt || gl.autoDoneAt;
+    if (at >= from && at < to && (gl.done || gl.autoDoneAt)) add('life', v.final, `goal reached: ${gl.text}`);
+    if (v.progress && ctx.goalMinutes && k >= v.per.from && k < v.per.to && from < now) {
+      const target = v.hours * 60, before = ctx.goalMinutes(gl, key, T.dayStart(v.per.from, z), from), today = ctx.goalMinutes(gl, key, from, to);
+      const x = Math.round(v.progress * (Math.min(before + today, target) - Math.min(before, target)) / target);
+      if (x > 0) add('life', x, `progress on goal: ${gl.text}`);
+    }
+  }
   // using the app: a day you opened it, with a streak bonus
   if ((g.active || []).includes(k)) {
     let streak = 1; for (let d = T.addDays(k, -1); (g.active || []).includes(d) && streak < 30; d = T.addDays(d, -1)) streak++;

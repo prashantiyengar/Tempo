@@ -947,6 +947,7 @@ export function settingsDialog(ctx) {
           const life = new Set(g.lifeCats?.length ? g.lifeCats : C.ordered(s).filter(guess).map((c) => c.id));
           const rest = new Set(g.restCats?.length ? g.restCats : C.ordered(s).filter((c) => /leisure|free|fun|social|hobby|family/i.test(c.name)).map((c) => c.id));
           return `<label class="chk"><input type="checkbox" name="gameOn" ${g.on ? 'checked' : ''}> Play Tempo as a game: earn XP for planning and doing things, and level up from 1 to 300</label>
+          <label class="field"><span>Count XP from <em class="muted">(a date in the past counts what's already on your calendar, up to 180 days back)</em></span><input type="date" data-quick="off" name="gameStart" value="${esc(g.started || T.dayKey(Date.now(), s.tz))}" max="${T.dayKey(Date.now(), s.tz)}"></label>
           <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b> (things that build long-term skills, e.g. reading, working out)</span><div class="g-catlist game-life">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gl-c" value="${esc(c.id)}" ${life.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
           <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="g-catlist game-rest">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="gr-c" value="${esc(c.id)}" ${rest.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
           <p class="muted small" style="margin:0">Sleep counts too (your sleep blocks or sleep category). Progress is kept with your settings, so it follows you to your other devices.</p>`;
@@ -1372,7 +1373,8 @@ export function settingsDialog(ctx) {
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
         game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value),
-          started: s.game?.started || (f.gameOn.checked ? T.dayKey(Date.now(), s.tz) : undefined), active: f.gameOn.checked && !s.game?.on ? [...new Set([...(s.game?.active || []), T.dayKey(Date.now(), s.tz)])] : s.game?.active },
+          ...(() => { const st0 = f.gameStart.value && f.gameStart.value <= T.dayKey(Date.now(), s.tz) ? f.gameStart.value : (s.game?.started || T.dayKey(Date.now(), s.tz)); return st0 !== s.game?.started ? { started: st0, ledger: {}, weeks: {} } : { started: st0 }; })(),
+          active: f.gameOn.checked && !s.game?.on ? [...new Set([...(s.game?.active || []), T.dayKey(Date.now(), s.tz)])] : s.game?.active },
         sleepEvents: f.sleepEvents.checked, sleepCal: f.sleepCal.value,
         sleepEventsFrom: f.sleepEvents.checked ? (s.sleepEvents && s.sleepEventsFrom ? s.sleepEventsFrom : T.addDays(T.dayKey(Date.now(), s.tz), -1)) : s.sleepEventsFrom || null,
         sleepAssume: f.sleepAssume.checked, sleepCategory: f.sleepCategory.value || null, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
