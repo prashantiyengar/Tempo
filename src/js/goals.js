@@ -71,11 +71,68 @@ export function catMinutes(items, cats, from, to, now = Date.now(), settings = n
   if (ce > cs) m += ce - cs;
   return m / T.MIN;
 }
+// ---------- Time-of-day rules: something has to start by, or end before, a time ----------
+// r = { which: 'startBy' | 'endBy', time: 'HH:MM', cats: [...], words: [...] } — what counts: events and task sessions in
+// those categories and/or with one of the words in the title (words match at the start of a word, any case).
+const foldW = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+export function wordMatcher(words) {
+  const ws = (words || []).map((w) => foldW(String(w).trim())).filter(Boolean);
+  if (!ws.length) return null;
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${ws.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'u');
+  return (t) => re.test(foldW(t));
+}
+export function timingMatches(r, s) {
+  const set = new Set(r.cats || []);
+  for (const c of s.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
+  const wm = wordMatcher(r.words);
+  return (it) => {
+    if (it.allDay || it.declined) return false;
+    if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) return false;
+    const byCat = set.size ? set.has((it.kind === 'chunk' ? it.task?.categoryId : it.catId) || '__none') : false;
+    const byWord = wm ? wm(it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`) : false;
+    return byCat || byWord;
+  };
+}
+export const timingText = (r) => `${r.which === 'endBy' ? 'ends before' : 'starts by'} ${r.time}`;
+// Was the rule kept on day k? ok: true / false, or null when it can't be told yet (the time hasn't come).
+//   startBy: something that counts started that day at or before the time
+//   endBy:   something that counts ended that day by the time, and nothing that counts was still going on at it
+//            (sleep blocks 23:00–02:00 and 03:00–07:00 → sleep ended at 07:00)
+export function timingDay(items, k, r, s, now = Date.now()) {
+  const z = s.tz, d0 = T.dayStart(k, z), d1 = T.dayStart(T.addDays(k, 1), z), at = T.atTime(k, r.time || '09:00', z);
+  const m = timingMatches(r, s), mine = items.filter((it) => it.start <= now && m(it));
+  const hm = (ms) => T.hhmm(T.minutesOfDay(ms, z));
+  if (r.which === 'endBy') {
+    const ends = mine.filter((it) => it.end > d0 && it.end <= d1 && it.end <= now).sort((a, b) => b.end - a.end);
+    const over = mine.find((it) => it.start < at && it.end > at);
+    if (over) return { ok: over.end <= now || now >= at ? false : null, why: `“${over.title || over.task?.title || ''}” until ${hm(over.end)}` };
+    const before = ends.filter((it) => it.end <= at);
+    if (before.length) return { ok: true, why: `“${before[0].title || before[0].task?.title || ''}” ended ${hm(before[0].end)}` };
+    return { ok: now >= at ? false : null, why: now >= at ? 'nothing ended by then' : '' };
+  }
+  const starts = mine.filter((it) => it.start >= d0 && it.start < d1).sort((a, b) => a.start - b.start);
+  if (starts.length && starts[0].start <= at) return { ok: true, why: `“${starts[0].title || starts[0].task?.title || ''}” started ${hm(starts[0].start)}` };
+  return { ok: now >= at ? false : null, why: starts.length ? `first started ${hm(starts[0].start)}` : now >= at ? 'nothing started by then' : '' };
+}
+
 // A rule: { cats, op: 'atLeast' | 'atMost', hours, per: 'period' | 'day' | 'week' }
-export const ruleText = (r, s) => `${r.op === 'atMost' ? 'at most' : 'at least'} ${+r.hours} h ${r.per === 'day' ? 'every day' : r.per === 'week' ? 'every week' : 'in total'}`;
+export const ruleText = (r, s) => r.kind === 'timing' ? `${timingText(r)}${r.days ? ` on ${r.days} days` : ' every day'}` : `${r.op === 'atMost' ? 'at most' : 'at least'} ${+r.hours} h ${r.per === 'day' ? 'every day' : r.per === 'week' ? 'every week' : 'in total'}`;
 // Status of a goal's rule over [fromKey, toKey): done (reached), failed (can't be reached any more), value text.
 export function ruleStatus(g, s, items, fromKey, toKey, now = Date.now()) {
-  const r = g.rule; if (!r || !(+r.hours >= 0)) return null;
+  const r = g.rule; if (!r) return null;
+  if (r.kind === 'timing') {
+    // every day of the period, or on at least N days
+    const today = T.dayKey(now, s.tz), total = T.daysBetween(fromKey, toKey);
+    let okN = 0, badN = 0, left = 0;
+    for (let k = fromKey; k < toKey; k = T.addDays(k, 1)) {
+      if (k > today) { left++; continue; }
+      const d = timingDay(items, k, { ...r, cats: r.cats?.length ? r.cats : (r.words?.length ? [] : goalCats(s, g)) }, s, now);
+      if (d.ok === true) okN++; else if (d.ok === false) badN++; else left++;
+    }
+    const need = r.days ? Math.min(total, +r.days) : total;
+    return { done: okN >= need, failed: okN + left < need, onTrack: okN + left >= need, text: `${okN}/${need} days ${timingText(r)}` };
+  }
+  if (!(+r.hours >= 0)) return null;
   const z = s.tz, cats = r.cats?.length ? r.cats : goalCats(s, g), lim = +r.hours * 60, today = T.dayKey(now, z);
   const over = T.dayStart(toKey, z) <= now;
   const span = (a, b) => catMinutes(items, cats, T.dayStart(a, z), T.dayStart(b, z), now, s);

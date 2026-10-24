@@ -1985,7 +1985,15 @@ export function habitDialog(ctx, habit = null) {
           <option value="">No — I tick it off myself</option>
           <option value="tick" ${h0.auto?.mode === 'tick' ? 'selected' : ''}>Tick a day when an event or task contains…</option>
           <option value="untick" ${h0.auto?.mode === 'untick' ? 'selected' : ''}>Tick every day, except when an event or task contains…</option>
-          <option value="hours" ${h0.auto?.mode === 'hours' ? 'selected' : ''}>Tick by hours spent in categories…</option></select></label>
+          <option value="hours" ${h0.auto?.mode === 'hours' ? 'selected' : ''}>Tick by hours spent in categories…</option>
+          <option value="timing" ${h0.auto?.mode === 'timing' ? 'selected' : ''}>Tick when something starts by / ends before a time…</option></select></label>
+        <div class="hb-auto-timing">
+          <div class="row"><label class="field"><span>Tick the day when it</span><select name="twhich"><option value="endBy" ${h0.auto?.which !== 'startBy' ? 'selected' : ''}>ends before</option><option value="startBy" ${h0.auto?.which === 'startBy' ? 'selected' : ''}>starts by</option></select></label>
+            <label class="field"><span>Time</span><input type="time" name="ttime" value="${esc(h0.auto?.time || '07:00')}" step="300"></label></div>
+          <label class="field"><span>What counts: titles with these words…</span><input name="twords" value="${esc(h0.auto?.mode === 'timing' ? (h0.auto.words || []).join(', ') : '')}" placeholder="e.g. sleep — or: essay, report" autocomplete="off"></label>
+          <div class="field"><span>…and/or these categories</span><div class="g-catlist">${C.ordered(ctx.state.settings).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" name="tcat" value="${esc(c.id)}" ${h0.auto?.mode === 'timing' && (h0.auto.cats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
+          <p class="muted small" style="margin:0">E.g. “ends before 07:00” with the word <i>sleep</i>: ticked when your sleep (block) ended by 7, not when you were still asleep at 7. “Starts by 09:00” with <i>Work</i>: ticked when work started by 9. Sleep blocks count for the morning they end.</p>
+        </div>
         <div class="hb-auto-words">
           <label class="field"><span>Words to look for in titles</span><input name="awords" value="${esc((h0.auto?.words || []).join(', '))}" placeholder="e.g. run, gym, swim (separate with commas)" autocomplete="off"></label>
           <p class="muted small" style="margin:0">Words match the start of a word, ignoring case — “run” finds “Morning run” and “Running”, not “Brunch”.</p>
@@ -2015,10 +2023,11 @@ export function habitDialog(ctx, habit = null) {
       $('details[data-sect=hb-adv]', dlg).style.display = num ? 'none' : '';
       $('.hb-auto-words', dlg).style.display = f.amode.value === 'tick' || f.amode.value === 'untick' ? '' : 'none';
       $('.hb-auto-hours', dlg).style.display = f.amode.value === 'hours' ? '' : 'none';
+      $('.hb-auto-timing', dlg).style.display = f.amode.value === 'timing' ? '' : 'none';
       $('.hb-auto-from', dlg).style.display = f.amode.value ? '' : 'none';
     };
     f.addEventListener('change', sync); sync();
-    wireSects(dlg, { 'hb-adv': () => ({ tick: '⚡ by words', untick: '⚡ unless words', hours: '⚡ by hours' }[f.amode.value] || 'Off') });
+    wireSects(dlg, { 'hb-adv': () => ({ tick: '⚡ by words', untick: '⚡ unless words', hours: '⚡ by hours', timing: `⚡ ${f.twhich.value === 'endBy' ? 'ends before' : 'starts by'} ${f.ttime.value}` }[f.amode.value] || 'Off') });
     $('.hb-del', dlg)?.addEventListener('click', async () => { if (await choose(`Delete “${h0.name}”?`, 'Its whole history goes too. (Archiving keeps it.)', [{ value: true, label: 'Delete the habit', danger: true }])) close({ delete: true }); });
     $('.hb-arch', dlg)?.addEventListener('click', () => close({ ...h0, archived: !h0.archived }));
     f.addEventListener('submit', (e) => {
@@ -2032,6 +2041,7 @@ export function habitDialog(ctx, habit = null) {
         auto: (() => {
           const fromK = f.afrom.value || T.dayKey(Date.now(), ctx.state.settings.tz);
           if (num || !f.amode.value) return null;
+          if (f.amode.value === 'timing') { const cats = $$('input[name=tcat]:checked', dlg).map((x) => x.value), words = f.twords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean); return cats.length || words.length ? { mode: 'timing', which: f.twhich.value, time: f.ttime.value || '07:00', cats, words, from: fromK } : null; }
           if (f.amode.value === 'hours') { const cats = $$('input[name=acat]:checked', dlg).map((x) => x.value); return cats.length ? { mode: 'hours', cats, op: f.aop.value, hours: Math.max(0, +f.ahours.value || 0), per: f.aper.value, from: fromK } : null; }
           return f.awords.value.trim() ? { mode: f.amode.value, words: [...new Set(f.awords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean))].slice(0, 12), from: fromK } : null;
         })() });

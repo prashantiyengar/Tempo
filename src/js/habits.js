@@ -6,7 +6,7 @@
 // Yes/no habits: a day is done (✓), skipped (», doesn't break a streak) or not done. Number habits: the amount on
 // each day, against a target per day, week or month (e.g. 8 glasses a day, 20 km a week).
 import * as T from './tz.js';
-import { catMinutes } from './goals.js';
+import { catMinutes, timingDay, timingText } from './goals.js';
 
 export const COLORS = ['#d32f2f', '#e64a19', '#f57c00', '#ff8f00', '#f9a825', '#afb42b', '#7cb342', '#388e3c', '#00897b', '#00acc1', '#039be5', '#1976d2', '#303f9f', '#5e35b1', '#8e24aa', '#d81b60', '#5d4037', '#757575'];
 export const PER_DAYS = { day: 1, week: 7, month: 30 };
@@ -35,7 +35,9 @@ export const fmtNum = (v) => (Math.abs(v) >= 100 || Number.isInteger(+v) ? Strin
 //   hours:  a day is ticked by time spent in categories: { cats, op: 'atLeast' | 'atMost', hours, per: 'day' | 'week' }
 //           (per week: "at least" ticks the day the week's total gets there; "at most" ticks each day while it stays under)
 export const autoOn = (h) => !!(h && h.type !== 'number' && h.auto && (((h.auto.mode === 'tick' || h.auto.mode === 'untick') && (h.auto.words || []).some((w) => String(w).trim()))
-  || (h.auto.mode === 'hours' && (h.auto.cats || []).length && +h.auto.hours >= 0)));
+  || (h.auto.mode === 'hours' && (h.auto.cats || []).length && +h.auto.hours >= 0)
+  || (h.auto.mode === 'timing' && /^\d\d:\d\d$/.test(h.auto.time || '') && ((h.auto.cats || []).length || (h.auto.words || []).length))));
+//   timing: a day is ticked when something that counts starts by / ends before a time (e.g. sleep ends before 07:00)
 export const isManual = (h, k) => !!h.log && Object.prototype.hasOwnProperty.call(h.log, k);
 export const isAuto = (h, k) => autoOn(h) && !isManual(h, k) && h.autoLog?.[k] != null;
 export const val = (h, k) => {
@@ -109,6 +111,17 @@ export function applyAuto(h, items, keys, s, now = Date.now()) {
   if (!autoOn(h)) return h;
   const z = s.tz, today = T.dayKey(now, z), from = h.auto.from || (h.created ? T.dayKey(h.created, z) : today);
   if (h.auto.mode === 'hours') return applyHours(h, items, keys, s, now, from, today);
+  if (h.auto.mode === 'timing') {
+    const autoLog = { ...(h.autoLog || {}) }, autoHit = { ...(h.autoHit || {}) };
+    for (const k of keys) {
+      if (k > today || k < from) { delete autoLog[k]; delete autoHit[k]; continue; }
+      const d = timingDay(items, k, h.auto, s, now);
+      if (d.ok == null) { delete autoLog[k]; autoHit[k] = `not yet (${timingText(h.auto)})`; continue; }
+      autoLog[k] = d.ok ? 1 : 0; autoHit[k] = d.why || '';
+    }
+    for (const k of Object.keys(autoLog)) if (k < from || k > today) { delete autoLog[k]; delete autoHit[k]; }
+    return { ...h, autoLog, autoHit };
+  }
   const has = matcher(h.auto.words);
   const hits = {};
   for (const it of items) {

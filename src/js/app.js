@@ -607,7 +607,7 @@ function habitCell(h, k) {
     return `<button type="button" class="hb-c num ${v > 0 ? 'on' : ''} ${done ? 'full' : ''} ${v === -1 ? 'skip' : ''}" data-k="${k}" style="--c:${h.color}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}">${v === -1 ? '»' : `<b>${v > 0 ? HB.fmtNum(v) : '0'}</b><small>${esc(h.unit || '')}</small>`}</button>`;
   }
   const auto = HB.isAuto(h, k), hit = h.autoHit?.[k];
-  const why = auto && h.auto.mode === 'hours' ? ` — ${v === 1 ? 'ticked' : 'not ticked'} automatically: ${hit || ''} (${h.auto.op === 'atMost' ? 'at most' : 'at least'} ${h.auto.hours} h per ${h.auto.per === 'week' ? 'week' : 'day'})` : auto ? (h.auto.mode === 'tick' ? (hit ? ` — ticked automatically: “${hit}”` : ' — nothing on the calendar matched') : (hit ? ` — unticked automatically: “${hit}”` : ' — ticked automatically: nothing matched')) : HB.autoOn(h) && HB.isManual(h, k) ? ' — set by hand' : '';
+  const why = auto && h.auto.mode === 'timing' ? ` — ${v === 1 ? 'ticked' : 'not ticked'} automatically (${GL.timingText(h.auto)}): ${hit || ''}` : !auto && h.auto?.mode === 'timing' && hit ? ` — ${hit}` : auto && h.auto.mode === 'hours' ? ` — ${v === 1 ? 'ticked' : 'not ticked'} automatically: ${hit || ''} (${h.auto.op === 'atMost' ? 'at most' : 'at least'} ${h.auto.hours} h per ${h.auto.per === 'week' ? 'week' : 'day'})` : auto ? (h.auto.mode === 'tick' ? (hit ? ` — ticked automatically: “${hit}”` : ' — nothing on the calendar matched') : (hit ? ` — unticked automatically: “${hit}”` : ' — ticked automatically: nothing matched')) : HB.autoOn(h) && HB.isManual(h, k) ? ' — set by hand' : '';
   return `<button type="button" class="hb-c ${v === 1 ? 'on' : v === -1 ? 'skip' : ''} ${auto ? 'auto' : ''}" data-k="${k}" style="--c:${h.color}" aria-pressed="${v === 1}" title="${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'long', day: 'numeric', month: 'short' }))}${v === -1 ? ' — skipped' : ''}${esc(why)}">${v === 1 ? '✓' : v === -1 ? '»' : '✕'}</button>`;
 }
 function renderHabits(box, { days = 5 } = {}) {
@@ -617,7 +617,7 @@ function renderHabits(box, { days = 5 } = {}) {
   setHTML(box, `<div class="hb-list" style="--hb-days:${days}">
       <div class="hb-row hb-headrow"><span class="hb-name"><button type="button" class="link hb-add" title="New habit">+ New${days > 4 ? ' habit' : ''}</button></span>${keys.map((k) => `<span class="hb-day"><b>${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }).slice(0, 3).toUpperCase())}</b>${T.parseKey(k).d}</span>`).join('')}</div>
       ${habits.map((h) => { const sc = HB.score(h, s, today); return `<div class="hb-row" data-id="${esc(h.id)}" style="--c:${h.color}">
-        <button type="button" class="hb-name" title="${esc(h.question || h.name)} — ${Math.round(sc * 100)}% · ${esc(HB.freqLabel(h))}">${ringSVG(sc, h.color)}<span class="hb-n">${esc(h.name)}</span>${HB.autoOn(h) ? `<span class="hb-autoic" title="${esc(h.auto.mode === 'hours' ? `Ticked automatically: ${h.auto.op === 'atMost' ? 'at most' : 'at least'} ${h.auto.hours} h per ${h.auto.per === 'week' ? 'week' : 'day'} in ${h.auto.cats.map((id) => C.catLabel(C.catById(set(), id)) || id).join(', ')}` : `Ticked automatically from your calendar: ${h.auto.mode === 'tick' ? 'when' : 'unless'} a title contains ${h.auto.words.join(', ')}`)}">⚡</span>` : ''}</button>
+        <button type="button" class="hb-name" title="${esc(h.question || h.name)} — ${Math.round(sc * 100)}% · ${esc(HB.freqLabel(h))}">${ringSVG(sc, h.color)}<span class="hb-n">${esc(h.name)}</span>${HB.autoOn(h) ? `<span class="hb-autoic" title="${esc(h.auto.mode === 'timing' ? `Ticked automatically when ${[...(h.auto.words || []), ...(h.auto.cats || []).map((id) => C.catLabel(C.catById(set(), id)) || id)].join(', ')} ${GL.timingText(h.auto)}` : h.auto.mode === 'hours' ? `Ticked automatically: ${h.auto.op === 'atMost' ? 'at most' : 'at least'} ${h.auto.hours} h per ${h.auto.per === 'week' ? 'week' : 'day'} in ${h.auto.cats.map((id) => C.catLabel(C.catById(set(), id)) || id).join(', ')}` : `Ticked automatically from your calendar: ${h.auto.mode === 'tick' ? 'when' : 'unless'} a title contains ${h.auto.words.join(', ')}`)}">⚡</span>` : ''}</button>
         ${keys.map((k) => habitCell(h, k)).join('')}</div>`; }).join('') || `<p class="muted small empty">Track habits like exercise, reading or water: tick each day off, and watch the score ring fill up. <button type="button" class="link hb-add">Add your first habit</button></p>`}
       ${archived.length ? `<details class="hb-arch-l"><summary class="muted small">Archived (${archived.length})</summary>${archived.map((h) => `<button type="button" class="link hb-open-a" data-id="${esc(h.id)}">${esc(h.name)}</button>`).join(' · ')}</details>` : ''}
     </div>`);
@@ -2814,6 +2814,7 @@ async function addGoalDialog(key, head0, x) {
     $('.g-addbox', dlg).addEventListener('click', () => setTimeout(drawAll, 50), true);
     f.onsubmit = (e) => { e.preventDefault(); const t = f.t.value.trim(); if (!t) { f.t.focus(); return; } const b = parseFloat(f.b.value); close({ text: t, head: f.h.value, budget: b > 0 ? b * 60 : null, cats, words: GL.parseWords(f.w.value), wmode: f.wm?.value || 'either', rule: readGoalRule(dlg), rep: !!f.rep?.checked }); };
     D.wireSects(dlg, { 'g-rule': () => { const r = readGoalRule(dlg); return r ? `⚡ ${GL.ruleText(r)}` : 'Off'; } });
+    wireGoalRule(dlg);
   }, { cls: 'narrow' });
   if (!r) return;
   if (r.rep && every) {
@@ -2841,13 +2842,30 @@ function catBoxInner(cats, head) {
 function goalRuleHTML(r, every) {
   const s = set();
   return D.sect('g-rule', 'Advanced: complete automatically', `
-    <div class="row"><label class="field"><span>Mark it reached when I spend</span><select name="rop"><option value="">— off —</option><option value="atLeast" ${r?.op === 'atLeast' ? 'selected' : ''}>at least</option><option value="atMost" ${r?.op === 'atMost' ? 'selected' : ''}>at most</option></select></label>
+    <label class="field"><span>Kind of rule</span><select name="rkind"><option value="hours" ${r?.kind !== 'timing' ? 'selected' : ''}>Hours spent in categories</option><option value="timing" ${r?.kind === 'timing' ? 'selected' : ''}>Something starts by / ends before a time</option></select></label>
+    <div class="g-rule-timing">
+      <div class="row"><label class="field"><span>Reached when it</span><select name="rwhich"><option value="">— off —</option><option value="endBy" ${r?.kind === 'timing' && r.which === 'endBy' ? 'selected' : ''}>ends before</option><option value="startBy" ${r?.kind === 'timing' && r.which === 'startBy' ? 'selected' : ''}>starts by</option></select></label>
+        <label class="field"><span>Time</span><input type="time" name="rtime" value="${esc(r?.time || '07:00')}" step="300"></label>
+        <label class="field"><span>On</span><select name="rdays"><option value="">every day</option>${[1, 2, 3, 4, 5, 6, 10, 15, 20].map((n) => `<option value="${n}" ${+r?.days === n ? 'selected' : ''}>at least ${n} day${n > 1 ? 's' : ''}</option>`).join('')}</select></label></div>
+      <label class="field"><span>What counts: titles with these words <em class="muted">(and/or the categories below)</em></span><input name="rwords" value="${esc(r?.kind === 'timing' ? (r.words || []).join(', ') : '')}" placeholder="e.g. sleep — or: essay, report" autocomplete="off"></label>
+    </div>
+    <div class="row g-rule-hours"><label class="field"><span>Mark it reached when I spend</span><select name="rop"><option value="">— off —</option><option value="atLeast" ${r?.op === 'atLeast' ? 'selected' : ''}>at least</option><option value="atMost" ${r?.op === 'atMost' ? 'selected' : ''}>at most</option></select></label>
       <label class="field"><span>Hours</span><input type="number" name="rh" min="0" step="0.25" value="${r?.hours ?? 5}" class="num"></label>
       <label class="field"><span>Counted</span><select name="rper"><option value="period" ${!r?.per || r.per === 'period' ? 'selected' : ''}>in the whole ${every || 'period'}</option><option value="day" ${r?.per === 'day' ? 'selected' : ''}>every day</option>${every !== 'week' ? `<option value="week" ${r?.per === 'week' ? 'selected' : ''}>every week</option>` : ''}</select></label></div>
     <div class="field"><span>…in these categories <em class="muted">(none ticked = the goal's categories)</em></span><div class="g-catlist g-rcats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" name="rcat" value="${esc(c.id)}" ${(r?.cats || []).includes(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></div>
-    <p class="muted small" style="margin:0">Only time that has passed counts. “At least” is reached as soon as you get there; “at most” is reached when the period ends without going over (and shows as missed as soon as you do). Ticking or unticking the goal yourself overrides it.</p>`, { open: !!r });
+    <p class="muted small" style="margin:0">Only time that has passed counts. Times of day: “ends before 07:00” with <i>sleep</i> is kept on a day when your sleep ended by 7 (not when you were still asleep at 7); “starts by 09:00” when something that counts started by 9. “At least” is reached as soon as you get there; “at most” is reached when the period ends without going over (and shows as missed as soon as you do). Ticking or unticking the goal yourself overrides it.</p>`, { open: !!r });
 }
-const readGoalRule = (dlg) => { const f = $('form', dlg); return f.rop?.value ? { op: f.rop.value, hours: Math.max(0, +f.rh.value || 0), per: f.rper.value, cats: $$('input[name=rcat]:checked', dlg).map((x) => x.value) } : null; };
+const readGoalRule = (dlg) => {
+  const f = $('form', dlg), cats = $$('input[name=rcat]:checked', dlg).map((x) => x.value);
+  if (f.rkind?.value === 'timing') return f.rwhich.value ? { kind: 'timing', which: f.rwhich.value, time: f.rtime.value || '07:00', days: f.rdays.value ? +f.rdays.value : null, words: f.rwords.value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean), cats } : null;
+  return f.rop?.value ? { op: f.rop.value, hours: Math.max(0, +f.rh.value || 0), per: f.rper.value, cats } : null;
+};
+// show the fields of the chosen kind of rule
+function wireGoalRule(dlg) {
+  const f = $('form', dlg); if (!f.rkind) return;
+  const sync = () => { const t = f.rkind.value === 'timing'; $('.g-rule-timing', dlg).style.display = t ? '' : 'none'; $('.g-rule-hours', dlg).style.display = t ? 'none' : ''; };
+  f.rkind.addEventListener('change', sync); sync();
+}
 // The "look for this text" field of the goal dialogs.
 function wordsFieldHTML(words, mode) {
   return `<label class="field"><span>…and/or text in event and task titles</span><input name="w" value="${esc((words || []).join(', '))}" placeholder="e.g. Moby Dick (several: separate with commas)" autocomplete="off"></label>
@@ -2912,6 +2930,7 @@ async function editGoal(key, id) {
     const upd = () => syncWordsField(dlg, $$('input[name=c]:checked', dlg).length); f.addEventListener('input', upd); f.addEventListener('change', upd); upd();
     f.onsubmit = (e) => { e.preventDefault(); const b = parseFloat(f.b.value); close({ text: f.t.value.trim() || g.text, head: f.h.value, budget: b > 0 ? Math.round(b * 60) : null, cats: $$('input[name=c]:checked', dlg).map((x) => x.value), words: GL.parseWords(f.w.value), wmode: f.wm.value, rule: readGoalRule(dlg), done: f.d.checked, rep: f.rep ? f.rep.checked : null }); };
     D.wireSects(dlg, { 'g-rule': () => { const r = readGoalRule(dlg); return r ? `⚡ ${GL.ruleText(r)}` : 'Off'; } });
+    wireGoalRule(dlg);
   });
   if (!r) return;
   // repeat on / off (the copies already made stay)
