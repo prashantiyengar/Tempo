@@ -732,10 +732,13 @@ async function xpBreakdown(k, rect) {
 function gameXPLine(it) {
   if (!gameOn()) return '';
   const x = GM.itemXP(it, set());
+  const fl = it.kind !== 'chunk' ? GM.laterOfEvent(it) : it.task?.fromLater;
+  const lb = fl?.at ? GM.laterBonus(set(), fl.created, fl.at) : null;
+  const later = lb ? ` <span class="xp-l" title="It waited ${lb.days} days in Later">· from Later: +${lb.done} life when done</span>` : '';
   if (x.drain) return `<div class="pop-row small xp-line">🎮 <b class="xp-p">💧 ${esc(x.why[0])}</b> <span class="muted">— and it costs XP (Settings → Game mode)</span></div>`;
   const parts = [x.busy ? `<b class="xp-b">+${x.busy} busy</b>` : '', x.life ? `<b class="xp-l">+${x.life} life</b>` : '', x.app ? `<b class="xp-a">+${x.app} app</b>` : ''].filter(Boolean);
   if (!parts.length) return '';
-  return `<div class="pop-row small xp-line">🎮 ${x.done ? 'Earned' : 'Completing this earns'} ${parts.join(' ')} <span class="muted">(${esc(x.why.join(', '))})</span></div>`;
+  return `<div class="pop-row small xp-line">🎮 ${x.done ? 'Earned' : 'Completing this earns'} ${parts.join(' ')} <span class="muted">(${esc(x.why.join(', '))})</span>${later}</div>`;
 }
 const gameSave = async () => { await E.persist(st(), ['settings']); syncSharedSoon(); };
 // Mark today as a day you used Tempo
@@ -1048,6 +1051,19 @@ async function habitDetail(id) {
   app.habitRedraw = null;
 }
 
+// Game mode: what scheduling a Later item earns now (and doing it)
+function laterChip(x) {
+  if (!gameOn()) return '';
+  const b = GM.laterBonus(set(), x.created);
+  return `<span class="later-xp" title="${esc(`Game mode: scheduling it earns +${b.sched} life XP now (it has waited ${b.days} day${b.days === 1 ? '' : 's'} — the longer it waits, the more); doing it earns +${b.done} more`)}">🎮 <b class="xp-l">+${b.sched}</b> · <span class="xp-l">+${b.done}</span> when done</span>`;
+}
+const laterTip = (x) => { if (!gameOn()) return ''; const b = GM.laterBonus(set(), x.created); return ` — 🎮 +${b.sched} life XP now, +${b.done} when done`; };
+function laterToast(item) {
+  if (!gameOn()) return;
+  const b = GM.laterBonus(set(), item.created);
+  setTimeout(() => toast(`🎮 From Later: +${b.sched} life XP for scheduling it — +${b.done} more when it's done`, { ms: 5000, noUndo: true }), 400);
+  setTimeout(() => gameRefresh(), 600);
+}
 function renderLater() {
   const box = $('#later-list'); if (!box) return;
   const tab = app.sideTab || 'tasks';
@@ -1065,8 +1081,8 @@ function renderLater() {
   setHTML(box, `<form class="later-add"><input name="t" placeholder="Something to schedule later…" maxlength="300" autocomplete="off" aria-label="Add a note"><button class="btn small" type="submit">Add</button>
       <div class="later-more"><label title="How long it will likely take">⏱ <input name="h" type="number" min="0" step="0.25" placeholder="h" aria-label="Hours"></label><label title="Must be done by">by <input name="d" type="date" aria-label="Deadline"></label></div></form>
     ${list.length ? list.map((x) => `<div class="later-row" data-id="${esc(x.id)}">
-      <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="later-meta">${x.minutes ? `<span class="later-dur">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}${due(x)}<span class="muted small">added ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span></span></button>
-      <span class="later-acts"><button type="button" class="icon-btn sm l-task" title="Make it a task (Tempo finds the time)">⧉</button><button type="button" class="icon-btn sm l-event" title="Put it on the calendar as an event">📅</button><button type="button" class="icon-btn sm l-del" title="Remove">✕</button></span>
+      <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="later-meta">${x.minutes ? `<span class="later-dur">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}${due(x)}<span class="muted small">added ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span>${laterChip(x)}</span></button>
+      <span class="later-acts"><button type="button" class="icon-btn sm l-task" title="Make it a task (Tempo finds the time)${laterTip(x)}">⧉</button><button type="button" class="icon-btn sm l-event" title="Put it on the calendar as an event${laterTip(x)}">📅</button><button type="button" class="icon-btn sm l-del" title="Remove">✕</button></span>
     </div>`).join('') : '<p class="muted small empty">Jot down things you need to schedule, but not right away. Turn one into a task or an event when you\'re ready.</p>'}`);
   $('.later-add', box).onsubmit = async (e) => {
     e.preventDefault();
@@ -1079,13 +1095,19 @@ function renderLater() {
     const item = laterList().find((x) => x.id === r.dataset.id); if (!item) return;
     const drop = () => saveLater(laterList().filter((x) => x.id !== item.id), `remove “${item.text.slice(0, 30)}” from Later`);
     $('.l-del', r).onclick = () => { drop(); toast('Removed from Later'); };
-    $('.l-task', r).onclick = async () => { closeDrawer(); const before = st().tasks.length; await newTask({ kind: 'generic', title: item.text, ...(item.minutes ? { totalMinutes: item.minutes } : {}), ...(item.deadline ? { deadline: item.deadline } : {}) }); if (st().tasks.length > before) drop(); };
+    $('.l-task', r).onclick = async () => {
+      closeDrawer(); const ids = new Set(st().tasks.map((t) => t.id));
+      await newTask({ kind: 'generic', title: item.text, ...(item.minutes ? { totalMinutes: item.minutes } : {}), ...(item.deadline ? { deadline: item.deadline } : {}) });
+      const nt = st().tasks.find((t) => !ids.has(t.id));
+      if (nt) { replaceTask({ ...nt, fromLater: { created: item.created || Date.now(), at: Date.now() } }); await saveTasks(false); drop(); laterToast(item); }
+    };
     $('.l-event', r).onclick = async () => {
       closeDrawer();
       const start = Math.ceil((Date.now() + 15 * T.MIN) / (15 * T.MIN)) * 15 * T.MIN;
       const n0 = createdEvents;
-      await newEvent({ start, end: start + Math.min(8 * 60, item.minutes || set().defaultEventMinutes || 60) * T.MIN, title: item.text });
-      if (createdEvents > n0) drop();
+      app.laterTag = { created: item.created };
+      try { await newEvent({ start, end: start + Math.min(8 * 60, item.minutes || set().defaultEventMinutes || 60) * T.MIN, title: item.text }); } finally { app.laterTag = null; }
+      if (createdEvents > n0) { drop(); laterToast(item); }
     };
     $('.later-t', r).onclick = async () => {
       const v = await modal(`<form class="choice"><h2>Edit note</h2><textarea name="v" rows="3" maxlength="300" style="width:100%">${esc(item.text)}</textarea>
@@ -1532,6 +1554,7 @@ let createdEvents = 0;
 async function saveNewEvent(calId, body, opts) {
   try {
     setStatus('Saving…');
+    if (app.laterTag) body = { ...body, extendedProperties: { ...(body.extendedProperties || {}), private: { ...(body.extendedProperties?.private || {}), tempoLaterCreated: String(app.laterTag.created || Date.now()), tempoLaterAt: String(Date.now()) } } };
     const created = await EV.createEvent(st(), calId, body, opts);
     createdEvents++;
     pushUndo(`create “${body.summary || 'event'}”`, async () => { await EV.deleteEvent(st(), created, 'this'); await afterEventChange(); });

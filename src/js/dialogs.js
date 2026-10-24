@@ -994,6 +994,7 @@ export function settingsDialog(ctx) {
           <div class="row wx-find-row"><input name="wxPlace" placeholder="City, e.g. Berlin" value="${esc(wx.name || '')}" autocomplete="off"><button type="button" class="btn small wx-find">Find</button><button type="button" class="btn small ghost wx-here">📍 My location</button></div>
           <div class="wx-results small">${wx.lat != null ? `Forecast for <b>${esc(wx.name || 'your location')}</b>` : '<span class="muted">Choose a place first.</span>'}</div>
           <label class="field"><span>Temperature in</span><select name="wxUnit"><option value="C" ${wx.unit !== 'F' ? 'selected' : ''}>°C — Celsius</option><option value="F" ${wx.unit === 'F' ? 'selected' : ''}>°F — Fahrenheit</option></select></label>
+          <label class="field"><span>Forecast model</span><select name="wxModel">${W.MODELS.map(([v, l]) => `<option value="${v}" ${(wx.model || 'best_match') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
           <p class="muted small" style="margin:0">Forecasts from Open-Meteo (free, no account). Only the place's coordinates are sent.</p>`, { cls: 'wx-box' })}
       </section>
       <section data-pane="1" hidden>
@@ -1492,7 +1493,7 @@ export function settingsDialog(ctx) {
         paperCats: { exclude: $$('.paper-cats .pc:not(:checked)', dlg).map((x) => x.value) },
         picSources: picSrc.map((x) => ({ ...x, name: (x.name || '').trim() || 'Pictures', value: (x.value || '').trim() })),
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
-        weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value },
+        weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value, model: f.wxModel.value || 'best_match' },
         game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value), noCats: $$('.gn-c:checked', dlg).map((x) => x.value),
           drains: drains.map((d) => ({ ...d, name: (d.name || '').trim() || 'Drain' })).filter((d) => d.cats.length || d.words.length),
           boosts: boosts.map((b) => ({ ...b, name: (b.name || '').trim() || 'Bonus' })).filter((b) => b.cats.length || b.words.length),

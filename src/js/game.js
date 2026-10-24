@@ -40,6 +40,10 @@ export const CFG = [
   ['habitStreakXP', 'Habit streak: extra XP for each day (or period) in a row', 1, 0, 20, 0.5],
   ['habitRankPct', 'Habit streak rewards grow by this % for each rank', 4, 0, 50, 1],
   ['habitMilestoneXP', 'Habit streak milestone (7, 30, 100, 365 days; 4, 12, 52 weeks)', 20, 0, 500, 5],
+  ['laterXP', 'Scheduling something from Later (life XP)', 4, 0, 100, 1],
+  ['laterPerWeek', '…plus this for each week it waited in Later', 2, 0, 50, 0.5],
+  ['laterMaxWeeks', '…counting at most this many weeks', 26, 1, 104, 1],
+  ['laterDoneMult', 'Doing something from Later: × the scheduling bonus', 3, 0, 20, 0.5],
   ['boostPct', 'Bonus activities: extra XP (%) — the default for new ones', 50, 0, 300, 5],
 ];
 // How a clean streak's bonus grows: first period base %, then + step % for each period in a row, up to the maximum.
@@ -290,6 +294,20 @@ export function goalValue(g, key, s) {
   return { reach, define, progress, final: reach - progress, hours: hrs, ahead, per };
 }
 
+// ---------- Later: scheduling something that waited in the Later list ----------
+// { days waited, sched: life XP for scheduling it, done: life XP for doing it }
+export function laterBonus(s, created, at = Date.now()) {
+  const c = cfg(s), days = Math.max(0, Math.floor((at - (created || at)) / T.DAY));
+  const sched = Math.round(c.laterXP + c.laterPerWeek * Math.min(days / 7, c.laterMaxWeeks));
+  return { days, sched, done: Math.round(sched * c.laterDoneMult) };
+}
+const waited = (d) => (d >= 14 ? `${Math.floor(d / 7)} weeks` : d === 1 ? '1 day' : `${d} days`);
+// an event that came from Later: { created, at } from its private properties
+export function laterOfEvent(it) {
+  const p = it.ev?.extendedProperties?.private; if (!p?.tempoLaterAt) return null;
+  return { created: +p.tempoLaterCreated || +p.tempoLaterAt, at: +p.tempoLaterAt };
+}
+
 // ---------- a day's XP ----------
 const BAD = new Set(['moved', 'skipped', 'undone', 'resched']);
 // ctx: { items (events + sessions of the day and around it), tasks, projects, habits, goals (flat list with doneAt), history, active (days) }
@@ -317,6 +335,19 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   for (const p of ctx.projects) if (p.created >= from && p.created < to) add('app', 20, `started project “${p.name}”`);
   // finished tasks and projects
   for (const t of ctx.tasks) { const last = t._finishedAt; if (last >= from && last < to) add('busy', 40 + 8 * (t._sessions || 1), `finished “${t.title}”`); }
+  // from Later: a little life XP for scheduling it (more the longer it waited), more for doing it
+  for (const t of ctx.tasks) {
+    const fl = t.fromLater; if (!fl?.at) continue;
+    const lb = laterBonus(s, fl.created, fl.at);
+    if (fl.at >= from && fl.at < to) add('life', lb.sched, `scheduled from Later: “${t.title}” (waited ${waited(lb.days)})`);
+    if (t._finishedAt >= from && t._finishedAt < to) add('life', lb.done, `did something from Later: “${t.title}”`);
+  }
+  for (const it of ctx.items) {
+    const fl = laterOfEvent(it); if (!fl) continue;
+    const lb = laterBonus(s, fl.created, fl.at);
+    if (fl.at >= from && fl.at < to) add('life', lb.sched, `scheduled from Later: “${it.title}” (waited ${waited(lb.days)})`);
+    if (it.start >= from && it.start < to && it.end <= now && !it.declined) add('life', lb.done, `did something from Later: “${it.title}”`);
+  }
   for (const p of ctx.projectsDone || []) if (p.at >= from && p.at < to) add('busy', 200, `completed project “${p.name}”`);
   // habits and goals
   let hDone = 0, hTotal = 0;
