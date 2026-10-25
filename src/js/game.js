@@ -52,6 +52,9 @@ export const CFG = [
   ['recoverBonusPct', 'Bonus for winning all of it back (% of what was lost)', 5, 0, 50, 1],
   ['rateXP', 'Rating a day (app XP)', 3, 0, 50, 1],
   ['rateWhyXP', '…extra when you add why', 3, 0, 50, 1],
+  ['finishLifeXP', 'Finishing a task: life XP (on the day it\'s finished only)', 10, 0, 200, 1],
+  ['finishLifePerSession', '…plus this for each of its sessions (up to 20)', 2, 0, 20, 0.5],
+  ['projectLifeXP', 'Completing a project: life XP (on that day only)', 60, 0, 1000, 5],
   ['laterXP', 'Scheduling something from Later (life XP)', 4, 0, 100, 1],
   ['laterPerWeek', '…plus this for each week it waited in Later', 2, 0, 50, 0.5],
   ['laterMaxWeeks', '…counting at most this many weeks', 26, 1, 104, 1],
@@ -72,14 +75,14 @@ export function periodRange(kind, today) {
   if (kind === '3m') return { from: today, to: T.addMonths(today, 3) };
   return { from: null, to: null };
 }
-export const RULES_V = 5; // when the rules change, the ledger is counted again
+export const RULES_V = 6; // when the rules change, the ledger is counted again
 export function cfg(s) {
   const o = {}, c = s?.game?.cfg || {};
   for (const [k, , d, lo, hi] of CFG) { const v = c[k]; o[k] = v == null || v === '' || !Number.isFinite(+v) ? d : Math.min(hi, Math.max(lo, +v)); }
   return o;
 }
 // Everything that changes how XP is counted: changing any of it counts all days again from the start.
-export const cfgHash = (s) => JSON.stringify([cfg(s), s?.game?.drains || [], s?.game?.boosts || [], (s?.habits || []).filter((h) => h.game === false).map((h) => h.id), s?.game?.lifeCats || [], s?.game?.restCats || [], s?.game?.noCats || []]);
+export const cfgHash = (s) => JSON.stringify([cfg(s), s?.game?.lifeWeights || {}, s?.game?.drains || [], s?.game?.boosts || [], (s?.habits || []).filter((h) => h.game === false).map((h) => h.id), s?.game?.lifeCats || [], s?.game?.restCats || [], s?.game?.noCats || []]);
 
 // ---------- levels ----------
 export const MAX_LEVEL = 300;
@@ -222,6 +225,8 @@ export function emblemSVG(L, size = 64) {
 
 // ---------- XP for one event or task session ----------
 const isLife = (it, g) => (g.lifeCats || []).includes(catOf(it)) || (g.lifeCats || []).includes(parentCat(it, g));
+// how much a life-growth category counts (e.g. Study at 50%): its own weight, else its main category's, else 100%
+const lifeWeight = (it, g) => { const w = g.lifeWeights || {}, c = catOf(it), p = parentCat(it, g); const v = w[c] ?? w[p]; return v == null ? 1 : Math.max(0, +v) / 100; };
 const catOf = (it) => (it.kind === 'chunk' ? it.task?.categoryId : it.catId) || null;
 const parentCat = (it, g) => g._parents?.[catOf(it)] || null;
 export const isSleepItem = (it, s) => !!(it.ev?.extendedProperties?.private?.tempoSleep || (s.sleepCategory && catOf(it) === s.sleepCategory) || /\bsleep\b|😴/i.test(it.title || ''));
@@ -259,7 +264,7 @@ function itemBase(it, s, now, g, c) {
     const stage = Math.min(3, Math.pow(1 + c.stageBonus / 100, Math.max(0, (it.sess?.index || 1) - 1)));
     const busy = (6 + c.sessionPerHour * h) * stage;
     const later = (it.sess?.index || 1) > 1 && c.stageBonus ? ` ${it.sess.index}/${it.sess.count} (×${stage.toFixed(2)} for a later stage)` : '';
-    if (isLife(it, g)) { out.life = lifeXP(c, h, stage); out.busy = Math.round(busy * cross); out.why.push(`life growth${later}`); out.grow = true; }
+    if (isLife(it, g)) { const lw = lifeWeight(it, g); out.life = Math.round(lifeXP(c, h, stage) * lw); out.busy = Math.round(busy * cross); out.why.push(`life growth${lw !== 1 ? ` ×${lw}` : ''}${later}`); out.grow = true; }
     else { out.busy = Math.round(busy); out.why.push(`task session${later}`); }
     out.done = it.status === 'done' || it.sess?.kind === 'done';
     return out;
@@ -267,7 +272,7 @@ function itemBase(it, s, now, g, c) {
   if (isSleepItem(it, s)) { out.life = Math.round(Math.min(h, 9) * c.sleepPerHour); out.why.push('sleep'); }
   else {
     const busy = (4 + c.eventPerHour * Math.min(h, 8)) * (it.evDone ? 1.2 : 1);
-    if (isLife(it, g)) { out.life = lifeXP(c, Math.min(h, 8), it.evDone ? 1.2 : 1); out.busy = Math.round(busy * cross); out.why.push('life growth'); out.grow = true; }
+    if (isLife(it, g)) { const lw = lifeWeight(it, g); out.life = Math.round(lifeXP(c, Math.min(h, 8), it.evDone ? 1.2 : 1) * lw); out.busy = Math.round(busy * cross); out.why.push(`life growth${lw !== 1 ? ` ×${lw}` : ''}`); out.grow = true; }
     else if (isRest(it, s, g)) { out.life = Math.round(c.leisurePerHour * Math.min(h, 4)); out.busy = Math.round(busy * cross); out.why.push('leisure'); }
     else { out.busy = Math.round(busy); out.why.push('event'); }
     if (it.evDone) out.why.push('ticked off ×1.2');
@@ -362,7 +367,15 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   for (const t of ctx.tasks) if (t.created >= from && t.created < to) add('app', Math.round(5 * c.schedShare / 5), `planned task “${t.title}”`);
   for (const p of ctx.projects) if (p.created >= from && p.created < to) add('app', 20, `started project “${p.name}”`);
   // finished tasks and projects
-  for (const t of ctx.tasks) { const last = t._finishedAt; if (last >= from && last < to) add('busy', 40 + 8 * (t._sessions || 1), `finished “${t.title}”`); }
+  // finishing a task (or project): once, on the day it was first finished — busy XP and a little life XP
+  const doneOn = s.game?.doneOn || {};
+  for (const t of ctx.tasks) {
+    if (!t._finishedAt) continue;
+    const day = doneOn['t:' + t.id] || T.dayKey(t._finishedAt, z);
+    if (day !== k) continue;
+    add('busy', 40 + 8 * (t._sessions || 1), `finished “${t.title}”`);
+    add('life', Math.round(c.finishLifeXP + c.finishLifePerSession * Math.min(20, t._sessions || 1)), `finished “${t.title}” — done and dusted`);
+  }
   // from Later: a little life XP for scheduling it (more the longer it waited), more for doing it
   for (const t of ctx.tasks) {
     const fl = t.fromLater; if (!fl?.at) continue;
@@ -376,7 +389,7 @@ export function dayXP(k, s, ctx, now = Date.now()) {
     if (fl.at >= from && fl.at < to) add('life', lb.sched, `scheduled from Later: “${it.title}” (waited ${waited(lb.days)})`);
     if (it.start >= from && it.start < to && it.end <= now && !it.declined) add('life', lb.done, `did something from Later: “${it.title}”`);
   }
-  for (const p of ctx.projectsDone || []) if (p.at >= from && p.at < to) add('busy', 200, `completed project “${p.name}”`);
+  for (const p of ctx.projectsDone || []) { const day = doneOn['p:' + (p.id || p.name)] || T.dayKey(p.at, z); if (day === k) { add('busy', 200, `completed project “${p.name}”`); add('life', c.projectLifeXP, `completed project “${p.name}” — a milestone`); } }
   // habits and goals
   let hDone = 0, hTotal = 0;
   const rankI = ctx.habits.length ? tierOf(ctx.level ?? levelAt(s, k, z)).index : 0;

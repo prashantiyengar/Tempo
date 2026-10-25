@@ -1388,3 +1388,7 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .swatches.sw-pop { position: absolute; top: calc(100% + 4px); left: 0; z-index: 70; background: var(--panel); border: 1px solid var(--line2); border-radius: 10px; box-shadow: var(--shadow); padding: 8px; width: max-content; max-width: min(260px, 80vw); }
 .swatches.sw-pop[hidden] { display: none; }
 .swatches.sw-pop.right { left: auto; right: 0; }
+.gl-weights { margin-top: 6px; }
+.glw-list { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 2px; }
+.glw-row { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.glw-row input { width: 4.5em; }

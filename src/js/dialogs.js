@@ -130,7 +130,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   const html = `
   <form class="event-form" autocomplete="off">
     <header class="dlg-head">
-      <input name="summary" class="title-input" placeholder="Add title" value="${esc(ev?.summary || init.title || '')}" autofocus>
+      <input name="summary" class="title-input" placeholder="Add title" value="${esc(ev?.summary || init.title || '')}" autofocus list="tempo-titles" autocomplete="off">
       <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
     </header>
     <div class="dlg-body">
@@ -1000,7 +1000,8 @@ export function settingsDialog(ctx) {
           return `<label class="chk"><input type="checkbox" name="gameOn" ${g.on ? 'checked' : ''}> Play Tempo as a game: earn XP for planning and doing things, and level up from 1 to 300</label>
           <label class="field"><span>Count XP from <em class="muted">(a date in the past counts what's already on your calendar, up to 180 days back)</em></span><input type="date" data-quick="off" name="gameStart" value="${esc(g.started || T.dayKey(Date.now(), s.tz))}" max="${T.dayKey(Date.now(), s.tz)}"></label>
           <div class="field"><span>Life-growth categories — they earn <b style="color:#2e9b5b">life XP</b></span>
-            <p class="muted small g-life-why" style="margin:0 0 4px">Life XP is for actions that transform you or move your life goals forward — the kind that, over months, upgrade you: learning a language, training for a race, writing, therapy, deep practice. You won't spend many hours a week on them, so choose these categories carefully: even short spells count for a lot, and their value never wears off. Busy time, leisure and everything else count for less and less after your first week (about a third after a month), so a higher level shows that you've grown — not just that you kept busy.</p><div class="game-life">${catPick(s, 'gl-c', life)}</div></div>
+            <p class="muted small g-life-why" style="margin:0 0 4px">Life XP is for actions that transform you or move your life goals forward — the kind that, over months, upgrade you: learning a language, training for a race, writing, therapy, deep practice. You won't spend many hours a week on them, so choose these categories carefully: even short spells count for a lot, and their value never wears off. Busy time, leisure and everything else count for less and less after your first week (about a third after a month), so a higher level shows that you've grown — not just that you kept busy.</p><div class="game-life">${catPick(s, 'gl-c', life)}</div>
+            <div class="gl-weights"></div></div>
           <div class="field"><span>Leisure categories — a little life XP for rest</span><div class="game-rest">${catPick(s, 'gr-c', rest)}</div></div>
           <div class="field"><span>Categories that never score</span><div class="game-no">${catPick(s, 'gn-c', g.noCats || [])}</div><span class="muted small gn-auto"></span></div>
           <div class="field"><span>XP drains — activities that cost XP (e.g. gaming) <em class="muted">(changing them counts all days again)</em></span><div class="drain-list"></div><button type="button" class="btn small add-drain">+ Add a drain</button></div>
@@ -1312,7 +1313,16 @@ export function settingsDialog(ctx) {
     };
     drawBoosts();
     $('.add-boost', dlg)?.addEventListener('click', () => { boosts.push({ id: 'bo' + Math.random().toString(36).slice(2, 8), name: '', words: [], cats: [], pct: GM.cfg(s).boostPct, period: '2w', ...GM.periodRange('2w', todayK) }); drawBoosts(); $$('.boost .bo-name', dlg).pop()?.focus(); });
-    wireCatPick(dlg, s, () => updSects());
+    // how much each life-growth category counts (e.g. Study at 50% of normal life XP)
+    const lifeW = { ...(s.game?.lifeWeights || {}) };
+    const drawLifeW = () => {
+      const box = $('.gl-weights', dlg); if (!box) return;
+      const ids = $$('.gl-c:checked', dlg).map((x) => x.value);
+      setHTML(box, ids.length ? `<span class="muted small">How much each counts <em>(% of normal life XP)</em></span><div class="glw-list">${ids.map((id) => { const c = C.catById(s, id); return `<label class="glw-row"><span>${esc(c?.icon || '')} ${esc(c?.name || id)}</span><input type="number" class="glw num" data-id="${esc(id)}" min="0" max="300" step="5" value="${lifeW[id] ?? 100}"> %</label>`; }).join('')}</div>` : '');
+      $$('.glw', box).forEach((inp) => inp.addEventListener('input', () => { const v = inp.value === '' ? 100 : Math.max(0, Math.min(300, +inp.value)); if (v === 100) delete lifeW[inp.dataset.id]; else lifeW[inp.dataset.id] = v; }));
+    };
+    drawLifeW();
+    wireCatPick(dlg, s, () => { updSects(); drawLifeW(); });
     $('.add-drain', dlg)?.addEventListener('click', () => { drains.push({ ...GM.DRAIN_DEFAULT, id: 'dr' + Math.random().toString(36).slice(2, 8), words: [...GM.DRAIN_DEFAULT.words], cats: [], types: [...GM.DRAIN_DEFAULT.types] }); drawDrains(); });
     $('.gc-reset', dlg)?.addEventListener('click', () => { $$('.gc-v', dlg).forEach((x) => { x.value = GM.CFG.find((c) => c[0] === x.dataset.k)[2]; }); });
     linkRange(f.lvFrom, f.lvTo);
@@ -1526,7 +1536,7 @@ export function settingsDialog(ctx) {
         picSources: picSrc.map((x) => ({ ...x, name: (x.name || '').trim() || 'Pictures', value: (x.value || '').trim() })),
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',
         weather: { on: f.wxOn.checked && wx.lat != null, name: wx.name || '', lat: wx.lat ?? null, lon: wx.lon ?? null, unit: f.wxUnit.value, model: f.wxModel.value || 'best_match' },
-        game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), restCats: $$('.gr-c:checked', dlg).map((x) => x.value), noCats: $$('.gn-c:checked', dlg).map((x) => x.value),
+        game: { ...(s.game || {}), on: f.gameOn.checked, lifeCats: $$('.gl-c:checked', dlg).map((x) => x.value), lifeWeights: Object.fromEntries(Object.entries(lifeW).filter(([id]) => $$('.gl-c:checked', dlg).some((x) => x.value === id))), restCats: $$('.gr-c:checked', dlg).map((x) => x.value), noCats: $$('.gn-c:checked', dlg).map((x) => x.value),
           drains: drains.map((d) => ({ ...d, name: (d.name || '').trim() || 'Drain' })).filter((d) => d.cats.length || d.words.length),
           boosts: boosts.map((b) => ({ ...b, name: (b.name || '').trim() || 'Bonus' })).filter((b) => b.cats.length || b.words.length),
           cfg: Object.fromEntries($$('.gc-v', dlg).map((x) => [x.dataset.k, x.value]).filter(([k, v]) => v !== '' && +v !== GM.CFG.find((c) => c[0] === k)[2]).map(([k, v]) => [k, +v])),

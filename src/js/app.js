@@ -577,14 +577,19 @@ async function dayNotes(k) {
 // ======================================================================================
 // "Until now": the latest event or session that ended in the last 4 hours can be stretched to now (you kept going)
 // ======================================================================================
+// worked out again from what's on screen right now (time has moved on since the last redraw)
+const currentToNow = () => (app.items ? toNowItem([...app.items.values()].filter((x) => !x.allDay)) : null);
 function toNowItem(timed) {
   const now = Date.now();
   // (sleep blocks count too: you slept in, or stayed in bed — extend the sleep until now)
   const busyNow = timed.some((it) => it.start <= now && it.end > now && !it.declined && it.ev?.transparency !== 'transparent' && !(it.kind === 'chunk' && it.sess?.kind === 'waived'));
   if (busyNow) return null;
-  const c = timed.filter((it) => it.editable && !it.declined && it.end <= now && it.end >= now - 4 * T.HOUR && now - it.end >= T.MIN && !(it.kind === 'chunk' && (it.sess?.kind === 'waived' || it.status === 'waived')))
+  // the latest item that ended in the last 4 hours — only that one (never an earlier one: if the latest was just
+  // extended until now, or can't be changed, there's nothing to offer)
+  const recent = timed.filter((it) => !it.declined && it.end <= now && it.end >= now - 4 * T.HOUR && it.ev?.transparency !== 'transparent' && !(it.kind === 'chunk' && (it.sess?.kind === 'waived' || it.status === 'waived')))
     .sort((a, b) => b.end - a.end);
-  return c[0] || null;
+  const last = recent[0];
+  return last && last.editable && now - last.end >= T.MIN ? last : null;
 }
 function wireToNow(root) {
   $$('[data-tonow]', root).forEach((b) => {
@@ -946,7 +951,7 @@ function gameCtx(items) {
     const done = (t.frozen || []).filter((c) => c.status === 'done');
     return { ...t, _finishedAt: !t.repeat && pr.pct >= 100 && done.length ? Math.max(...done.map((c) => c.end)) : null, _sessions: S.sessions(t).length };
   });
-  const projectsDone = P.list(s).map((p) => { const pr = P.progress(p, st().tasks, now, projectEventDone); return pr.complete ? { name: p.name, at: Math.max(0, ...pr.rows.map((r) => r.task?._finishedAt || r.st.end || 0), ...pr.rows.filter((r) => r.task).map((r) => Math.max(0, ...(r.task.frozen || []).filter((c) => c.status === 'done').map((c) => c.end)))) } : null; }).filter(Boolean);
+  const projectsDone = P.list(s).map((p) => { const pr = P.progress(p, st().tasks, now, projectEventDone); return pr.complete ? { id: p.id, name: p.name, at: Math.max(0, ...pr.rows.map((r) => r.task?._finishedAt || r.st.end || 0), ...pr.rows.filter((r) => r.task).map((r) => Math.max(0, ...(r.task.frozen || []).filter((c) => c.status === 'done').map((c) => c.end)))) } : null; }).filter(Boolean);
   const goalsAll = Object.entries(s.goals || {}).flatMap(([key, l]) => (l || []).map((g) => ({ g, key })));
   // minutes that count towards a goal in [from, to): its "at least" hours rule, its own match, or its head's categories
   const clipped = {};
@@ -1042,8 +1047,15 @@ async function gameRefresh() {
     const open = []; for (let k = first; k < today; k = T.addDays(k, 1)) if (!g.ledger[k]) open.push(k);
     // (from the start of the earliest goal period still open, so progress on goals is counted right)
     const goalFrom = Object.entries(s.goals || {}).filter(([key, l]) => (l || []).length && !key.startsWith('y')).map(([key, l]) => GM.goalPeriod(key, l[0], z)).filter((p) => p.to > (open[0] || today)).map((p) => p.from);
-    const items = await collectItems([[open[0] || today, ...goalFrom, T.startOfWeek(today, s.weekStart ?? 1), today].sort()[0], T.addDays(today, 30)]);
+    const itemsFrom = [open[0] || today, ...goalFrom, T.startOfWeek(today, s.weekStart ?? 1), today].sort()[0];
+    const items = await collectItems([itemsFrom, T.addDays(today, 30)]);
     const ctx = gameCtx(items);
+    // the day each task / project was first finished: finishing XP is given that day only, never again
+    g.doneOn ||= {};
+    const firstDone = (key, at) => { if (g.doneOn[key]) return; const d = g.doneOn[key] = T.dayKey(at, z); changed = true; if (d < today && g.ledger[d] && d >= g.started && d >= itemsFrom) { delete g.ledger[d]; if (!open.includes(d)) open.push(d); } };
+    for (const t of ctx.tasks) if (t._finishedAt) firstDone('t:' + t.id, t._finishedAt);
+    for (const p of ctx.projectsDone) firstDone('p:' + p.id, p.at);
+    open.sort();
     const drained = GM.hasDrains(s) ? GM.anyDrainHours(s, items, [open[0] || today, T.startOfWeek(today, s.weekStart ?? 1)].sort()[0], T.addDays(today, 1), now) : null;
     let cleanNews = null;
     // goals reached by their rule: remember when, so reaching them earns XP that day
@@ -1752,7 +1764,21 @@ async function commitMove(it, start, end) {
 // ======================================================================================
 // Quick create & item popovers
 // ======================================================================================
+// Title suggestions while typing an event's title: the titles of your events of the last 7 days (today included),
+// most recent first — not task sessions.
+async function refreshTitleList() {
+  let dl = document.getElementById('tempo-titles');
+  if (!dl) { dl = document.createElement('datalist'); dl.id = 'tempo-titles'; document.body.appendChild(dl); }
+  try {
+    const z = tz(), today = T.dayKey(Date.now(), z);
+    const evs = (await collectItems([T.addDays(today, -6), today])).filter((it) => it.kind === 'event' && it.start >= T.dayStart(T.addDays(today, -6), z) && it.start < T.dayStart(T.addDays(today, 1), z) && (it.ev?.summary || '').trim()).sort((a, b) => b.start - a.start);
+    const seen = new Set(), titles = [];
+    for (const it of evs) { const t = it.ev.summary.trim(), k = t.toLowerCase(); if (!seen.has(k)) { seen.add(k); titles.push(t); } }
+    dl.replaceChildren(...titles.slice(0, 80).map((t) => Object.assign(document.createElement('option'), { value: t })));
+  } catch (err) { console.warn('Tempo: title suggestions', err); }
+}
 function quickCreate(rect, sel, onClose) {
+  refreshTitleList();
   const z = tz(), s = set();
   const when = sel.allDay
     ? (T.daysBetween(T.dayKey(sel.start, z), T.dayKey(sel.end, z)) > 1
@@ -1764,7 +1790,7 @@ function quickCreate(rect, sel, onClose) {
   const durMin = Math.round((sel.end - sel.start) / T.MIN);
   popover(rect, `
     <form class="qc" novalidate>
-      <input name="title" placeholder="Add title" autofocus autocomplete="off">
+      <input name="title" placeholder="Add title" autofocus autocomplete="off" list="tempo-titles">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
       ${sel.note ? `<div class="qc-note muted small">⇕ ${esc(sel.note)}</div>` : ''}
       ${sel.allDay ? '' : (() => {
@@ -1939,7 +1965,7 @@ function openItem(it, rect) {
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
-      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}${!it.allDay ? '<button class="btn small ghost add-during" title="Record something else you did during this event, e.g. an hour of chores during childcare">＋ Add during this</button>' : ''}</div>
+      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}${!it.allDay ? '<button class="btn small ghost add-during" title="Record something else you did during this event, e.g. an hour of chores during childcare">＋ Add during this</button>' : ''}${currentToNow()?.key === it.key ? '<button class="btn small to-now" title="You kept going: make it end now">⟶ Extend until now</button>' : ''}</div>
       ${gameXPLine(it)}
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
@@ -1947,6 +1973,7 @@ function openItem(it, rect) {
     $('.load-tasks', p)?.addEventListener('click', () => { close(); refreshFromServer(); });
     $('.fin-early', p)?.addEventListener('click', () => { close(); finishedEarly(it); });
     $('.add-during', p)?.addEventListener('click', () => { close(); addDuring(it); });
+    $('.to-now', p)?.addEventListener('click', () => { close(); extendToNow(it); });
     const toggle = (done) => async () => { close(); try { await setEventDone(it, done); } catch (err) { handleError(err); } };
     $('.ev-done', p)?.addEventListener('click', toggle(true));
     $('.ev-undone', p)?.addEventListener('click', toggle(false));
@@ -2002,6 +2029,7 @@ function openChunk(it, rect) {
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
         <button class="btn small ghost add-during" title="Record something else you did during this session">＋ Add during this</button>
+        ${currentToNow()?.key === it.key ? '<button class="btn small to-now" title="You kept going: make it end now">⟶ Extend until now</button>' : ''}
       </div>
       <div class="muted small hint">Tip: drag a session to pin it to a specific time — the rest of the series shifts around it.</div>
     </div>`, (pop, close) => {
@@ -2010,6 +2038,7 @@ function openChunk(it, rect) {
     $('.done', pop)?.addEventListener('click', () => { close(); finishSession(st().tasks.find((t) => t.id === task.id), sess, timer?.chunkId === sess.id ? tmWork() / T.MIN : null); if (timer?.chunkId === sess.id) { timer = null; saveTimer(); drawTimer(); } });
     $('.undone', pop)?.addEventListener('click', () => act((t) => (sess.kind === 'pinned' ? S.unpinSession(t, sess.id) : S.markUndone(t, sess.id)), 'Marked undone — remaining sessions shifted', { kind: 'undone', task, sess }));
     $('.unpin', pop)?.addEventListener('click', () => act((t) => S.unpinSession(t, sess.id), 'Unpinned'));
+    $('.to-now', pop)?.addEventListener('click', () => { close(); extendToNow(it); });
     $('.fin-task', pop)?.addEventListener('click', async () => {
       close();
       const cur = st().tasks.find((t) => t.id === task.id); if (!cur) return;
@@ -2308,11 +2337,13 @@ async function deleteDoneSession(task, sess) {
 // Event & task editing
 // ======================================================================================
 async function newEvent(init) {
+  refreshTitleList();
   const r = await D.eventDialog(ctx, { init });
   if (r?.action === 'save') await saveNewEvent(r.calId, r.body, { conference: r.conference });
 }
 
 async function editEvent(it) {
+  refreshTitleList();
   const master = it.ev.recurringEventId ? await EV.getMaster(st(), it.ev) : null;
   const r = await D.eventDialog(ctx, { ev: it.ev, master });
   if (!r) return;
@@ -4092,7 +4123,7 @@ function bindToolbar() {
   $('#scrim').onclick = closeDrawer;
   $('#side').addEventListener('click', (e) => { if (e.target.closest('.md, .task-row, #connect-cta, .create .btn')) closeDrawer(); });
   $('#fab').onclick = () => sheetMenu([
-    ...(app.toNowIt && ['day', '3day', 'week'].includes(app.view) ? [{ ic: '⟶', label: `Extend “${app.toNowIt.title.length > 30 ? app.toNowIt.title.slice(0, 29) + '…' : app.toNowIt.title}” until now`, run: () => extendToNow(app.toNowIt) }] : []),
+    ...((tn) => (tn ? [{ ic: '⟶', label: `Extend “${tn.title.length > 30 ? tn.title.slice(0, 29) + '…' : tn.title}” until now`, run: () => extendToNow(tn) }] : []))(['day', '3day', 'week'].includes(app.view) ? currentToNow() : null),
     { ic: '+', label: 'New event', run: () => $('#btn-new-event').click() },
     { ic: '⧉', label: 'New task (split into sessions)', run: () => newTask({ kind: 'generic' }) },
     { ic: '📖', label: 'New reading plan', run: () => newTask({ kind: 'reading' }) },
