@@ -360,11 +360,12 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       if (!r.found) { note(esc(r.note)); return; }
       setEnd(r.end); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); note(esc(r.note));
     });
-    // From: move the start; the end moves with it (the length stays)
+    // From −/+ moves only the start; the end stays (pushed on only if the start would pass it)
     $$('.st-add', dlg).forEach((b) => (b.onclick = () => {
-      const len = endMs() - startMs(), ns = startMs() + +b.dataset.add * T.MIN;
+      const ns = startMs() + +b.dataset.add * T.MIN;
       const a = T.toDTInput(ns, zoneOf()); f.sDate.value = a.slice(0, 10); f.sTime.value = a.slice(11, 16);
-      setEnd(ns + Math.max(5 * T.MIN, len)); f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); sync();
+      if (endMs() < ns + 5 * T.MIN) setEnd(ns + 5 * T.MIN);
+      f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); sync();
     }));
     $$('.dur-add', dlg).forEach((b) => (b.onclick = () => {
       const add = +b.dataset.add;
@@ -732,7 +733,13 @@ export function taskDialog(ctx, task = null, preset = {}) {
     }));
     if (!ctx.taskCalendars().length) $$('.google-only-t', dlg).forEach((e) => (e.style.display = 'none'));
     // ± buttons under From (don't start before) and To (deadline)
-    const nudgeDT = (inp, add, from) => { const v = T.fromDTInput(inp.value, tz) ?? from(); inp.value = T.toDTInput(Math.max(Date.now() - T.DAY * 365, v + add * T.MIN), tz); inp.dispatchEvent(new CustomEvent('change', { bubbles: true, detail: 'user' })); };
+    // each −/+ button changes only its own field (From doesn't move the deadline; the deadline is pushed on only
+    // when From would otherwise end up less than a day before it)
+    const nudgeDT = (inp, add, from) => {
+      const v = T.fromDTInput(inp.value, tz) ?? from(); inp.value = T.toDTInput(Math.max(Date.now() - T.DAY * 365, v + add * T.MIN), tz);
+      if (inp === f.earliest) { const es = T.fromDTInput(f.earliest.value, tz), dl = T.fromDTInput(f.deadline.value, tz); if (es != null && dl != null && dl < es + T.DAY) f.deadline.value = T.toDTInput(es + T.DAY, tz); }
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+    };
     // "From" (don't start before) moves the deadline with it; it never ends up less than a day after it
     linkRange(f.earliest, f.deadline, { minGap: 24 * 60 });
     const roundNow = () => Math.ceil(Date.now() / (15 * T.MIN)) * 15 * T.MIN;

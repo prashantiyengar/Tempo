@@ -125,7 +125,7 @@ async def main():
         st0, en0 = await page.input_value('dialog[open] [name=sTime]'), await page.input_value('dialog[open] [name=eTime]')
         await page.click('dialog[open] .st-add[data-add="-30"]'); await page.wait_for_timeout(100)
         st1, en1 = await page.input_value('dialog[open] [name=sTime]'), await page.input_value('dialog[open] [name=eTime]')
-        check('5c. −30 under From moves the whole event (the length stays)', st1 != st0 and en1 != en0, (st0, en0, st1, en1))
+        check('5c. −30 under From moves only the start (the end stays)', st1 != st0 and en1 == en0, (st0, en0, st1, en1))
         await page.screenshot(path=f'{OUT}/r26-event-times.png')
         await page.click('dialog[open] [data-close] >> nth=-1'); await page.wait_for_timeout(300)
         await page.evaluate("document.querySelector('#btn-new-task').click()"); await page.wait_for_selector('dialog[open] .task-form')

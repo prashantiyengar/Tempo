@@ -1794,7 +1794,8 @@ function quickCreate(rect, sel, onClose) {
     $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start; sel.start = nowMin(); sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); });
     $('.en-now', p)?.addEventListener('click', () => { sel.end = Math.max(sel.start + 5 * T.MIN, nowMin()); redraw(); });
     // From: move the whole slot (the length stays)
-    $$('.st-add', p).forEach((b) => (b.onclick = () => { const d = +b.dataset.add * T.MIN; sel.start += d; sel.end += d; redraw(); }));
+    // From −/+ moves only the start (the end stays, and is pushed on only if the start would pass it)
+    $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; redraw(); }));
     // typed times: same day as the start; an end before the start means the next day
     const fromInputs = () => {
       const day = T.dayKey(sel.start, z);
