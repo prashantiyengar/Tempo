@@ -4,7 +4,7 @@ import * as S from './scheduler.js';
 import * as G from './gcal.js';
 import { parseRRule, buildRRule, describe, WD, expand, sameRule } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
-import { $, $$, esc, modal, TASK_COLORS, setHTML, choose, linkRange } from './ui.js';
+import { $, $$, esc, modal, TASK_COLORS, setHTML, choose, linkRange, nudgeHTML } from './ui.js';
 import * as C from './categories.js';
 import * as AC from './accounts.js';
 import * as N from './notify.js';
@@ -502,10 +502,7 @@ export const TASK_COLORS_PUBLIC = TASK_COLORS;
 // compact −/+ time buttons (same as the quick-create box)
 const NUDGE_MIN = [[-60, '−1h'], [-30, '−30'], [-10, '−10'], [-5, '−5'], [5, '+5'], [15, '+15'], [30, '+30'], [60, '+1h']];
 const NUDGE_DAY = [[-1440, '−1d'], [-60, '−1h'], [-15, '−15'], [15, '+15'], [60, '+1h'], [1440, '+1d']];
-function nudgesHTML(cls, steps = NUDGE_MIN) {
-  const b = ([m, l]) => `<button type="button" class="${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}">${l}</button>`;
-  return `<span class="nudges"><span class="nudge">${steps.filter((x) => x[0] < 0).map(b).join('')}</span><span class="nudge">${steps.filter((x) => x[0] > 0).map(b).join('')}</span></span>`;
-}
+const nudgesHTML = (cls, steps = NUDGE_MIN) => nudgeHTML(cls, steps === NUDGE_DAY ? 'day' : 'min');
 // Limits check for a task created outside the dialog (quick add).
 export async function checkTaskLimits(ctx, nt) {
   const s = ctx.state.settings;
@@ -614,9 +611,15 @@ export function taskDialog(ctx, task = null, preset = {}) {
       </div>
       ${prog ? `<div class="progress-line"><div class="bar"><i style="width:${prog.pct}%;background:${t.color}"></i></div><span class="muted small">${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)} done</span></div>` : ''}
 
-      <div class="grid3 only-reading">
-        <label class="field"><span>Pages to read</span><input type="number" name="pages" min="1" value="${r.pages}"></label>
-        <label class="field"><span>Start page</span><input type="number" name="startPage" min="1" value="${r.startPage}"></label>
+      <div class="row only-reading"><div class="seg rformat"><label><input type="radio" name="rformat" value="book" ${r.format !== 'audio' ? 'checked' : ''}><span>📖 Book (pages)</span></label><label><input type="radio" name="rformat" value="audio" ${r.format === 'audio' ? 'checked' : ''}><span>🎧 Audiobook (hours)</span></label></div></div>
+      <div class="grid3 only-reading only-audio">
+        <label class="field"><span>Length of the audiobook (hours)</span><input type="number" name="ahours" min="0.25" step="0.25" value="${r.format === 'audio' ? +((r.pages || 60) / 60).toFixed(2) : 8}"></label>
+        <label class="field"><span>Already listened (hours)</span><input type="number" name="adone" min="0" step="0.25" value="${r.format === 'audio' ? +(((+r.startPage || 1) - 1) / 60).toFixed(2) : 0}"></label>
+        <label class="field"><span>Playback speed</span><select name="aspeed">${[0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3].map((v) => `<option value="${v}" ${(r.format === 'audio' ? +r.speed / 60 : 1) === v ? 'selected' : ''}>×${v}</option>`).join('')}</select></label>
+      </div>
+      <div class="grid3 only-reading only-book">
+        <label class="field"><span>Pages to read</span><input type="number" name="pages" min="1" value="${r.format === 'audio' ? 100 : r.pages}"></label>
+        <label class="field"><span>Start page</span><input type="number" name="startPage" min="1" value="${r.format === 'audio' ? 1 : r.startPage}"></label>
         <label class="field"><span>Reading speed</span>
           <div class="join"><input type="number" name="speed" min="0.1" step="0.1" value="${r.speed}" class="num">
           <select name="unit"><option value="pph">pages / hour</option><option value="ppm">pages / minute</option><option value="mpp">minutes / page</option></select></div>
@@ -756,7 +759,10 @@ export function taskDialog(ctx, task = null, preset = {}) {
         kind,
         title: f.title.value.trim() || (kind === 'reading' ? 'Reading' : 'Task'),
         totalMinutes: Math.max(5, Math.round((+f.hours.value || 0) * 60)),
-        reading: { pages: Math.max(1, +f.pages.value || 1), startPage: Math.max(1, +f.startPage.value || 1), speed: Math.max(0.1, +f.speed.value || 1), unit: f.unit.value, labels: f.labels.value },
+        // an audiobook is kept as "pages" = minutes of audio still to hear, at (60 × playback speed) per hour
+        reading: f.rformat?.value === 'audio'
+          ? (() => { const len = Math.max(15, Math.round((+f.ahours.value || 1) * 60)), done = Math.min(len - 1, Math.max(0, Math.round((+f.adone.value || 0) * 60))); return { format: 'audio', pages: len - done, startPage: done + 1, speed: 60 * (+f.aspeed.value || 1), unit: 'pph', labels: 'actual' }; })()
+          : { pages: Math.max(1, +f.pages.value || 1), startPage: Math.max(1, +f.startPage.value || 1), speed: Math.max(0.1, +f.speed.value || 1), unit: f.unit.value, labels: f.labels.value },
         deadline: T.fromDTInput(f.deadline.value, tz),
         earliestStart: T.fromDTInput(f.earliest.value, tz),
         rank: Math.max(1, Math.round(+f.rank.value || 3)),
@@ -807,6 +813,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
       $$('.only-custom-notify', dlg).forEach((e) => { e.style.display = cn && !(e.classList.contains('google-only-t') && !ctx.taskCalendars().length) ? '' : 'none'; if (cn) { const d = e.closest('details'); if (d && !d.open) d.open = true; } });
       $$('.only-generic', dlg).forEach((e) => (e.style.display = kind === 'generic' ? '' : 'none'));
       $$('.only-reading', dlg).forEach((e) => (e.style.display = kind === 'reading' ? '' : 'none'));
+      const audio = kind === 'reading' && f.rformat?.value === 'audio';
+      $$('.only-audio', dlg).forEach((e) => (e.style.display = audio ? '' : 'none'));
+      $$('.only-book', dlg).forEach((e) => (e.style.display = kind === 'reading' && !audio ? '' : 'none'));
       f.title.placeholder = kind === 'reading' ? 'Book title, e.g. Pride and Prejudice' : 'Task name';
       $('.custom-bounds', dlg).style.display = f.bmode.value === 'custom' ? '' : 'none';
       const repOn = kind === 'generic' && !!f.repEvery.value;
@@ -823,7 +832,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
       const draft = draft0.projectId === '__new' ? { ...draft0, projectId: null } : draft0;
       const total = S.totalMinutes(draft);
       const p = S.params(draft, s);
-      $('.calc', dlg).textContent = kind === 'reading'
+      $('.calc', dlg).textContent = kind === 'reading' && draft.reading?.format === 'audio'
+        ? `≈ ${T.fmtDur(total)} of listening (${T.fmtDur(draft.reading.pages)} of audio at ×${+(draft.reading.speed / 60).toFixed(2)}) · ≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`
+        : kind === 'reading'
         ? `≈ ${T.fmtDur(total)} of reading · ${+(S.pagesPerHour(draft.reading)).toFixed(1)} pages/hour · ≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`
         : draft.repeat ? `≈ ${Math.ceil(draft.repeat.minutes / p.chunk)} session${Math.ceil(draft.repeat.minutes / p.chunk) > 1 ? 's' : ''} of up to ${p.chunk} min each ${draft.repeat.every}, until ${T.format(draft.deadline - 1, tz, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`
           : `≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`;
@@ -1911,7 +1922,7 @@ export function partialDialog(ctx, task, sess, opts = {}) {
         <p class="muted small" style="margin:0">“${esc(sess.label)}” · ${esc(when)}</p>
         ${opts.actualMin != null ? `<p class="small timer-note">⏱ You worked <b>${T.fmtDur(Math.round(opts.actualMin))}</b> of ${T.fmtDur(length)}. ${reading ? 'The pages below are an estimate at your current speed — correct them.' : 'Adjust how much got done if needed.'}</p>` : ''}
         ${reading ? `
-          <label class="field"><span>Pages read (of ${planned}: page ${pa}–${pb})</span>
+          <label class="field"><span>${task.reading?.format === 'audio' ? `Minutes of audio heard (of ${planned})` : `Pages read (of ${planned}: page ${pa}–${pb})`}</span>
             <div class="row"><input type="number" name="pages" min="0" max="${planned * 3}" step="1" value="${prevPages}" required autofocus style="width:7em"><span class="muted small pg-to"></span></div></label>`
         : `
           <label class="field"><span>How much of this session's work got done?</span>
@@ -1951,7 +1962,7 @@ export function partialDialog(ctx, task, sess, opts = {}) {
     $('.all-done', dlg)?.addEventListener('click', () => close({ allDone: true }));
     const fmt = (ms) => T.fmtTime(ms, tz, s.h12);
     const sync = () => {
-      if (reading) { const n = +f.pages.value || 0; $('.pg-to', dlg).textContent = f.pages.value === '' ? '' : n ? `read page ${pa}–${pa + n - 1}` : 'nothing read'; }
+      if (reading) { const n = +f.pages.value || 0; $('.pg-to', dlg).textContent = f.pages.value === '' ? '' : task.reading?.format === 'audio' ? (n ? T.fmtDur(n) + ' heard' : 'nothing heard') : n ? `read page ${pa}–${pa + n - 1}` : 'nothing read'; }
       else $('.pct-val', dlg).textContent = f.pct.value + '%';
       const on = f.split.checked;
       $('.split-box', dlg).style.display = on ? '' : 'none';

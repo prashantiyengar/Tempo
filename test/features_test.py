@@ -39,7 +39,7 @@ async def main():
         await page.click('#btn-new-task'); await page.wait_for_selector('dialog .task-form')
         await page.fill('dialog [name=title]', 'Guitar practice'); await page.fill('dialog [name=hours]', '3'); await page.fill('dialog [name=deadline]', '2026-10-23T17:00')
         await page.click('dialog .cat-host .cat-cur'); await page.click('dialog .cat-chip.add'); await page.fill('dialog .cat-name', 'Music')
-        await page.click('dialog .cat-new .sw:nth-child(6)'); await page.click('dialog .cat-save'); await page.wait_for_timeout(200)
+        await page.click('dialog .cat-new .sw-cur'); await page.click('dialog .cat-new .sw:nth-child(6)'); await page.click('dialog .cat-save'); await page.wait_for_timeout(200)
         print('2. chips:', await page.text_content('dialog .cat-host .cat-cur'), '| color row hidden:', await page.eval_on_selector('dialog .color-field', 'e => e.style.display === "none"'))
         await page.screenshot(path=f'{OUT}/f1-category-dialog.png')
         await page.click('dialog button[type=submit]'); await page.wait_for_timeout(2500)

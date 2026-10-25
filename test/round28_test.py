@@ -108,9 +108,9 @@ async def main():
         # task dialog
         await page.evaluate("document.querySelector('#btn-new-task').click()"); await page.wait_for_selector('dialog[open] .task-form')
         dl0 = await page.input_value('dialog[open] [name=deadline]')
-        await page.click('dialog[open] .es-add[data-add="1440"]'); await page.wait_for_timeout(100)
+        await page.evaluate("document.querySelector('dialog[open] .es-add[data-add=\"1440\"]').click()"); await page.wait_for_timeout(100)
         es1, dl1 = await page.input_value('dialog[open] [name=earliest]'), await page.input_value('dialog[open] [name=deadline]')
-        await page.click('dialog[open] .es-add[data-add="1440"]'); await page.wait_for_timeout(100)
+        await page.evaluate("document.querySelector('dialog[open] .es-add[data-add=\"1440\"]').click()"); await page.wait_for_timeout(100)
         es2, dl2 = await page.input_value('dialog[open] [name=earliest]'), await page.input_value('dialog[open] [name=deadline]')
         check('3d. task: the From ± buttons move only From, not the deadline', es2 > es1 and dl2 == dl1 == dl0, (dl0, es1, dl1, es2, dl2))
         await page.click('dialog[open] [data-close] >> nth=-1'); await page.wait_for_timeout(300)

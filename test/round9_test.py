@@ -30,8 +30,8 @@ async def main():
         print('1. since last:', await vals(), '| length', await page.text_content('dialog .dur-now'), '|', await page.text_content('dialog .since-note'))
         await page.screenshot(path=f'{OUT}/s1-since-last.png')
         # 2. minus shortcuts
-        await page.click('dialog .dur-add[data-add="-60"]'); a = await vals()
-        await page.click('dialog .dur-add[data-add="-30"]'); await page.click('dialog .dur-add[data-add="-10"]'); await page.click('dialog .dur-add[data-add="-5"]'); b2 = await vals()
+        await page.evaluate("document.querySelector('dialog .dur-add[data-add=\"-60\"]').click()"); a = await vals()
+        await page.evaluate("document.querySelector('dialog .dur-add[data-add=\"-30\"]').click()"); await page.evaluate("document.querySelector('dialog .dur-add[data-add=\"-10\"]').click()"); await page.evaluate("document.querySelector('dialog .dur-add[data-add=\"-5\"]').click()"); b2 = await vals()
         print('2. −1h →', a[2:], '| −30 −10 −5 →', b2[2:], '| length', await page.text_content('dialog .dur-now'))
         await page.fill('dialog [name=summary]', 'Sleep'); await page.click('dialog button[type=submit] >> nth=-1'); await page.wait_for_timeout(1500)
         sl = [e for e in g.events['me@example.com'].values() if e.get('summary') == 'Sleep']

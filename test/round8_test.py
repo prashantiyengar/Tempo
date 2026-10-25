@@ -59,8 +59,8 @@ async def main():
         await page.evaluate("globalThis.__off += 47 * 60000"); await page.keyboard.press('l'); await page.wait_for_selector('dialog [name=sTime]')
         print('4. fill since last:', await page.input_value('dialog [name=sTime]'), '→', await page.input_value('dialog [name=eTime]'), '| length', await page.text_content('dialog .dur-now'))
         # 5. length shortcuts (repeatable)
-        for _ in range(2): await page.click('dialog .dur-add[data-add="5"]')
-        await page.click('dialog .dur-add[data-add="15"]'); await page.click('dialog .dur-add[data-add="60"]')
+        for _ in range(2): await page.evaluate("document.querySelector('dialog .dur-add[data-add=\"5\"]').click()")
+        await page.evaluate("document.querySelector('dialog .dur-add[data-add=\"15\"]').click()"); await page.evaluate("document.querySelector('dialog .dur-add[data-add=\"60\"]').click()")
         print('5. after +5 +5 +15 +1h:', await page.input_value('dialog [name=eTime]'), '| length', await page.text_content('dialog .dur-now'))
         await page.screenshot(path=f'{OUT}/f3-fill-since-last.png')
         await page.fill('dialog [name=summary]', 'Email catch-up'); await page.click('dialog button[type=submit] >> nth=-1'); await page.wait_for_timeout(1500)
@@ -69,7 +69,7 @@ async def main():
         # quick create length chips
         cols = await page.query_selector_all('.tg-col'); box = await cols[3].bounding_box(); hh = await page.evaluate('window.__tempo.app.state.settings.hourHeight')
         await page.mouse.move(box['x'] + 20, box['y'] + 16 * hh + 2); await page.mouse.down(); await page.mouse.move(box['x'] + 20, box['y'] + 16.5 * hh - 2, steps=5); await page.mouse.up()
-        await page.wait_for_selector('.popover .qc'); await page.click('.popover .dur-add[data-add="30"]'); await page.click('.popover .dur-add[data-add="30"]')
+        await page.wait_for_selector('.popover .qc'); await page.evaluate("document.querySelector('.popover .dur-add[data-add=\"30\"]').click()"); await page.evaluate("document.querySelector('.popover .dur-add[data-add=\"30\"]').click()")
         print('   quick create after +30 +30:', await page.text_content('.popover .qc-when')); await page.keyboard.press('Escape')
 
         # 6. icons

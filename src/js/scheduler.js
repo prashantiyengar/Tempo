@@ -526,7 +526,14 @@ export function sessions(task) {
     idx++;
     const icon = task.categoryIcon ? `${task.categoryIcon} ` : '';
     let label;
-    if (task.kind === 'reading') {
+    if (task.kind === 'reading' && task.reading?.format === 'audio') {
+      // an audiobook: "pages" are minutes of audio — labels show where you are in it (h:mm)
+      const r = task.reading, hm = (m) => `${Math.floor(m / 60)}:${String(Math.round(m % 60)).padStart(2, '0')}`;
+      const base = Math.max(0, (+r.startPage || 1) - 1); // minutes already heard before the plan
+      const a = base + Math.round((cum / total) * r.pages), b = base + Math.min(r.pages, Math.round(((cum + mins) / total) * r.pages));
+      label = `${icon}${task.title} 🎧 ${hm(a)}–${hm(Math.max(a, b))}, task ${idx}/${N}${c.partial ? ' (partly done)' : ''}`;
+      c.pages = [a + 1, Math.max(a + 1, b)];
+    } else if (task.kind === 'reading') {
       const r = task.reading;
       const base = r.labels === 'relative' ? 1 : (+r.startPage || 1);
       const a = base + Math.round((cum / total) * r.pages);

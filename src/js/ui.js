@@ -268,3 +268,62 @@ export function linkRange(a, b, { minGap = 0 } = {}) {
     prev = cur;
   });
 }
+
+// ---------- −/+ time buttons: a small − and + next to a time; tapping one shows the steps (5, 10, 15, 30 min, 1 h —
+// the same both ways) for a moment, and they fold away again a few seconds after the last use ----------
+export const NUDGE_STEPS = { min: [5, 10, 15, 30, 60], day: [15, 60, 1440] };
+const nLab = (m) => (m >= 1440 ? `${m / 1440}d` : m >= 60 ? `${m / 60}h` : `${m}m`);
+export function nudgeHTML(cls, kind = 'min') {
+  const steps = NUDGE_STEPS[kind] || NUDGE_STEPS.min;
+  const set = (sign) => `<span class="ndg-set" data-sign="${sign}" hidden>${steps.map((m) => `<button type="button" class="${cls} ${sign < 0 ? 'minus' : ''}" data-add="${sign * m}" title="${sign < 0 ? '−' : '+'}${nLab(m)}">${sign < 0 ? '−' : '+'}${nLab(m)}</button>`).join('')}</span>`;
+  return `<span class="nudges ndg"><button type="button" class="ndg-t" data-sign="-1" title="Earlier — pick how much" aria-label="Earlier">−</button><button type="button" class="ndg-t" data-sign="1" title="Later — pick how much" aria-label="Later">+</button>${set(-1)}${set(1)}</span>`;
+}
+const NDG_MS = 3500;
+function ndgShow(box, sign) {
+  for (const s of box.querySelectorAll('.ndg-set')) s.hidden = sign == null || +s.dataset.sign !== sign;
+  for (const t of box.querySelectorAll('.ndg-t')) t.classList.toggle('on', sign != null && +t.dataset.sign === sign);
+  box.classList.toggle('open', sign != null);
+  // keep the steps inside the popup / dialog: open to the left when there's no room on the right
+  const set = sign != null && box.querySelector(`.ndg-set[data-sign="${sign}"]`);
+  if (set) { set.style.left = '0'; set.style.right = 'auto'; const lim = (box.closest('.popover, dialog') || document.documentElement).getBoundingClientRect().right - 6; if (set.getBoundingClientRect().right > lim) { set.style.left = 'auto'; set.style.right = '0'; } }
+  clearTimeout(box._ndgT);
+  if (sign != null) box._ndgT = setTimeout(() => ndgShow(box, null), NDG_MS);
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest?.('.ndg-t');
+    if (t) { const box = t.closest('.ndg'); const sign = +t.dataset.sign; ndgShow(box, box.classList.contains('open') && t.classList.contains('on') ? null : sign); return; }
+    const step = e.target.closest?.('.ndg-set button');
+    if (step) { const box = step.closest('.ndg'); clearTimeout(box._ndgT); box._ndgT = setTimeout(() => ndgShow(box, null), NDG_MS); }
+  }, true);
+}
+
+// ---------- Colour pickers: just the chosen colour (like the category chips); tap it to show the colours, pick one
+// and they fold away ----------
+export function compactSwatches(sw) {
+  if (sw.dataset.cp) return;
+  sw.dataset.cp = '1';
+  const wrap = document.createElement('span'); wrap.className = 'sw-pick';
+  const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'sw-cur'; btn.title = 'Colour — tap to change'; btn.setAttribute('aria-label', 'Colour — tap to change');
+  sw.replaceWith(wrap); wrap.append(btn, sw); sw.classList.add('sw-pop'); sw.hidden = true;
+  const paint = () => {
+    const r = sw.querySelector('input[type=radio]:checked'), i = r?.parentElement?.querySelector('i');
+    const dot = i ? i.cloneNode(false) : document.createElement('i');
+    if (!i) dot.style.background = r?.value || '#888';
+    dot.classList.add('sw-dot');
+    btn.replaceChildren(dot, Object.assign(document.createElement('span'), { className: 'sw-caret', textContent: '▾' }));
+  };
+  paint();
+  btn.addEventListener('click', () => {
+    const open = sw.hidden; document.querySelectorAll('.sw-pop:not([hidden])').forEach((x) => (x.hidden = true)); sw.hidden = !open;
+    if (open) { sw.classList.remove('right'); const r = sw.getBoundingClientRect(); if (r.right > innerWidth - 8) sw.classList.add('right'); }
+  });
+  sw.addEventListener('change', (e) => { paint(); if (e.target.type === 'radio' && !e.target.classList.contains('sw-custom-radio')) sw.hidden = true; });
+  sw.addEventListener('input', paint);
+}
+if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
+  const scan = (root) => { if (root.nodeType !== 1) return; if (root.matches?.('.swatches')) compactSwatches(root); root.querySelectorAll?.('.swatches').forEach(compactSwatches); };
+  const start = () => { scan(document.body); new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) scan(n); }).observe(document.body, { childList: true, subtree: true }); };
+  if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
+  document.addEventListener('pointerdown', (e) => { if (!e.target.closest?.('.sw-pick')) document.querySelectorAll('.sw-pop:not([hidden])').forEach((x) => (x.hidden = true)); }, true);
+}

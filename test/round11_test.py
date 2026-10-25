@@ -28,7 +28,7 @@ async def main():
         await page.mouse.move(box['x'] + 20, box['y'] + 15 * hh + 2); await page.mouse.down(); await page.mouse.move(box['x'] + 20, box['y'] + 16 * hh - 2, steps=5); await page.mouse.up()
         await page.wait_for_selector('.popover .qc')
         await page.fill('.popover input[name=title]', 'Odd minute'); await page.fill('.popover [name=qs]', '15:07'); await page.dispatch_event('.popover [name=qs]', 'change')
-        await page.click('.popover .nudge .dur-add[data-add="-10"]')
+        await page.evaluate("document.querySelector('.popover .dur-add[data-add=\"-10\"]').click()")
         print('1. quick create:', await page.text_content('.popover .qc-when'), '| nudge groups:', await page.eval_on_selector_all('.popover .nudge', 'e => e.length'), '| Now buttons:', await page.eval_on_selector_all('.popover .now-btn', 'e => e.length'))
         await page.screenshot(path=f'{OUT}/a0-quick-create.png')
         await page.click('.popover button[type=submit]'); await page.wait_for_timeout(1500)

@@ -12,6 +12,7 @@ import * as C from './categories.js';
 import * as AC from './accounts.js';
 import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
 import { $, $$, esc, el, toast as uiToast, choose, popover, closePopover, download, modal, setHTML, setQuickTz } from './ui.js';
+import * as UI from './ui.js';
 import * as RV from './review.js';
 import { parseTask } from './parse.js';
 import { createApi, AI_PROMPT } from './api.js';
@@ -292,6 +293,7 @@ function renderTimeGrid(days, items) {
   const deadlines = st().tasks.filter((t) => !t.archived && Number.isFinite(+t.deadline) && +t.deadline > 0 && S.progress(t).pct < 100);
   const drawErrors = [];
   const toNow = app.toNowIt = toNowItem(timed);
+  $('#fab')?.classList.toggle('has-tonow', !!toNow && days.includes(todayK));
 
   const root = el(`<div class="tg" style="--hh:${hh}px;--ncol:${days.length}">
     <div class="tg-head">
@@ -587,9 +589,10 @@ function toNowItem(timed) {
 function wireToNow(root) {
   $$('[data-tonow]', root).forEach((b) => {
     b.addEventListener('pointerdown', (e) => e.stopPropagation());
-    b.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const it = app.toNowIt; if (!it || it.key !== b.dataset.tonow) return;
+    b.addEventListener('click', (e) => { e.stopPropagation(); const it = app.toNowIt; if (it && it.key === b.dataset.tonow) extendToNow(it); });
+  });
+}
+async function extendToNow(it) {
       const end = Math.floor(Date.now() / T.MIN) * T.MIN;
       try {
         if (it.kind === 'chunk') {
@@ -604,8 +607,6 @@ function wireToNow(root) {
         await afterEventChange();
         toast(`“${it.title}” now runs until ${T.fmtTime(end, tz(), set().h12)}`);
       } catch (err) { handleError(err); render(); }
-    });
-  });
 }
 
 // ======================================================================================
@@ -668,7 +669,7 @@ function renderSidebar() {
     return `<button class="task-row ${complete ? 'complete' : ''} ${t.projectId ? 'in-proj' : ''}" data-task="${t.id}" style="--c:${t.color}">
       <span class="rank" title="Rank ${t.rank}">${t.rank}</span>
       <span class="tr-main">
-        <span class="tr-title">${t.categoryIcon ? esc(t.categoryIcon) + ' ' : (t.kind === 'reading' ? '📖 ' : '')}${esc(t.title)}${warn ? ' <span class="warn-ic" title="Not enough time before the deadline">⚠</span>' : ''}${late ? ' <span class="late-ic" title="Runs into the safety margin before the deadline">◔</span>' : ''}${timer?.taskId === t.id ? ' <span title="Timer running">⏱</span>' : ''}</span>
+        <span class="tr-title">${t.categoryIcon ? esc(t.categoryIcon) + ' ' : (t.kind === 'reading' ? (t.reading?.format === 'audio' ? '🎧 ' : '📖 ') : '')}${esc(t.title)}${warn ? ' <span class="warn-ic" title="Not enough time before the deadline">⚠</span>' : ''}${late ? ' <span class="late-ic" title="Runs into the safety margin before the deadline">◔</span>' : ''}${timer?.taskId === t.id ? ' <span title="Timer running">⏱</span>' : ''}</span>
         <span class="tr-meta">${t.categoryId ? `<span class="tr-cat">${esc(C.catById(set(), t.categoryId)?.name || t.categoryName || '')}</span> · ` : ''}${esc(meta)}${waiting.length ? ` · ⏳ after ${esc(waiting.join(', '))}` : next && !complete ? ` · next ${esc(T.format(next.start, tz(), { weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: set().h12 }))}` : ''}</span>
         <span class="bar"><i style="width:${p.pct}%"></i></span>
       </span></button>`;
@@ -714,7 +715,7 @@ function libraryRows() {
     const fin = taskFinishedAt(t, now);
     const from = done.length ? Math.min(...done.map((c) => c.start)) : null;
     const sessions = done.map((c) => [c.start, Math.min(c.end, now)]);
-    return { t, title: t.title, pages, total: +r.pages || 0, read: Math.round(pages * Math.min(100, p.pct) / 100), pct: Math.round(p.pct), mins, from, to: fin || (from ? now : null), finished: !!fin, sessions, color: t.color };
+    return { t, audio: r.format === 'audio', title: t.title, pages, total: +r.pages || 0, read: Math.round(pages * Math.min(100, p.pct) / 100), pct: Math.round(p.pct), mins, from, to: fin || (from ? now : null), finished: !!fin, sessions, color: t.color };
   }).sort((a, b) => (b.from || b.t.created || 0) - (a.from || a.t.created || 0));
 }
 // Books on a timeline: one row each (overlapping books sit on their own rows), with a mark for each reading session
@@ -738,9 +739,9 @@ function libraryTimeline(rows) {
 async function openLibrary() {
   const rows = libraryRows(), z = tz(), fmt = (t) => T.format(t, z, { day: 'numeric', month: 'short', year: 'numeric' });
   const read = rows.filter((r) => r.finished), now = rows.filter((r) => !r.finished && r.from), next = rows.filter((r) => !r.from);
-  const tr = (r) => `<tr data-task="${esc(r.t.id)}"><td><span class="lib-dot" style="background:${esc(r.color || '#7c5cff')}"></span><b>${esc(r.title)}</b></td><td>${r.finished ? r.pages : `${r.read} / ${r.pages}`} pp.</td><td>${r.from ? `${esc(fmt(r.from))} – ${r.finished ? esc(fmt(r.to)) : 'now'}` : '<span class="muted">not started</span>'}</td><td>${r.mins ? esc(T.fmtDur(Math.round(r.mins))) : '—'}</td><td>${r.finished ? '✓' : `${r.pct}%`}</td></tr>`;
+  const tr = (r) => `<tr data-task="${esc(r.t.id)}"><td><span class="lib-dot" style="background:${esc(r.color || '#7c5cff')}"></span><b>${esc(r.title)}</b></td><td>${r.audio ? `🎧 ${r.finished ? T.fmtDur(r.pages) : `${T.fmtDur(r.read)} / ${T.fmtDur(r.pages)}`}` : `${r.finished ? r.pages : `${r.read} / ${r.pages}`} pp.`}</td><td>${r.from ? `${esc(fmt(r.from))} – ${r.finished ? esc(fmt(r.to)) : 'now'}` : '<span class="muted">not started</span>'}</td><td>${r.mins ? esc(T.fmtDur(Math.round(r.mins))) : '—'}</td><td>${r.finished ? '✓' : `${r.pct}%`}</td></tr>`;
   const table = (list, head) => list.length ? `<h3 class="gd-h">${head} <span class="muted small">${list.length}</span></h3><table class="lib-t"><thead><tr><th>Book</th><th>Pages</th><th>Read</th><th>Time</th><th></th></tr></thead><tbody>${list.map(tr).join('')}</tbody></table>` : '';
-  const totPages = read.reduce((a, r) => a + r.pages, 0) + now.reduce((a, r) => a + r.read, 0), totMin = rows.reduce((a, r) => a + r.mins, 0);
+  const totPages = read.filter((r) => !r.audio).reduce((a, r) => a + r.pages, 0) + now.filter((r) => !r.audio).reduce((a, r) => a + r.read, 0), totMin = rows.reduce((a, r) => a + r.mins, 0);
   await modal(`<div class="library"><header class="dlg-head"><h2>📚 Library</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
     <p class="muted small" style="margin:0">${read.length} book${read.length === 1 ? '' : 's'} read · ${now.length} reading · ${totPages.toLocaleString()} pages · ${T.fmtDur(Math.round(totMin))} of reading</p>
     ${libraryTimeline(rows)}
@@ -1533,8 +1534,13 @@ function onGridPointerDown(e) {
     b = Math.min(b, 1440);
     paint();
   }, () => {
-    if (!moved) { a = m0; b = Math.min(1440, m0 + set().defaultEventMinutes); paint(); }
-    quickCreate(ghost.getBoundingClientRect(), { start: msAt(day, a), end: msAt(day, b), allDay: false });
+    let sel = { start: msAt(day, a), end: msAt(day, b), allDay: false };
+    if (!moved) {
+      a = m0; b = Math.min(1440, m0 + set().defaultEventMinutes);
+      sel = smartSlot(msAt(day, m0), { start: msAt(day, a), end: msAt(day, b), allDay: false });
+      a = Math.round((sel.start - T.dayStart(day, tz())) / T.MIN); b = Math.round((sel.end - T.dayStart(day, tz())) / T.MIN); paint();
+    }
+    quickCreate(ghost.getBoundingClientRect(), sel);
   });
 }
 
@@ -1584,12 +1590,14 @@ function touchDown(e, where) {
     if (where === 'month') { app.cursor = cell.dataset.day; app.view = 'day'; render(); return; }
     const day = col.dataset.day;
     const m = Math.floor(minuteAt(y0, col) / 30) * 30;
-    const a = Math.min(m, 1440 - 30), b = Math.min(1440, a + set().defaultEventMinutes);
+    let a = Math.min(m, 1440 - 30), b = Math.min(1440, a + set().defaultEventMinutes);
+    const sel = smartSlot(msAt(day, Math.floor(minuteAt(y0, col))), { start: msAt(day, a), end: msAt(day, b), allDay: false });
+    a = Math.round((sel.start - T.dayStart(day, tz())) / T.MIN); b = Math.round((sel.end - T.dayStart(day, tz())) / T.MIN);
     const ghost = el(`<div class="ev ghost-sel"><div class="ev-t">(New)</div></div>`);
     ghost.style.top = (a / 60) * set().hourHeight + 'px';
     ghost.style.height = Math.max(14, ((b - a) / 60) * set().hourHeight - 2) + 'px';
     col.appendChild(ghost);
-    quickCreate(ghost.getBoundingClientRect(), { start: msAt(day, a), end: msAt(day, b), allDay: false });
+    quickCreate(ghost.getBoundingClientRect(), sel);
   };
   function cleanup(all) {
     done = done || all;
@@ -1758,6 +1766,7 @@ function quickCreate(rect, sel, onClose) {
     <form class="qc" novalidate>
       <input name="title" placeholder="Add title" autofocus autocomplete="off">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
+      ${sel.note ? `<div class="qc-note muted small">⇕ ${esc(sel.note)}</div>` : ''}
       ${sel.allDay ? '' : (() => {
         return `<div class="qc-times">
           <div class="qc-t"><span class="qc-l">From</span><input type="time" name="qs" step="60"><button type="button" class="now-btn st-now" title="Start now">Now</button>${nudges('st-add')}</div>
@@ -1860,10 +1869,7 @@ function quickCreate(rect, sel, onClose) {
 }
 
 // Compact −/+ time buttons: two joined groups, e.g. [−1h|−30|−10|−5] [+5|+15|+30|+1h]
-function nudges(cls) {
-  const b = (m, l) => `<button type="button" class="${cls} ${m < 0 ? 'minus' : ''}" data-add="${m}" title="${m < 0 ? '' : '+'}${m} min">${l}</button>`;
-  return `<span class="nudges"><span class="nudge">${b(-60, '−1h')}${b(-30, '−30')}${b(-10, '−10')}${b(-5, '−5')}</span><span class="nudge">${b(5, '+5')}${b(15, '+15')}${b(30, '+30')}${b(60, '+1h')}</span></span>`;
-}
+const nudges = (cls) => UI.nudgeHTML(cls);
 
 
 function selBody(sel, title, calId) {
@@ -2168,7 +2174,7 @@ async function partialSession(task, sess, opts = {}) {
 
 // Reading speed learned from reported pages and the time spent.
 function learnSpeed(task, pages, minutes) {
-  if (task.kind !== 'reading' || !(pages > 0) || !(minutes >= 5)) return { task };
+  if (task.kind !== 'reading' || task.reading?.format === 'audio' || !(pages > 0) || !(minutes >= 5)) return { task };
   let t = { ...task, speedLog: [...(task.speedLog || []), { pages, minutes: Math.round(minutes), at: Date.now() }].slice(-8) };
   if (set().learnSpeed === false) return { task: t };
   const learned = S.learnedSpeed(t), cur = S.pagesPerHour(t.reading || {});
@@ -2643,6 +2649,23 @@ async function fillGap(start, end) {
 const LOOKBACK = 12 * T.HOUR;
 // `ref` = the time to look back from (the start of the slot you're creating; default: now). The new start is that
 // event's end plus the buffer from Settings (0–15 min).
+// Tapping an empty spot between two events: a gap of up to 4 hours is filled from the end of the one before
+// ("since last event") to the start of the next ("till next event"); a longer gap gets the side the tap is closer to.
+function smartSlot(tapAt, sel) {
+  const s = set(), z = tz(), len = Math.max(5, +s.defaultEventMinutes || 60) * T.MIN;
+  const bufA = Math.max(0, Math.min(15, +s.sinceLastBuffer || 0)) * T.MIN, bufB = Math.max(0, Math.min(15, +(s.tillNextBuffer ?? s.sinceLastBuffer) || 0)) * T.MIN;
+  const all = [...(app.items?.values?.() || [])].filter((x) => !x.allDay && !x.declined && x.end > x.start && A.isOccupying(x, s));
+  if (all.some((x) => x.start <= tapAt && x.end > tapAt)) return sel; // (on an event: nothing to fill)
+  const before = all.filter((x) => x.end <= tapAt && x.end > tapAt - LOOKBACK), after = all.filter((x) => x.start > tapAt && x.start < tapAt + LOOKBACK);
+  if (!before.length || !after.length) return sel;
+  const prev = before.reduce((p, x) => (x.end > p.end ? x : p)), next = after.reduce((p, x) => (x.start < p.start ? x : p));
+  const a = prev.end + bufA, b = next.start - bufB;
+  if (b - a < 5 * T.MIN) return sel;
+  const fmt = (ms) => T.fmtTime(ms, z, s.h12);
+  if (next.start - prev.end <= 4 * T.HOUR) return { ...sel, start: a, end: b, note: `Fills the gap: since “${prev.title}” (${fmt(prev.end)}) till “${next.title}” (${fmt(next.start)})` };
+  if (tapAt - prev.end <= next.start - tapAt) return { ...sel, start: a, end: Math.min(b, a + len), note: `Starts when “${prev.title}” ended (${fmt(prev.end)})` };
+  return { ...sel, start: Math.max(a, b - len), end: b, note: `Ends when “${next.title}” starts (${fmt(next.start)})` };
+}
 async function lastEventEnd({ ref = null, exclude = null } = {}) {
   const now = nowMin(), z = tz();
   const at = ref ?? now, day = T.dayKey(at, z);
@@ -4069,6 +4092,7 @@ function bindToolbar() {
   $('#scrim').onclick = closeDrawer;
   $('#side').addEventListener('click', (e) => { if (e.target.closest('.md, .task-row, #connect-cta, .create .btn')) closeDrawer(); });
   $('#fab').onclick = () => sheetMenu([
+    ...(app.toNowIt && ['day', '3day', 'week'].includes(app.view) ? [{ ic: '⟶', label: `Extend “${app.toNowIt.title.length > 30 ? app.toNowIt.title.slice(0, 29) + '…' : app.toNowIt.title}” until now`, run: () => extendToNow(app.toNowIt) }] : []),
     { ic: '+', label: 'New event', run: () => $('#btn-new-event').click() },
     { ic: '⧉', label: 'New task (split into sessions)', run: () => newTask({ kind: 'generic' }) },
     { ic: '📖', label: 'New reading plan', run: () => newTask({ kind: 'reading' }) },
