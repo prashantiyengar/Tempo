@@ -1326,8 +1326,17 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .note-t { white-space: pre-wrap; font-size: 13px; }
 .note-m { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .day-notes .dn-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.tonow-btn { position: absolute; right: 4px; z-index: 6; font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--c, var(--accent)); color: var(--c, var(--accent)); background: var(--panel); cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.tonow-btn { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 140px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 99px; border: 2px solid var(--c, var(--accent)); color: var(--ink); background: var(--panel); cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
 .tonow-btn:hover { background: color-mix(in srgb, var(--c, var(--accent)) 14%, var(--panel)); }
+@media (max-width: 900px) { .tonow-btn { bottom: 12px; max-width: calc(100% - 160px); font-size: 13px; padding: 9px 14px; } }
+.tonow-mark { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--c, var(--accent)); z-index: 4; pointer-events: none; opacity: .8; }
+.gp-settle { font-size: 11px; opacity: .85; }
+.gd-proj { display: block; color: var(--muted); max-width: 680px; }
+.gd-ms { border-collapse: collapse; font-size: 12.5px; margin-bottom: 8px; }
+.gd-ms td, .gd-ms th { padding: 2px 8px 2px 0; text-align: left; vertical-align: middle; }
+.gd-ms th { font-size: 11px; color: var(--muted); font-weight: 600; }
+.gd-ms tr.got td { opacity: .55; }
+.gd-ms svg { display: block; }
 .dm-note.due { background: #ff6b6b !important; color: #fff; animation: due-pulse 1.6s ease-in-out infinite; }
 @keyframes due-pulse { 50% { box-shadow: 0 0 0 3px rgba(255,107,107,.35); } }
 @media (prefers-reduced-motion: reduce) { .dm-note.due { animation: none; } }
@@ -1345,3 +1354,16 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .note-for-in { font-size: 12px; display: inline-flex; align-items: center; gap: 3px; }
 .note-for-in input { font-size: 12px; padding: 2px 4px; max-width: 140px; }
 .note-edit-f textarea { margin-top: 4px; }
+
+.lib-open { display: block; margin: 0 0 6px; }
+.tl-arch { margin-top: 6px; }
+.tl-arch summary { cursor: pointer; padding: 4px 0; }
+.lib-tl { display: block; color: var(--muted); margin: 6px 0 4px; }
+.lib-t { border-collapse: collapse; width: 100%; font-size: 13px; }
+.lib-t th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 2px 8px 2px 0; }
+.lib-t td { padding: 4px 8px 4px 0; border-top: 1px solid var(--line); }
+.lib-t tr[data-task] { cursor: pointer; }
+.lib-t tr[data-task]:hover td { background: var(--off); }
+.lib-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.gd-proj, .lib-tl, .dr-chart, .gd-ms, .lib-t { flex-shrink: 0; }
+.gd-proj { height: auto; aspect-ratio: 640 / 230; }

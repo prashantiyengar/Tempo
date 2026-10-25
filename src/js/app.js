@@ -121,7 +121,7 @@ function eventItem(ev) {
   const me = ev.attendees?.find((a) => a.self);
   const item = {
     key: `${ev._calId}|${ev.id}`, kind: 'event', title: ev.summary || '(No title)', ...iv,
-    color: ev._color || (ev.colorId ? G.EVENT_COLORS[ev.colorId] : calColor(ev._calId)), ev,
+    color: ev._color || (ev.colorId ? G.EVENT_COLORS[ev.colorId] : (C.catById(set(), C.eventCategoryId(ev, st().eventCats))?.color || calColor(ev._calId))), ev,
     editable: EV.canEdit(ev, st()), declined: me?.responseStatus === 'declined', tentative: me?.responseStatus === 'tentative',
     catId: C.eventCategoryId(ev, st().eventCats),
   };
@@ -369,11 +369,13 @@ function renderTimeGrid(days, items) {
     if (k === todayK) col.appendChild(el(`<div class="now" style="top:${(T.minutesOfDay(Date.now(), z) / 60) * hh}px"></div>`));
     if (toNow && T.dayKey(toNow.end - 1, z) === k) {
       const m = T.minutesOfDay(toNow.end, z) || 1440;
-      col.appendChild(el(`<button type="button" class="tonow-btn" data-tonow="${esc(toNow.key)}" style="top:${(m / 60) * hh + 2}px;--c:${toNow.color}" title="Still going? Extend “${esc(toNow.title)}” until now">⟶ until now</button>`));
+      col.appendChild(el(`<div class="tonow-mark" style="top:${(m / 60) * hh}px;--c:${toNow.color}" title="“${esc(toNow.title)}” ended here"></div>`));
     }
     colsEl.appendChild(col);
   }
 
+  // the "until now" button floats at the bottom centre of the calendar, easy to reach (also on phones)
+  if (toNow && days.includes(todayK)) root.appendChild(el(`<button type="button" class="tonow-btn" data-tonow="${esc(toNow.key)}" style="--c:${toNow.color}" title="Still going? Make “${esc(toNow.title)}” end now">⟶ Extend “${esc(toNow.title.length > 28 ? toNow.title.slice(0, 27) + '…' : toNow.title)}” until now</button>`));
   if (drawErrors.length) { console.error('Tempo: items not drawn', drawErrors); toast(`${drawErrors.length} item(s) couldn't be drawn: ${drawErrors[0][0]} — ${drawErrors[0][1].message}`, { ms: 8000 }); }
 
   $$('.dn', root).forEach((b) => b.addEventListener('click', () => { app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
@@ -575,9 +577,10 @@ async function dayNotes(k) {
 // ======================================================================================
 function toNowItem(timed) {
   const now = Date.now();
-  const busyNow = timed.some((it) => it.start <= now && it.end > now && !it.declined && it.ev?.transparency !== 'transparent' && !it.ev?.extendedProperties?.private?.tempoSleep && !(it.kind === 'chunk' && it.sess?.kind === 'waived'));
+  // (sleep blocks count too: you slept in, or stayed in bed — extend the sleep until now)
+  const busyNow = timed.some((it) => it.start <= now && it.end > now && !it.declined && it.ev?.transparency !== 'transparent' && !(it.kind === 'chunk' && it.sess?.kind === 'waived'));
   if (busyNow) return null;
-  const c = timed.filter((it) => it.editable && !it.declined && it.end <= now && it.end >= now - 4 * T.HOUR && now - it.end >= T.MIN && !it.ev?.extendedProperties?.private?.tempoSleep && !(it.kind === 'chunk' && (it.sess?.kind === 'waived' || it.status === 'waived')))
+  const c = timed.filter((it) => it.editable && !it.declined && it.end <= now && it.end >= now - 4 * T.HOUR && now - it.end >= T.MIN && !(it.kind === 'chunk' && (it.sess?.kind === 'waived' || it.status === 'waived')))
     .sort((a, b) => b.end - a.end);
   return c[0] || null;
 }
@@ -644,7 +647,12 @@ function renderSidebar() {
   $('#connect-cta')?.addEventListener('click', openConnect);
 
   const now = Date.now();
-  const tasks = S.sortTasks(st().tasks.filter((t) => !t.archived));
+  // finished tasks stay in the list for a week, then move to "Finished" (still there, just folded away)
+  const filed = (t) => !t.repeat && taskFinishedAt(t, now) && taskFinishedAt(t, now) < now - 7 * T.DAY;
+  const allTasks = S.sortTasks(st().tasks.filter((t) => !t.archived));
+  const projDone = (pid) => { const kids = allTasks.filter((x) => x.projectId === pid); return kids.length && kids.every(filed); };
+  const isFiled = (t) => (t.projectId && (set().projects || []).some((p) => p.id === t.projectId) ? projDone(t.projectId) : filed(t));
+  const tasks = allTasks.filter((t) => !isFiled(t)), old = allTasks.filter(isFiled);
   const row = (t) => {
     const p = S.progress(t, now);
     const ss = S.sessions(t);
@@ -678,11 +686,68 @@ function renderSidebar() {
     html.push(`<div class="proj-head" title="${proj.sequential ? 'Steps run in order' : 'Project'}">📁 <b>${esc(proj.name)}</b> <span class="muted small">${doneKids}/${kids.length} done${proj.sequential ? ' · in order' : ''}</span></div>`);
     for (const k of kids) { html.push(row(k)); seen.add(k.id); }
   }
-  setHTML($('#task-list'), tasks.length ? html.join('') : `<p class="muted small empty">No tasks yet. Type one above, or use + Task — Tempo splits it into sessions around your calendar.</p>`);
+  const books = st().tasks.filter((t) => t.kind === 'reading');
+  const top = books.length ? `<button type="button" class="link small lib-open" title="Books you've read and are reading">📚 Library (${books.length})</button>` : '';
+  const oldHTML = old.length ? `<details class="tl-arch" ${app.archOpen ? 'open' : ''}><summary class="muted small">Finished more than a week ago (${old.length})</summary>${old.map(row).join('')}</details>` : '';
+  setHTML($('#task-list'), (tasks.length || old.length) ? top + html.join('') + oldHTML : `${top}<p class="muted small empty">No tasks yet. Type one above, or use + Task — Tempo splits it into sessions around your calendar.</p>`);
+  $('#task-list .tl-arch')?.addEventListener('toggle', (e) => { app.archOpen = e.target.open; });
+  $('#task-list .lib-open')?.addEventListener('click', () => { closeDrawer?.(); openLibrary(); });
   $$('#task-list .task-row').forEach((b) => b.addEventListener('click', () => editTask(st().tasks.find((t) => t.id === b.dataset.task))));
   renderLater();
 }
 
+// When a task was finished: marked finished, or the end of its last done session once all of it is done
+function taskFinishedAt(t, now = Date.now()) {
+  if (t.repeat) return null;
+  if (S.progress(t, now).pct < 100) return null;
+  const done = (t.frozen || []).filter((c) => c.status === 'done');
+  return t.completedAt || (done.length ? Math.max(...done.map((c) => c.end)) : null);
+}
+// ---------- Library: the books you've read and are reading ----------
+function libraryRows() {
+  const now = Date.now();
+  return st().tasks.filter((t) => t.kind === 'reading').map((t) => {
+    const r = t.reading || {}, p = S.progress(t, now);
+    const done = (t.frozen || []).filter((c) => c.status === 'done' && c.start < now);
+    const mins = done.reduce((a, c) => a + (c.actualMin || Math.max(0, Math.min(c.end, now) - c.start) / T.MIN), 0);
+    const pages = Math.max(0, (+r.pages || 0) - Math.max(0, (+r.startPage || 1) - 1));
+    const fin = taskFinishedAt(t, now);
+    const from = done.length ? Math.min(...done.map((c) => c.start)) : null;
+    const sessions = done.map((c) => [c.start, Math.min(c.end, now)]);
+    return { t, title: t.title, pages, total: +r.pages || 0, read: Math.round(pages * Math.min(100, p.pct) / 100), pct: Math.round(p.pct), mins, from, to: fin || (from ? now : null), finished: !!fin, sessions, color: t.color };
+  }).sort((a, b) => (b.from || b.t.created || 0) - (a.from || a.t.created || 0));
+}
+// Books on a timeline: one row each (overlapping books sit on their own rows), with a mark for each reading session
+function libraryTimeline(rows) {
+  const z = tz(), withT = rows.filter((r) => r.from);
+  if (!withT.length) return '<p class="muted small">The timeline fills in as you read.</p>';
+  const t0 = Math.min(...withT.map((r) => r.from)), t1 = Math.max(Date.now(), ...withT.map((r) => r.to));
+  const W = 680, Lw = 150, R = 48, rh = 24, Hh = withT.length * rh + 28, span = Math.max(T.DAY, t1 - t0);
+  const x = (t) => Lw + ((t - t0) / span) * (W - Lw - R);
+  const months = []; for (let k = T.dayKey(t0, z).slice(0, 7) + '-01'; T.dayStart(k, z) <= t1; k = T.addMonths(k, 1)) months.push(k);
+  const every = Math.ceil(months.length / 8);
+  return `<svg class="lib-tl" viewBox="0 0 ${W} ${Hh}" width="100%" role="img" aria-label="Which book was read when">
+    ${months.map((k, i) => { const xx = Math.max(Lw, x(T.dayStart(k, z))); return `<line x1="${xx}" x2="${xx}" y1="0" y2="${Hh - 18}" stroke="currentColor" opacity=".08"/>${i % every === 0 ? `<text x="${xx + 2}" y="${Hh - 6}" font-size="9" fill="currentColor" opacity=".6">${esc(T.format(T.dayStart(k, z), z, { month: 'short', year: '2-digit' }))}</text>` : ''}`; }).join('')}
+    ${withT.map((r, i) => { const y = i * rh + 4, a = x(r.from), b = Math.max(a + 3, x(r.to)); return `<g><title>${esc(`${r.title}: ${T.format(r.from, z, { day: 'numeric', month: 'short', year: 'numeric' })} – ${r.finished ? T.format(r.to, z, { day: 'numeric', month: 'short', year: 'numeric' }) : 'now'} · ${T.fmtDur(Math.round(r.mins))}`)}</title>
+      <text x="${Lw - 6}" y="${y + 14}" font-size="10.5" text-anchor="end" fill="currentColor">${esc(r.title.length > 24 ? r.title.slice(0, 23) + '…' : r.title)}</text>
+      <rect x="${a}" y="${y + 3}" width="${b - a}" height="${rh - 9}" rx="4" fill="${esc(r.color || '#7c5cff')}" opacity="${r.finished ? .85 : .45}"/>
+      ${r.sessions.map(([s0]) => `<rect x="${x(s0) - 0.75}" y="${y + 3}" width="1.5" height="${rh - 9}" fill="#fff" opacity=".7"/>`).join('')}
+      ${r.finished ? '' : `<text x="${b + 3}" y="${y + 14}" font-size="9" fill="currentColor" opacity=".7">reading</text>`}</g>`; }).join('')}
+  </svg>`;
+}
+async function openLibrary() {
+  const rows = libraryRows(), z = tz(), fmt = (t) => T.format(t, z, { day: 'numeric', month: 'short', year: 'numeric' });
+  const read = rows.filter((r) => r.finished), now = rows.filter((r) => !r.finished && r.from), next = rows.filter((r) => !r.from);
+  const tr = (r) => `<tr data-task="${esc(r.t.id)}"><td><span class="lib-dot" style="background:${esc(r.color || '#7c5cff')}"></span><b>${esc(r.title)}</b></td><td>${r.finished ? r.pages : `${r.read} / ${r.pages}`} pp.</td><td>${r.from ? `${esc(fmt(r.from))} – ${r.finished ? esc(fmt(r.to)) : 'now'}` : '<span class="muted">not started</span>'}</td><td>${r.mins ? esc(T.fmtDur(Math.round(r.mins))) : '—'}</td><td>${r.finished ? '✓' : `${r.pct}%`}</td></tr>`;
+  const table = (list, head) => list.length ? `<h3 class="gd-h">${head} <span class="muted small">${list.length}</span></h3><table class="lib-t"><thead><tr><th>Book</th><th>Pages</th><th>Read</th><th>Time</th><th></th></tr></thead><tbody>${list.map(tr).join('')}</tbody></table>` : '';
+  const totPages = read.reduce((a, r) => a + r.pages, 0) + now.reduce((a, r) => a + r.read, 0), totMin = rows.reduce((a, r) => a + r.mins, 0);
+  await modal(`<div class="library"><header class="dlg-head"><h2>📚 Library</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
+    <p class="muted small" style="margin:0">${read.length} book${read.length === 1 ? '' : 's'} read · ${now.length} reading · ${totPages.toLocaleString()} pages · ${T.fmtDur(Math.round(totMin))} of reading</p>
+    ${libraryTimeline(rows)}
+    ${table(now, 'Reading now')}${table(read, 'Read')}${table(next, 'Up next')}
+    ${rows.length ? '' : '<p class="muted small">Plan a book with 📖 and it shows up here as you read it.</p>'}
+  </div></div>`, (dlg, close) => { $$('.lib-t tr[data-task]', dlg).forEach((r) => (r.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === r.dataset.task)); })); }, { cls: 'wide' });
+}
 // ---------- "Later": things to schedule, but not yet (synced with your other devices like settings) ----------
 const laterList = () => set().later || [];
 async function saveLater(list, label) {
@@ -705,9 +770,11 @@ function renderProjects(tab = app.sideTab || 'tasks') {
   const n = $('#proj-n'); if (n) n.textContent = list.length ? String(list.filter((p) => !P.progress(p, st().tasks, now, projectEventDone).complete).length || '') : '';
   if (tab !== 'projects') return;
   const fmt = (ms) => T.format(ms, z, { weekday: 'short', day: 'numeric', month: 'short' });
-  setHTML(box, `<button type="button" class="btn small wide pj-new">+ New project</button>
-    ${list.length ? list.map((p) => {
-      const pr = P.progress(p, st().tasks, now, projectEventDone);
+  // finished projects stay for a week, then fold away under "Finished"
+  const doneAt = (pr) => Math.max(0, ...pr.rows.map((r) => (r.task ? taskFinishedAt(r.task, now) || 0 : r.st.end || 0)));
+  const prs = list.map((p) => ({ p, pr: P.progress(p, st().tasks, now, projectEventDone) }));
+  const oldP = prs.filter((x) => x.pr.complete && doneAt(x.pr) < now - 7 * T.DAY), curP = prs.filter((x) => !oldP.includes(x));
+  const card = ({ p, pr }) => {
       const nx = pr.next;
       const late = pr.rows.some((r) => r.late);
       const last = pr.rows.reduce((a, r) => Math.max(a, r.finish || r.st.end || 0), 0);
@@ -718,7 +785,9 @@ function renderProjects(tab = app.sideTab || 'tasks') {
         ${nx && !pr.complete ? `<span class="pj-next">Next: ${nx.st.kind === 'event' ? '📅' : '⧉'} ${esc(nx.st.title)}${nx.next ? ` · ${esc(fmt(nx.next))}` : ''}</span>` : ''}
         <span class="pj-dots">${pr.rows.map((r) => `<i class="${r.finished ? 'd' : r.pct ? 'p' : ''} ${r.st.kind}" title="${esc(r.st.title)} — ${r.finished ? 'done' : r.pct + '%'}"></i>`).join('')}</span>
       </button>`;
-    }).join('') : '<p class="muted small empty">A project is a chain of tasks and events — e.g. a thesis: research, a meeting, writing, a deadline. Create one to see its progress here.</p>'}`);
+  };
+  setHTML(box, `<button type="button" class="btn small wide pj-new">+ New project</button>
+    ${list.length ? curP.map(card).join('') + (oldP.length ? `<details class="tl-arch"><summary class="muted small">Finished more than a week ago (${oldP.length})</summary>${oldP.map(card).join('')}</details>` : '') : '<p class="muted small empty">A project is a chain of tasks and events — e.g. a thesis: research, a meeting, writing, a deadline. Create one to see its progress here.</p>'}`);
   $('.pj-new', box).onclick = () => openProject(null);
   $$('.pj-card', box).forEach((b) => (b.onclick = () => openProject(P.byId(set(), b.dataset.id))));
 }
@@ -984,7 +1053,7 @@ async function gameRefresh() {
     }
     for (const k of open) {
       const d = GM.dayXP(k, s, ctx, now);
-      const e = g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
+      const e = g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, lg: d.lg, nl: d.nl, f: d.f, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
       // a day without any XP drain: a bonus that grows with each clean day in a row
       if (drained && drained[k] > 0) e.dr = 1;
       if (drained && drained[k] === 0) {
@@ -1001,6 +1070,7 @@ async function gameRefresh() {
       const days = Array.from({ length: 7 }, (_, i) => g.ledger[T.addDays(wk, i)]).filter(Boolean);
       if (!days.length) continue;
       const w = GM.weekXP(wk, s, days);
+      w.busy = Math.round(w.busy * GM.settleFactor(s, GM.usedDays(s, T.addDays(wk, 7)))); // settling in applies to the week bonus too
       const xps = {}; for (let i = 0; i < 7; i++) { const k = T.addDays(wk, i), l = g.ledger[k]; if (l) xps[k] = { app: l.a, busy: l.b, life: l.l }; }
       const dr = GM.weekDrains(s, wk, xps, items, now, GM.drainScale(s, GM.levelAt(s, wk, z)));
       const W = g.weeks[wk] = { b: w.busy, fill: +w.fill.toFixed(3), pens: w.pens, drain: dr.total, dl: dr.lines }; changed = true;
@@ -1095,6 +1165,7 @@ function renderGamePanel() {
     <div class="gp-bar" title="${lv.into} / ${lv.span} XP to level ${lv.level + 1}"><i style="width:${pct}%;--tc:${tier.color}"></i></div>
     <div class="gp-body" ${collapsed ? 'hidden' : ''}>
       <div class="gp-sub">${lv.max ? 'Highest level reached!' : lv.capped ? `Enough XP for level ${lv.level + 1}` : `${lv.into.toLocaleString()} / ${lv.span.toLocaleString()} XP to level ${lv.level + 1}`}${lv.capped ? `<br><b class="xp-l">🔒 ${lv.lifeNeed.toLocaleString()} more life XP</b> to unlock level ${lv.level + 1}` : ''}</div>
+      ${d && d.f < 1 ? `<div class="gp-settle" title="Busy, leisure, sleep and app XP count in full in your first week, then less and less. Life growth always counts in full.">Settled in: busy & leisure XP ×${d.f.toFixed(2)} · <b class="xp-l">life growth ×1</b></div>` : ''}
       <div class="gp-mix" title="Your XP by type"><i class="xp-a-bg" style="width:${share(tot.app)}%"></i><i class="xp-b-bg" style="width:${share(tot.busy)}%"></i><i class="xp-l-bg" style="width:${share(tot.life)}%"></i></div>
       <div class="gp-types"><span class="xp-a">● App ${tot.app.toLocaleString()}</span><span class="xp-b">● Busy ${tot.busy.toLocaleString()}</span><span class="xp-l">● Life ${tot.life.toLocaleString()}</span>${tot.pen - tot.drain ? `<span class="xp-p">− ${(tot.pen - tot.drain).toLocaleString()} rescheduling</span>` : ''}${tot.clean ? `<span class="xp-c" title="Bonuses for days and weeks without XP drains">+ ${tot.clean.toLocaleString()} clean</span>` : ''}${tot.rec ? `<span class="xp-c" title="Drained XP won back with clean days in a row">+ ${tot.rec.toLocaleString()} won back</span>` : ''}${tot.drain ? `<span class="xp-p" title="XP drains (Settings → Game mode)">− ${tot.drain.toLocaleString()} drained</span>` : ''}</div>
       ${(() => { const r = app.gameRecover?.active; if (!r) return ''; const c = GM.cfg(set()), left1 = r.N1 - r.n, left2 = r.N2 - r.n;
@@ -1102,7 +1173,7 @@ function renderGamePanel() {
       ${(() => { const c = app.gameClean; if (!c) return ''; return `<div class="gp-clean ${c.day ? '' : 'broke'}" title="A day (and a week) without any XP drain earns a bonus that grows with each one in a row">🧹 Clean streak: <b>${c.days} day${c.days === 1 ? '' : 's'}</b> · <b>${c.weeks} week${c.weeks === 1 ? '' : 's'}</b><br><span class="small">${c.day ? `Keep today clean: <b class="xp-c">+${c.dayXP} XP</b> (${c.dayPct}% of today)` : 'An XP drain today — the day streak starts again tomorrow'}${c.week ? ` · a clean week earns ${c.weekPct}%` : ''} · cap ${c.cap}% at your rank</span></div>`; })()}
       <div class="gp-row"><span title="Days in a row you used Tempo">🔥 ${streak} day${streak === 1 ? '' : 's'}</span><span title="Total XP">⭐ ${tot.total.toLocaleString()} XP</span>${d?.potential?.total ? `<span title="Still to earn today">🎯 +${d.potential.total} today</span>` : ''}</div>
       ${d?.quests?.length ? `<div class="gp-q"><b>Today's quests</b>${d.quests.map((q) => `<div class="gp-qi ${q.ok ? 'ok' : ''}"><span>${q.ok ? '✅' : '⬜'} ${esc(q.label)}</span><span class="xp-${q.type[0]}">+${q.xp}</span><i style="width:${Math.min(100, (q.have / q.goal) * 100)}%"></i></div>`).join('')}</div>` : ''}
-      <div class="gp-row"><button type="button" class="link gp-more">Ranks, achievements & XP log</button></div>
+      <div class="gp-row"><button type="button" class="link gp-more">Road to 300, ranks, achievements & XP log</button></div>
     </div>`);
   $('.gp-head', box).onclick = () => { try { localStorage.setItem('tempo:gameCollapsed', collapsed ? '0' : '1'); } catch { /* storage blocked */ } renderGamePanel(); };
   $('.gp-more', box)?.addEventListener('click', gameDetails);
@@ -1119,12 +1190,26 @@ function celebrateLevel(g, level, quiet) {
   toast(newTier ? `🎉 New rank: ${tier.icon} ${tier.name} — level ${level}!` : `🎉 Level ${level}!`, { ms: 6000, noUndo: true });
   return true;
 }
+// The road to level 300: when you'd reach the major levels if the last weeks are what's normal (no drains)
+function roadTo300() {
+  const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
+  const base = GM.projection(s, today, z), more = GM.projection(s, today, z, { extraLifeH: 2 });
+  const fmtD = (k, short) => T.format(T.dayStart(k, z), z, short ? { month: 'short' } : { month: 'short', year: 'numeric' });
+  if (!base) return `<h3 class="gd-h">Road to level 300</h3><p class="muted small">After a few days of play, this shows when you'd reach the major levels at your pace.</p>`;
+  if (more) more.extraH = 2;
+  const row = (m) => { const a = base.hit[m], b = more?.hit[m]; const t = GM.tierOf(m); return `<tr class="${base.now >= m ? 'got' : ''}"><td>${GM.emblemSVG(m, 22)}</td><td><b>${m}</b> ${esc(t.name)}</td><td>${base.now >= m ? '✓ reached' : a ? `≈ ${esc(fmtD(a))}` : '<span class="muted">over 40 years</span>'}</td><td class="xp-l">${base.now >= m ? '' : b ? `≈ ${esc(fmtD(b))}` : '—'}</td></tr>`; };
+  return `<h3 class="gd-h">Road to level 300 <span class="muted small">if the last 4 weeks are your normal pace, with no drains</span></h3>
+    ${GM.projectionSVG(base, more, z, fmtD)}
+    <p class="muted small" style="margin:2px 0 6px">Now: about <b class="xp-l">${base.perWeek.life} life-growth XP</b> and <b>${base.perWeek.rest}</b> other XP a week. Busy, leisure and app XP keep counting for less as you settle in; life growth never does — that's what moves you up in the long run.</p>
+    <table class="gd-ms"><thead><tr><th></th><th>Level</th><th>At this pace</th><th class="xp-l">+2 h life growth a week</th></tr></thead><tbody>${GM.MILESTONES.map(row).join('')}</tbody></table>`;
+}
 // Ranks (with their emblems), achievements and the XP log of the last days
 async function gameDetails() {
   const g = set().game, tot = gameTotals(), lv = gameLevel(tot);
   const days = Object.entries(g.ledger || {}).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14);
   const t = app.gameToday;
   await modal(`<div class="g-details"><header class="dlg-head"><h2>🎮 Level ${lv.level} · ${esc(GM.tierOf(lv.level).name)}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
+    ${roadTo300()}
     <h3 class="gd-h">Ranks <span class="muted small">a new one every 5 levels</span></h3>
     ${GM.ERAS.map((era, i) => { const next = GM.ERAS[i + 1]?.from || 999; const rs = GM.RANKS.filter(([L]) => L >= era.from && L < next); return `<div class="gd-era" style="--ec:${era.color}">${esc(era.name)} <span class="muted small">levels ${era.from}–${Math.min(300, next - 1)}</span></div><div class="gd-tiers">${rs.map(([L, n, , dsc]) => `<div class="gd-tier ${lv.level >= L ? 'got' : ''} ${GM.tierOf(lv.level).from === L ? 'cur' : ''}" title="${esc(dsc)}">${GM.emblemSVG(L, 54)}<b>${esc(n)}</b><span class="gd-desc">${esc(dsc)}</span><span class="muted small">level ${L}${lv.level < L ? ` · ${Math.max(0, Math.round(GM.xpFor(L) * GM.cfg(set()).pace) - tot.total).toLocaleString()} XP to go` : ' ✓'}</span></div>`).join('')}</div>`; }).join('')}
     <h3 class="gd-h">Achievements <span class="muted small">${Object.keys(g.ach || {}).length}/${GM.ACHIEVEMENTS.length} · +${GM.ACH_XP} XP each</span></h3>
@@ -1134,6 +1219,7 @@ async function gameDetails() {
     ${days.map(([k, d]) => `<details class="gd-day"><summary><b>${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}</b> <span class="${d.net < 0 ? 'xp-p' : ''}">${d.net >= 0 ? '+' : ''}${d.net} XP</span> <span class="muted small">${Math.round((d.fill || 0) * 100)}% planned</span></summary>${(d.top || []).map(([l, ty, x]) => `<div class="gd-line"><span>${esc(l)}</span><b class="xp-${ty === 'pen' ? 'p' : ty[0]}">${x > 0 ? '+' : ''}${x}</b></div>`).join('')}</details>`).join('')}
     <h3 class="gd-h">How XP works</h3>
     <ul class="small gd-rules"><li><b class="xp-b">Busy</b>: events you attend (longer ones earn more; ticked off ×1.2), task sessions you complete (each later session of a task is worth 8% more), finished tasks and projects, a full day (at least half of 7:00–23:00 planned), keeping to the plan, and a weekly bonus for how much of the week was planned.</li>
+      <li><b class="xp-l">Why life XP matters</b>: life XP is for what transforms you or moves your life goals forward — learning, training, creating, deep practice. Most weeks leave little room for it, so even short spells are valued highly (half an hour earns well over half of an hour's XP) and it never wears off. Everything else — busy time, leisure, sleep, using the app — counts in full for your first week, then less and less (about a third after a month, down to 15%). After a month, moving up on busy time alone is slow: a higher level means you've grown, not just kept busy.</li>
       <li><b class="xp-l">Life</b>: time in your life-growth categories (set in Settings → General → Game mode), sleep, some leisure, habits ticked off (with small rewards for streaks that grow with your rank — a habit can be left out of the game in its settings) and goals reached. Going up levels needs a share of life XP — never more than a quarter.</li>
       <li><b class="xp-a">App</b>: opening Tempo each day (more for a streak), scheduling events and tasks (a fifth of what they're worth — the rest comes when you do them), starting projects, logging habits, achievements.</li>
       <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — more each time the same task slips again within a week.</li>
@@ -1190,7 +1276,7 @@ async function addSleepBlocks({ force = false } = {}) {
       const gaps = S.subtract([{ start: n.st, end: n.en }], busy).filter((g) => g.end - g.start >= 15 * T.MIN);
       for (const g of gaps) {
         const priv = { tempoSleep: n.d, ...(cat ? { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color, tempoCatIcon: cat.icon || '' } : {}) };
-        await EV.createEvent(st(), cal, { summary: `${cat?.icon && cat.icon !== '😴' ? cat.icon + ' ' : ''}😴 Sleep`, start: { dateTime: new Date(g.start).toISOString(), timeZone: z }, end: { dateTime: new Date(g.end).toISOString(), timeZone: z },
+        await EV.createEvent(st(), cal, { ...(cat ? { colorId: G.nearestColorId(cat.color) } : {}), summary: `${cat?.icon && cat.icon !== '😴' ? cat.icon + ' ' : ''}😴 Sleep`, start: { dateTime: new Date(g.start).toISOString(), timeZone: z }, end: { dateTime: new Date(g.end).toISOString(), timeZone: z },
           transparency: 'opaque', reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv } });
         made++;
       }

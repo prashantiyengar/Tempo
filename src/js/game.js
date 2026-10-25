@@ -14,7 +14,11 @@ export const CFG = [
   ['pace', 'Level pace — XP needed per level (×)', 1, 0.25, 4, 0.05],
   ['eventPerHour', 'Busy XP per hour of events', 24, 0, 200, 1],
   ['sessionPerHour', 'Busy XP per hour of task sessions', 30, 0, 200, 1],
-  ['lifePerHour', 'Life XP per hour in life-growth categories', 30, 0, 200, 1],
+  ['lifePerHour', 'Life XP for an hour in life-growth categories', 50, 0, 300, 1],
+  ['lifeCurve', 'Short spells of life growth count extra: XP grows with hours^this (1 = straight)', 0.7, 0.3, 1, 0.05],
+  ['settleDays', 'Busy, leisure and app XP count in full for your first this many days of use', 7, 0, 60, 1],
+  ['settleTau', '…then shrink, by about two thirds every this many days', 14, 3, 120, 1],
+  ['settleFloor', '…down to this share of their value (%)', 15, 0, 100, 1],
   ['crossShare', 'Busy XP that life-growth and leisure items also earn (% of normal)', 15, 0, 100, 1],
   ['sleepPerHour', 'Life XP per hour of sleep', 2, 0, 50, 0.5],
   ['leisurePerHour', 'Life XP per hour of leisure', 1.5, 0, 100, 0.5],
@@ -68,7 +72,7 @@ export function periodRange(kind, today) {
   if (kind === '3m') return { from: today, to: T.addMonths(today, 3) };
   return { from: null, to: null };
 }
-export const RULES_V = 4; // when the rules change, the ledger is counted again
+export const RULES_V = 5; // when the rules change, the ledger is counted again
 export function cfg(s) {
   const o = {}, c = s?.game?.cfg || {};
   for (const [k, , d, lo, hi] of CFG) { const v = c[k]; o[k] = v == null || v === '' || !Number.isFinite(+v) ? d : Math.min(hi, Math.max(lo, +v)); }
@@ -238,6 +242,15 @@ export function itemXP(it, s, now = Date.now()) {
   if (boost) { const r = itemBase(it, s, now, g, c); const f = 1 + (+boost.pct || 0) / 100; r.app = Math.round(r.app * f); r.busy = Math.round(r.busy * f); r.life = Math.round(r.life * f); r.why.push(`bonus: ${boost.name || 'bonus activity'} +${boost.pct}%`); r.boost = boost.name; return r; }
   return itemBase(it, s, now, g, c);
 }
+// Life growth: short spells count for a lot (30 min earns well over half of an hour), and it never wears off
+const lifeXP = (c, h, mult = 1) => (h > 0 ? Math.round(c.lifePerHour * Math.pow(h, c.lifeCurve) * mult) : 0);
+// How much busy, leisure, sleep and app XP still count, after n days of regular use (life growth always counts in full)
+export function settleFactor(s, n) {
+  const c = cfg(s), f0 = c.settleFloor / 100;
+  return n <= c.settleDays ? 1 : +(f0 + (1 - f0) * Math.exp(-(n - c.settleDays) / c.settleTau)).toFixed(3);
+}
+// days of regular use before day k: settled days on which something was done
+export const usedDays = (s, k) => Object.entries(s.game?.ledger || {}).filter(([d, e]) => d < k && (e.doneN || 0) > 0).length;
 function itemBase(it, s, now, g, c) {
   const out = { app: 0, busy: 0, life: 0, why: [], done: false, kind: it.kind };
   const m = Math.max(0, Math.min(600, (it.end - it.start) / T.MIN)), h = m / 60, cross = c.crossShare / 100;
@@ -246,7 +259,7 @@ function itemBase(it, s, now, g, c) {
     const stage = Math.min(3, Math.pow(1 + c.stageBonus / 100, Math.max(0, (it.sess?.index || 1) - 1)));
     const busy = (6 + c.sessionPerHour * h) * stage;
     const later = (it.sess?.index || 1) > 1 && c.stageBonus ? ` ${it.sess.index}/${it.sess.count} (×${stage.toFixed(2)} for a later stage)` : '';
-    if (isLife(it, g)) { out.life = Math.round(c.lifePerHour * h * stage); out.busy = Math.round(busy * cross); out.why.push(`life growth${later}`); }
+    if (isLife(it, g)) { out.life = lifeXP(c, h, stage); out.busy = Math.round(busy * cross); out.why.push(`life growth${later}`); out.grow = true; }
     else { out.busy = Math.round(busy); out.why.push(`task session${later}`); }
     out.done = it.status === 'done' || it.sess?.kind === 'done';
     return out;
@@ -254,7 +267,7 @@ function itemBase(it, s, now, g, c) {
   if (isSleepItem(it, s)) { out.life = Math.round(Math.min(h, 9) * c.sleepPerHour); out.why.push('sleep'); }
   else {
     const busy = (4 + c.eventPerHour * Math.min(h, 8)) * (it.evDone ? 1.2 : 1);
-    if (isLife(it, g)) { out.life = Math.round(c.lifePerHour * Math.min(h, 8) * (it.evDone ? 1.2 : 1)); out.busy = Math.round(busy * cross); out.why.push('life growth'); }
+    if (isLife(it, g)) { out.life = lifeXP(c, Math.min(h, 8), it.evDone ? 1.2 : 1); out.busy = Math.round(busy * cross); out.why.push('life growth'); out.grow = true; }
     else if (isRest(it, s, g)) { out.life = Math.round(c.leisurePerHour * Math.min(h, 4)); out.busy = Math.round(busy * cross); out.why.push('leisure'); }
     else { out.busy = Math.round(busy); out.why.push('event'); }
     if (it.evDone) out.why.push('ticked off ×1.2');
@@ -322,22 +335,29 @@ const BAD = new Set(['moved', 'skipped', 'undone', 'resched']);
 export function dayXP(k, s, ctx, now = Date.now()) {
   const c = cfg(s);
   const z = s.tz, g = gameOf(s), from = T.dayStart(k, z), to = T.dayStart(T.addDays(k, 1), z);
-  const r = { k, app: 0, busy: 0, life: 0, pen: 0, lines: [], potential: { app: 0, busy: 0, life: 0 }, quests: [] };
-  const add = (type, xp, label) => { if (!xp) return; r[type] += xp; r.lines.push([label, type, xp]); };
+  const r = { k, app: 0, busy: 0, life: 0, pen: 0, lines: [], potential: { app: 0, busy: 0, life: 0 }, quests: [], lg: 0, nl: 0 };
+  // settling in: everything but life growth counts less and less after the first week of regular use
+  const f = r.f = settleFactor(s, ctx.usedDays ?? usedDays(s, k));
+  const add = (type, xp, label, damp = type !== 'life' && type !== 'pen') => {
+    if (!xp) return;
+    if (damp && f < 1) { xp = Math.round(xp * f); if (!xp) return; label += ` (×${f.toFixed(2)})`; }
+    r[type] += xp; r.lines.push([label, type, xp]);
+    if (type === 'pen') return; if (damp) r.nl += xp; else r.lg += xp;
+  };
   const mine = ctx.items.filter((it) => !it.allDay && it.start >= from && it.start < to);
   let doneN = 0, lifeMin = 0;
   for (const it of mine) {
     const x = itemXP(it, s, now);
     if (x.done) {
-      add('busy', x.busy, it.title); add('life', x.life, it.title); add('app', x.app, it.title);
+      add('busy', x.busy, it.title); add('life', x.life, it.title, !x.grow); add('app', x.app, it.title);
       if (it.kind === 'chunk' || !isSleepItem(it, s)) doneN++;
       if (x.life && !isSleepItem(it, s)) lifeMin += Math.max(0, Math.min(it.end, now) - it.start) / T.MIN;
-    } else if (it.start < to) { r.potential.busy += x.busy; r.potential.life += x.life; }
+    } else if (it.start < to) { r.potential.busy += Math.round(x.busy * f); r.potential.life += x.grow ? x.life : Math.round(x.life * f); }
   }
   // scheduling: a fifth of what the item is worth, on the day you created it
   for (const it of ctx.items) {
-    const c = it.kind === 'chunk' ? null : Date.parse(it.ev?.created || '') || null;
-    if (c && c >= from && c < to && !it.ev?.extendedProperties?.private?.tempoSleep) { const x = itemXP(it, s, now); const v = Math.round(sumXP(x) * c.schedShare / 100); if (v) add('app', v, `scheduled “${it.title}”`); }
+    const cr = it.kind === 'chunk' ? null : Date.parse(it.ev?.created || '') || null;
+    if (cr && cr >= from && cr < to && !it.ev?.extendedProperties?.private?.tempoSleep) { const x = itemXP(it, s, now); const v = Math.round(sumXP(x) * c.schedShare / 100); if (v) add('app', v, `scheduled “${it.title}”`); }
   }
   for (const t of ctx.tasks) if (t.created >= from && t.created < to) add('app', Math.round(5 * c.schedShare / 5), `planned task “${t.title}”`);
   for (const p of ctx.projects) if (p.created >= from && p.created < to) add('app', 20, `started project “${p.name}”`);
@@ -370,7 +390,7 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   }
   // rating the day (a little more with a reason)
   const rt = s.dayRatings?.[k];
-  if (rt && rt.v != null && c.rateXP + c.rateWhyXP) add('app', c.rateXP + (rt.why ? c.rateWhyXP : 0), `rated the day ${rt.v}/5${rt.why ? ' with a reason' : ''}`);
+  if (rt && rt.v != null && c.rateXP + c.rateWhyXP) add('app', c.rateXP + (rt.why ? c.rateWhyXP : 0), `rated the day ${rt.v}/5${rt.why ? ' with a reason' : ''}`, false); // reflecting on the day doesn't wear off
   // goals: defining them (app XP), putting hours into them (life XP, bit by bit) and reaching them (life XP)
   for (const { g: gl, key } of ctx.goalsAll || []) {
     const v0 = goalValue(gl, key, s), gm = c.goalXP, v = { ...v0, define: Math.round(v0.define * gm), final: Math.round(v0.final * gm), progress: Math.round(v0.progress * gm) };
@@ -647,4 +667,60 @@ export function recovery(s, days) {
     if (cur.n >= cur.N2) { const bonus = Math.round(cur.loss * c.recoverBonusPct / 100); line(d.k, `won back all ${cur.loss} XP — bonus +${c.recoverBonusPct}%`, bonus); total += bonus; cur.done = true; cur.full = true; }
   }
   return { byDay, total, active: cur && !cur.done ? { ...cur, inTrust: cur.n < cur.N1 ? cur.paid : cur.paid - cur.part1 } : null, episodes: eps };
+}
+
+// ---- The road to level 300: if the last four weeks are what a normal week looks like (and there are no drains),
+// when would you reach each level? Busy, leisure and app XP keep settling (they count less the longer you play);
+// life growth stays. `extraLifeH` adds that many hours of life growth a week (to show what it would change).
+export const MILESTONES = [10, 25, 50, 75, 100, 150, 200, 250, 300];
+export function projection(s, todayKey, z, { extraLifeH = 0, years = 40 } = {}) {
+  const c = cfg(s), led = s.game?.ledger || {};
+  const keys = Object.keys(led).filter((k) => k < todayKey).sort().slice(-28);
+  if (keys.length < 3) return null;
+  const n = keys.length, sum = (fn) => keys.reduce((a, k) => a + fn(led[k]), 0) / n;
+  const lg = sum((e) => e.lg ?? Math.max(0, e.l || 0));                       // life growth a day (doesn't settle)
+  const raw = sum((e) => (e.nl ?? Math.max(0, (e.a || 0) + (e.b || 0))) / Math.max(0.01, e.f || 1)); // the rest, before settling
+  const lifeDay = sum((e) => Math.max(0, e.l || 0));
+  const pen = sum((e) => e.p || 0);
+  const active = keys.filter((k) => (led[k].doneN || 0) > 0).length / n;
+  const wks = Object.entries(s.game?.weeks || {}).sort().slice(-4), wkB = wks.length ? wks.reduce((a, [, w]) => a + Math.max(0, w.b || 0), 0) / wks.length : 0;
+  const extra = extraLifeH > 0 ? Math.round(c.lifePerHour * Math.pow(extraLifeH / 3, c.lifeCurve) * 3) : 0; // spread over ~3 spells a week
+  const t0 = ledgerTotals(s, todayKey, z);
+  let total = t0.total, life = t0.life, used = usedDays(s, todayKey);
+  const lv0 = levelOf(total, life, c.pace, c.lifeCap / 100).level;
+  const points = [{ k: todayKey, level: lv0 }], hit = {};
+  for (const m of MILESTONES) if (lv0 >= m) hit[m] = todayKey;
+  let k = todayKey;
+  for (let w = 1; w <= years * 52 && !hit[300]; w++) {
+    k = T.addDays(k, 7);
+    used += 7 * active;
+    const f = settleFactor(s, used);
+    total += 7 * (lg + raw * f - pen) + wkB * f + extra;
+    life += 7 * lifeDay + extra;
+    const L = levelOf(Math.max(0, total), life, c.pace, c.lifeCap / 100).level;
+    if (w % 4 === 0 || L !== points[points.length - 1].level) points.push({ k, level: L });
+    for (const m of MILESTONES) if (L >= m && !hit[m]) hit[m] = k;
+  }
+  return { points, hit, now: lv0, perWeek: { life: Math.round(7 * lg), rest: Math.round(7 * raw * settleFactor(s, used)) }, until: k, extra };
+}
+// A small chart: level over time, the current pattern and with more life growth, with the major levels marked
+export function projectionSVG(base, more, z, fmtDate) {
+  const W = 640, H = 230, L = 34, R = 10, Tp = 12, B = 30;
+  const last = [base, more].filter(Boolean).flatMap((p) => p.points).reduce((a, p) => (p.k > a ? p.k : a), base.points[0].k);
+  const t0 = T.dayStart(base.points[0].k, z), t1 = Math.max(T.dayStart(last, z), t0 + 30 * T.DAY);
+  const x = (k) => L + ((T.dayStart(k, z) - t0) / (t1 - t0)) * (W - L - R), y = (lv) => Tp + (1 - lv / 300) * (H - Tp - B);
+  const path = (p) => p.points.map((q, i) => `${i ? 'L' : 'M'}${x(q.k).toFixed(1)},${y(q.level).toFixed(1)}`).join('');
+  const yrs = (t1 - t0) / (365 * T.DAY), step = yrs > 16 ? 5 : yrs > 6 ? 2 : yrs > 1.5 ? 1 : 0;
+  const ticks = [];
+  if (step) { const y0 = new Date(t0).getFullYear(); for (let yv = y0 + 1; ; yv += step) { const k = `${yv}-01-01`; if (T.dayStart(k, z) > t1) break; ticks.push([k, String(yv)]); } }
+  else for (let d = 0; ; d += 30) { const k = T.addDays(base.points[0].k, d); if (T.dayStart(k, z) > t1) break; ticks.push([k, fmtDate(k, true)]); }
+  const ms = MILESTONES.filter((m) => base.hit[m] && m > base.now);
+  return `<svg class="gd-proj" viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Projected level over time">
+    ${[0, 50, 100, 150, 200, 250, 300].map((lv) => `<line x1="${L}" x2="${W - R}" y1="${y(lv)}" y2="${y(lv)}" stroke="currentColor" opacity=".1"/><text x="${L - 4}" y="${y(lv) + 3}" font-size="9" text-anchor="end" fill="currentColor" opacity=".6">${lv}</text>`).join('')}
+    ${ticks.map(([k, lab]) => `<text x="${x(k)}" y="${H - B + 14}" font-size="9" text-anchor="middle" fill="currentColor" opacity=".6">${lab}</text>`).join('')}
+    ${more ? `<path d="${path(more)}" fill="none" stroke="#2e9b5b" stroke-width="2" stroke-dasharray="5 4"/>` : ''}
+    <path d="${path(base)}" fill="none" stroke="#7c5cff" stroke-width="2.5"/>
+    ${ms.map((m) => `<g><circle cx="${x(base.hit[m])}" cy="${y(m)}" r="3.5" fill="${eraOf(m).color}" stroke="#fff"/><text x="${x(base.hit[m]) + 5}" y="${y(m) - 5}" font-size="9" fill="currentColor">${m}</text></g>`).join('')}
+    <text x="${L}" y="${H - 4}" font-size="9" fill="currentColor" opacity=".7">— now ${more ? `· <tspan fill="#2e9b5b">- - with ${more.extraH} h more life growth a week</tspan>` : ''}</text>
+  </svg>`;
 }

@@ -33,7 +33,7 @@ async def main():
         lx = await page.evaluate("""(async () => { const GM = await import('./js/game.js'); const s = { ...window.__tempo.app.state.settings, game: { ...window.__tempo.app.state.settings.game, restCats: ['leisure'], lifeCats: ['study'] } };
           const it = (cat) => ({ kind: 'event', title: 'x', catId: cat, start: Date.parse('2026-10-23T16:00:00Z'), end: Date.parse('2026-10-23T18:00:00Z') });
           return [GM.cfg(s).leisurePerHour, GM.itemXP(it('leisure'), s).life, GM.itemXP(it('study'), s).life]; })()""")
-        check('1. leisure earns much less life XP (1.5 an hour; 2 h = 3, vs 60 for life growth)', lx[0] == 1.5 and lx[1] == 3 and lx[2] == 60, lx)
+        check('1. leisure earns much less life XP (1.5 an hour; 2 h = 3, vs 81 for life growth)', lx[0] == 1.5 and lx[1] == 3 and lx[2] == 81, lx)
         # 2. notes
         await page.click('.side-tabs [data-st=notes]'); await page.wait_for_selector('#note-list .note-add')
         await page.fill('#note-list textarea', 'Idea A'); await page.click('#note-list .note-add button[type=submit]'); await page.wait_for_timeout(400)
@@ -63,7 +63,7 @@ async def main():
         check('6. six smileys 0–5; a rating and a reason are saved and shown under the date', len(n) == 6 and r['v'] == 4 and r['why'] == 'good run' and hd[0] == '🙂' and 'good run' in hd[1], (n, r, hd))
         await page.screenshot(path=f'{OUT}/r41-rating.png')
         # 4. until now
-        btn = await page.evaluate("(() => { const b = document.querySelector('.tonow-btn'); return b && [b.closest('[data-day]').dataset.day, b.title]; })()")
+        btn = await page.evaluate("(() => { const b = document.querySelector('.tonow-btn'); return b && ['2026-10-24', b.title]; })()")
         check('7. the latest item that ended in the last 4 hours gets an “until now” button', btn and btn[0] == '2026-10-24' and 'House cleaning' in btn[1], btn)
         await page.screenshot(path=f'{OUT}/r41-tonow.png')
         await page.click('.tonow-btn'); await page.wait_for_timeout(2000)

@@ -436,8 +436,7 @@ export async function syncTasks(state, apply, onProgress) {
     const t = s.tasks.find((x) => x.id === taskId);
     for (const arr of [t?.planned || [], t?.frozen || []]) { const k = arr.find((x) => x.id === chunkId); if (k) { k.gid = gid; k.syncHash = hash; } }
   });
-  const starts = all.flatMap((x) => x.list.map((c) => c.start));
-  const range = starts.length ? [Math.min(...starts, Date.now()) - T.DAY, Math.max(...all.flatMap((x) => x.list.map((c) => c.end))) + T.DAY] : null;
+  let range = null; // the time span read back from Google: only what's being synced (old, unchanged sessions are left alone)
   const cals = [...new Set(all.map((x) => x.cal))];
   const readRemote = async () => {
     const remote = new Map();
@@ -446,15 +445,18 @@ export async function syncTasks(state, apply, onProgress) {
     return remote;
   };
   // Everything we intend to have on Google
-  const jobs = [];
+  const jobs = [], settled = new Set();
   for (const { task, cal, list } of all) {
     if (!task.calendarId) apply((s) => { const t = s.tasks.find((x) => x.id === task.id); if (t) t.calendarId = cal; });
     const tk = { ...task, calendarId: cal };
     for (const sess of list) {
-      const body = chunkBody(tk, sess, state);
-      jobs.push({ task, cal, sess, body, hash: bodyHash(body), gid: sess.gid ? normGid(state, sess.gid) : null, syncHash: sess.syncHash });
+      const body = chunkBody(tk, sess, state), hash = bodyHash(body);
+      // sessions over more than two days ago that are already on Google unchanged aren't checked again each time
+      if (sess.end < Date.now() - 2 * T.DAY && sess.gid && sess.syncHash === hash) { settled.add(normGid(state, sess.gid)); continue; }
+      jobs.push({ task, cal, sess, body, hash, gid: sess.gid ? normGid(state, sess.gid) : null, syncHash: sess.syncHash });
     }
   }
+  if (jobs.length) range = [Math.min(...jobs.map((j) => j.sess.start), Date.now()) - T.DAY, Math.max(...jobs.map((j) => j.sess.end)) + T.DAY];
   // Two sessions must never share one Google event (they would overwrite each other forever): the later one gets its own.
   const seenG = new Set(), seenC = new Set();
   for (const j of jobs) {
@@ -487,7 +489,7 @@ export async function syncTasks(state, apply, onProgress) {
   try {
     // 1. Verify against Google: anything missing or different is written again.
     let remote = await readRemote();
-    const known = new Set();
+    const known = new Set(settled);
     for (const j of jobs) {
       if (!j.gid || splitGid(j.gid)[0] !== j.cal) continue;
       known.add(j.gid);
