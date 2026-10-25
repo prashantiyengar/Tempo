@@ -41,6 +41,7 @@ const ctx = {
   get state() { return app.state; },
   externalChanged() { AC.invalidateExternal(); render(); cycle(); },
   lastEventEnd: (o) => lastEventEnd(o),
+  titleSuggest: (inp) => attachTitleSuggest(inp),
   nextEventStart: (o) => nextEventStart(o),
   get lastBusy() { return app.lastBusy; },
   eventDone: (stp) => projectEventDone(stp),
@@ -368,7 +369,8 @@ function renderTimeGrid(days, items) {
         col.appendChild(el(`<div class="deadline" style="top:${(m / 60) * hh}px;--c:${t.color}" title="Deadline: ${esc(t.title)}"><span>⚑ ${esc(t.title)}</span></div>`));
       } catch (err) { drawErrors.push(['deadline of ' + t.title, err]); }
     }
-    if (k === todayK) col.appendChild(el(`<div class="now" style="top:${(T.minutesOfDay(Date.now(), z) / 60) * hh}px"></div>`));
+    // on a computer, "extend until now" sits on the current-time line (on phones it's in the + menu)
+    if (k === todayK) col.appendChild(el(`<div class="now" style="top:${(T.minutesOfDay(Date.now(), z) / 60) * hh}px">${toNow ? `<button type="button" class="tonow-btn" data-tonow="${esc(toNow.key)}" style="--c:${toNow.color}" title="Still going? Make “${esc(toNow.title)}” end now">⟶ Extend “${esc(toNow.title.length > 22 ? toNow.title.slice(0, 21) + '…' : toNow.title)}” until now</button>` : ''}</div>`));
     if (toNow && T.dayKey(toNow.end - 1, z) === k) {
       const m = T.minutesOfDay(toNow.end, z) || 1440;
       col.appendChild(el(`<div class="tonow-mark" style="top:${(m / 60) * hh}px;--c:${toNow.color}" title="“${esc(toNow.title)}” ended here"></div>`));
@@ -377,7 +379,6 @@ function renderTimeGrid(days, items) {
   }
 
   // the "until now" button floats at the bottom centre of the calendar, easy to reach (also on phones)
-  if (toNow && days.includes(todayK)) root.appendChild(el(`<button type="button" class="tonow-btn" data-tonow="${esc(toNow.key)}" style="--c:${toNow.color}" title="Still going? Make “${esc(toNow.title)}” end now">⟶ Extend “${esc(toNow.title.length > 28 ? toNow.title.slice(0, 27) + '…' : toNow.title)}” until now</button>`));
   if (drawErrors.length) { console.error('Tempo: items not drawn', drawErrors); toast(`${drawErrors.length} item(s) couldn't be drawn: ${drawErrors[0][0]} — ${drawErrors[0][1].message}`, { ms: 8000 }); }
 
   $$('.dn', root).forEach((b) => b.addEventListener('click', () => { app.cursor = b.dataset.goto; app.view = 'day'; render(); }));
@@ -1174,7 +1175,8 @@ function renderGamePanel() {
   const pct = lv.max ? 100 : Math.min(100, (lv.into / Math.max(1, lv.span)) * 100);
   const share = (x) => (tot.app + tot.busy + tot.life ? (x / (tot.app + tot.busy + tot.life)) * 100 : 0);
   let collapsed = false; try { collapsed = localStorage.getItem('tempo:gameCollapsed') === '1'; } catch { /* storage blocked */ }
-  setHTML(box, `<button type="button" class="gp-head" aria-expanded="${!collapsed}">${GM.emblemSVG(lv.level, collapsed ? 30 : 46)}<span class="gp-t" title="${esc(tier.desc || '')}"><b>Level ${lv.level}</b><span>${esc(tier.name)}${tier.next ? ` · next: ${esc(tier.next.name)} at ${tier.next.from}` : ''}</span></span><span class="gp-today ${d && d.net < 0 ? 'neg' : ''}" title="XP today">${d ? `${d.net >= 0 ? '+' : ''}${d.net}` : ''}</span><span class="sec-caret">▾</span></button>
+  box.classList.toggle('min', collapsed);
+  setHTML(box, `<button type="button" class="gp-head" aria-expanded="${!collapsed}" title="${collapsed ? 'Expand the game panel' : 'Minimise the game panel'}">${GM.emblemSVG(lv.level, collapsed ? 22 : 46)}<span class="gp-t" title="${esc(tier.desc || '')}"><b>Level ${lv.level}</b><span>${esc(tier.name)}${tier.next ? ` · next: ${esc(tier.next.name)} at ${tier.next.from}` : ''}</span></span><span class="gp-today ${d && d.net < 0 ? 'neg' : ''}" title="XP today">${d ? `${d.net >= 0 ? '+' : ''}${d.net}` : ''}</span><span class="sec-caret">▾</span></button>
     <div class="gp-bar" title="${lv.into} / ${lv.span} XP to level ${lv.level + 1}"><i style="width:${pct}%;--tc:${tier.color}"></i></div>
     <div class="gp-body" ${collapsed ? 'hidden' : ''}>
       <div class="gp-sub">${lv.max ? 'Highest level reached!' : lv.capped ? `Enough XP for level ${lv.level + 1}` : `${lv.into.toLocaleString()} / ${lv.span.toLocaleString()} XP to level ${lv.level + 1}`}${lv.capped ? `<br><b class="xp-l">🔒 ${lv.lifeNeed.toLocaleString()} more life XP</b> to unlock level ${lv.level + 1}` : ''}</div>
@@ -1204,17 +1206,37 @@ function celebrateLevel(g, level, quiet) {
   return true;
 }
 // The road to level 300: when you'd reach the major levels if the last weeks are what's normal (no drains)
+// (the knobs: how many weeks of your data it goes by, extra life growth a week, and how much life growth / everything
+// else you'd do compared to now — the chart is drawn again as you change them)
+const roadOpts = { weeks: 4, extra: 2, lifeX: 100, restX: 100 };
 function roadTo300() {
-  const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
-  const base = GM.projection(s, today, z), more = GM.projection(s, today, z, { extraLifeH: 2 });
+  return `<h3 class="gd-h">Road to level 300</h3>
+    <div class="road-knobs">
+      <label class="field"><span>Based on the last</span><select data-road="weeks">${[1, 2, 4, 8, 12, 26].map((w) => `<option value="${w}" ${roadOpts.weeks === w ? 'selected' : ''}>${w} week${w > 1 ? 's' : ''}</option>`).join('')}</select></label>
+      <label class="field"><span>Extra life growth a week (h)</span><input type="number" data-road="extra" min="0" max="40" step="0.5" value="${roadOpts.extra}" class="num"></label>
+      <label class="field"><span>Life growth vs now (%)</span><input type="number" data-road="lifeX" min="0" max="500" step="10" value="${roadOpts.lifeX}" class="num"></label>
+      <label class="field"><span>Everything else vs now (%)</span><input type="number" data-road="restX" min="0" max="500" step="10" value="${roadOpts.restX}" class="num"></label>
+    </div>
+    <div class="road-out">${roadOut()}</div>`;
+}
+function wireRoad(root) {
+  $$('[data-road]', root).forEach((inp) => inp.addEventListener('input', () => {
+    const k = inp.dataset.road; roadOpts[k] = Math.max(0, +inp.value || 0); if (k === 'weeks') roadOpts.weeks = Math.max(1, roadOpts.weeks);
+    clearTimeout(wireRoad.t); wireRoad.t = setTimeout(() => { const o = $('.road-out', root); if (o) setHTML(o, roadOut()); }, 150);
+  }));
+}
+function roadOut() {
+  const s = set(), z = tz(), today = T.dayKey(Date.now(), z), o = roadOpts;
+  const common = { weeks: o.weeks, lifeX: o.lifeX / 100, restX: o.restX / 100 };
+  const base = GM.projection(s, today, z, common), more = o.extra > 0 ? GM.projection(s, today, z, { ...common, extraLifeH: o.extra }) : null;
   const fmtD = (k, short) => T.format(T.dayStart(k, z), z, short ? { month: 'short' } : { month: 'short', year: 'numeric' });
-  if (!base) return `<h3 class="gd-h">Road to level 300</h3><p class="muted small">After a few days of play, this shows when you'd reach the major levels at your pace.</p>`;
-  if (more) more.extraH = 2;
+  if (!base) return `<p class="muted small">After a few days of play, this shows when you'd reach the major levels at your pace.</p>`;
+  if (more) more.extraH = o.extra;
   const row = (m) => { const a = base.hit[m], b = more?.hit[m]; const t = GM.tierOf(m); return `<tr class="${base.now >= m ? 'got' : ''}"><td>${GM.emblemSVG(m, 22)}</td><td><b>${m}</b> ${esc(t.name)}</td><td>${base.now >= m ? '✓ reached' : a ? `≈ ${esc(fmtD(a))}` : '<span class="muted">over 40 years</span>'}</td><td class="xp-l">${base.now >= m ? '' : b ? `≈ ${esc(fmtD(b))}` : '—'}</td></tr>`; };
-  return `<h3 class="gd-h">Road to level 300 <span class="muted small">if the last 4 weeks are your normal pace, with no drains</span></h3>
+  return `<p class="muted small" style="margin:0 0 2px">If the last ${o.weeks} week${o.weeks > 1 ? 's are' : ' is'} your normal pace${o.lifeX !== 100 || o.restX !== 100 ? ` (life growth at ${o.lifeX}%, everything else at ${o.restX}%)` : ''}, with no drains.</p>
     ${GM.projectionSVG(base, more, z, fmtD)}
     <p class="muted small" style="margin:2px 0 6px">Now: about <b class="xp-l">${base.perWeek.life} life-growth XP</b> and <b>${base.perWeek.rest}</b> other XP a week. Busy, leisure and app XP keep counting for less as you settle in; life growth never does — that's what moves you up in the long run.</p>
-    <table class="gd-ms"><thead><tr><th></th><th>Level</th><th>At this pace</th><th class="xp-l">+2 h life growth a week</th></tr></thead><tbody>${GM.MILESTONES.map(row).join('')}</tbody></table>`;
+    <table class="gd-ms"><thead><tr><th></th><th>Level</th><th>At this pace</th><th class="xp-l">${more ? `+${o.extra} h life growth a week` : ''}</th></tr></thead><tbody>${GM.MILESTONES.map(row).join('')}</tbody></table>`;
 }
 // Ranks (with their emblems), achievements and the XP log of the last days
 async function gameDetails() {
@@ -1237,7 +1259,7 @@ async function gameDetails() {
       <li><b class="xp-a">App</b>: opening Tempo each day (more for a streak), scheduling events and tasks (a fifth of what they're worth — the rest comes when you do them), starting projects, logging habits, achievements.</li>
       <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — more each time the same task slips again within a week.</li>
       <li><b class="xp-p">XP drains</b> (Settings → Game mode): time on activities you want to cut down on costs a share of your XP — more the higher your rank. <b class="xp-c">Clean bonus</b>: a day without any drain earns a share of that day's XP, a week without any earns a share of the week's — growing slowly with each one in a row, up to a cap that rises with your rank. Drains and bonus activities can be set for a while only (the next week, two weeks, month, 3 months or your own dates); bonus activities earn extra XP, and anything that counts as a drain never scores. 🚩 on the calendar marks the days you went up a level.</li></ul>
-  </div></div>`, () => {}, { cls: 'wide' });
+  </div></div>`, (dlg) => wireRoad(dlg), { cls: 'wide' });
 }
 // A short burst of fireworks over the page
 function fireworks(ms = 2200) {
@@ -1460,6 +1482,7 @@ function renderLater() {
   });
 }
 
+const miniMin = () => { try { return localStorage.getItem('tempo:miniCollapsed') === '1'; } catch { return false; } };
 function renderMini() {
   const z = tz();
   const mk = app.miniCursor;
@@ -1470,13 +1493,14 @@ function renderMini() {
   const { days } = range();
   const inRange = new Set(app.view === 'month' ? [] : days);
   setHTML($('#mini'), `
-    <div class="mini-head"><span>${esc(T.format(T.dayStart(first, z), z, { month: 'long', year: 'numeric' }))}</span>
-      <span><button class="icon-btn sm" data-mini="-1" aria-label="Previous month">‹</button><button class="icon-btn sm" data-mini="1" aria-label="Next month">›</button></span></div>
-    <div class="mini-grid">
+    <div class="mini-head"><button type="button" class="mini-toggle" aria-expanded="${!miniMin()}" title="${miniMin() ? 'Show the month' : 'Minimise the month'}"><span class="sec-caret">▾</span> ${esc(T.format(T.dayStart(first, z), z, { month: 'long', year: 'numeric' }))}</button>
+      <span ${miniMin() ? 'hidden' : ''}><button class="icon-btn sm" data-mini="-1" aria-label="Previous month">‹</button><button class="icon-btn sm" data-mini="1" aria-label="Next month">›</button></span></div>
+    <div class="mini-grid" ${miniMin() ? 'hidden' : ''}>
       ${Array.from({ length: 7 }, (_, i) => `<span class="mw">${esc(T.format(T.dayStart(T.addDays(start, i), z), z, { weekday: 'narrow' }))}</span>`).join('')}
       ${Array.from({ length: 42 }, (_, i) => { const k = T.addDays(start, i); return `<button class="md ${T.parseKey(k).m !== m ? 'out' : ''} ${k === todayK ? 'today' : ''} ${inRange.has(k) ? 'sel' : ''} ${k === app.cursor ? 'cur' : ''}" data-day="${k}">${T.parseKey(k).d}</button>`; }).join('')}
     </div>`);
   $$('#mini [data-mini]').forEach((b) => b.addEventListener('click', () => { app.miniCursor = T.addMonths(app.miniCursor, +b.dataset.mini); renderMini(); }));
+  $('#mini .mini-toggle').onclick = () => { try { localStorage.setItem('tempo:miniCollapsed', miniMin() ? '0' : '1'); } catch { /* storage blocked */ } renderMini(); };
   $$('#mini .md').forEach((b) => b.addEventListener('click', () => { app.cursor = b.dataset.day; if (app.view === 'analysis') app.view = 'week'; render(); }));
 }
 
@@ -1766,16 +1790,34 @@ async function commitMove(it, start, end) {
 // ======================================================================================
 // Title suggestions while typing an event's title: the titles of your events of the last 7 days (today included),
 // most recent first — not task sessions.
+// (shown as tappable chips under the title — native suggestion lists don't show up on many phones)
 async function refreshTitleList() {
-  let dl = document.getElementById('tempo-titles');
-  if (!dl) { dl = document.createElement('datalist'); dl.id = 'tempo-titles'; document.body.appendChild(dl); }
   try {
     const z = tz(), today = T.dayKey(Date.now(), z);
     const evs = (await collectItems([T.addDays(today, -6), today])).filter((it) => it.kind === 'event' && it.start >= T.dayStart(T.addDays(today, -6), z) && it.start < T.dayStart(T.addDays(today, 1), z) && (it.ev?.summary || '').trim()).sort((a, b) => b.start - a.start);
     const seen = new Set(), titles = [];
     for (const it of evs) { const t = it.ev.summary.trim(), k = t.toLowerCase(); if (!seen.has(k)) { seen.add(k); titles.push(t); } }
-    dl.replaceChildren(...titles.slice(0, 80).map((t) => Object.assign(document.createElement('option'), { value: t })));
+    app.titleList = titles.slice(0, 80);
+    document.querySelectorAll('.ts-host').forEach((h) => h._ts?.());
   } catch (err) { console.warn('Tempo: title suggestions', err); }
+}
+function attachTitleSuggest(inp) {
+  if (!inp || inp.dataset.ts) return; inp.dataset.ts = '1';
+  const box = document.createElement('div'); box.className = 'ts-host'; box.setAttribute('role', 'listbox');
+  inp.insertAdjacentElement('afterend', box);
+  let shown = false;
+  const draw = () => {
+    const q = inp.value.trim().toLowerCase(), list = app.titleList || [];
+    const hits = (q ? list.filter((t) => t.toLowerCase() !== q && t.toLowerCase().includes(q)).sort((a, b) => (b.toLowerCase().startsWith(q) - a.toLowerCase().startsWith(q))) : list).slice(0, 6);
+    box.hidden = !shown || !hits.length;
+    setHTML(box, hits.map((t) => `<button type="button" class="ts-chip" data-t="${esc(t)}">${esc(t)}</button>`).join(''));
+    $$('.ts-chip', box).forEach((b) => { b.addEventListener('pointerdown', (e) => e.preventDefault()); b.onclick = () => { inp.value = b.dataset.t; inp.dispatchEvent(new Event('input', { bubbles: true })); shown = false; draw(); inp.focus(); }; });
+  };
+  box._ts = draw;
+  inp.addEventListener('focus', () => { shown = true; draw(); });
+  inp.addEventListener('input', () => { shown = true; draw(); });
+  inp.addEventListener('blur', () => setTimeout(() => { shown = false; draw(); }, 150));
+  draw();
 }
 function quickCreate(rect, sel, onClose) {
   refreshTitleList();
@@ -1790,7 +1832,7 @@ function quickCreate(rect, sel, onClose) {
   const durMin = Math.round((sel.end - sel.start) / T.MIN);
   popover(rect, `
     <form class="qc" novalidate>
-      <input name="title" placeholder="Add title" autofocus autocomplete="off" list="tempo-titles">
+      <input name="title" placeholder="Add title" autofocus autocomplete="off">
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
       ${sel.note ? `<div class="qc-note muted small">⇕ ${esc(sel.note)}</div>` : ''}
       ${sel.allDay ? '' : (() => {
@@ -1816,6 +1858,7 @@ function quickCreate(rect, sel, onClose) {
       </div>
     </form>`, (p, close) => {
     const f = $('form', p);
+    attachTitleSuggest(f.title);
     setTimeout(() => f.title.focus(), 0);
     // length shortcuts: each click extends the event
     const hhmm = (ms) => T.toDTInput(ms, z).slice(11, 16);
@@ -3489,7 +3532,7 @@ async function editGoal(key, id) {
         <label class="field"><span>Time budget (h)</span><input name="b" type="number" min="0" step="0.25" value="${g.budget ? +(g.budget / 60).toFixed(2) : ''}" placeholder="none" style="width:110px"></label>
       </div>
       <details ${own.size ? 'open' : ''}><summary class="small">Count only these categories for this goal (otherwise the head's)</summary>
-        <div class="g-catlist">${(s.categories || []).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
+        <div class="g-catlist">${C.ordered(s).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
       ${wordsFieldHTML(GL.goalWords(g), g.wmode)}
       ${goalRuleHTML(g.rule, key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : 'year')}
       ${gameOn() ? '<p class="small g-xp-prev"></p>' : ''}

@@ -73,8 +73,8 @@ async def main():
         made = [e for e in E.values() if e.get('extendedProperties', {}).get('private', {}).get('tempoSleep') == '2026-10-23']
         check('7. sleep blocks show in the sleep category\'s colour, and new ones get it on Google too', sl == '#0b8043' and made and made[0].get('colorId'), (sl, [m.get('colorId') for m in made]))
         # ---- 3. until now: sleep, floating
-        btn = await page.evaluate("(() => { const b = document.querySelector('.tonow-btn'); if (!b) return null; const r = b.getBoundingClientRect(), v = document.querySelector('#view').getBoundingClientRect(); return [b.textContent, Math.round(r.left + r.width / 2 - (v.left + v.width / 2)), Math.round(v.bottom - r.bottom)]; })()")
-        check('8. "until now" works for the sleep block that ended 45 min ago, and floats at the bottom centre', btn and 'Sleep' in btn[0] and abs(btn[1]) < 4 and 0 < btn[2] < 60, btn)
+        btn = await page.evaluate("(() => { const b = document.querySelector('.tonow-btn'); if (!b) return null; return [b.textContent, !!b.closest('.now')]; })()")
+        check('8. "until now" works for the sleep block that ended 45 min ago, and sits on the current-time line', btn and 'Sleep' in btn[0] and btn[1], btn)
         await page.screenshot(path=f'{OUT}/r43-tonow.png')
         await page.click('.tonow-btn'); await page.wait_for_timeout(2000)
         check('9. clicking it makes the sleep end now (07:15)', E['sl']['end'].get('dateTime', '').startswith('2026-10-25T06:15:00'), E['sl']['end'])

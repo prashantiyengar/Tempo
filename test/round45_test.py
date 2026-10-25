@@ -72,8 +72,8 @@ async def main():
         # audiobook
         await page.click('dialog[open] label:has(input[name=kind][value=reading])')
         await page.click('dialog[open] label:has(input[name=rformat][value=audio])')
-        vis2 = await page.evaluate("[getComputedStyle(document.querySelector('dialog[open] [name=ahours]').closest('.only-audio')).display, getComputedStyle(document.querySelector('dialog[open] [name=pages]').closest('.only-book')).display]")
-        await page.fill('dialog[open] [name=title]', 'Sapiens'); await page.fill('dialog[open] [name=ahours]', '10'); await page.fill('dialog[open] [name=adone]', '1'); await page.select_option('dialog[open] [name=aspeed]', '1.5')
+        vis2 = await page.evaluate("[getComputedStyle(document.querySelector('dialog[open] [name=ah]').closest('.only-audio')).display, getComputedStyle(document.querySelector('dialog[open] [name=pages]').closest('.only-book')).display]")
+        await page.fill('dialog[open] [name=title]', 'Sapiens'); await page.fill('dialog[open] [name=ah]', '10'); await page.fill('dialog[open] [name=am]', '0'); await page.fill('dialog[open] [name=adh]', '1'); await page.select_option('dialog[open] [name=aspeed]', '1.5')
         calc = await page.text_content('dialog[open] .calc')
         await page.click('dialog[open] button[type=submit]'); await page.wait_for_timeout(2500)
         t = await page.evaluate("(async () => { const S = await import('./js/scheduler.js'); const t = window.__tempo.app.state.tasks.find(t => t.title === 'Sapiens'); return t && [t.reading, S.totalMinutes(t), S.sessions(t)[0]?.label]; })()")

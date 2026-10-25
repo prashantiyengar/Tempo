@@ -59,11 +59,13 @@ export const catById = (settings, id) => (id ? (settings.categories || []).find(
 
 // ---------- Sub-categories (one level: a category can sit inside a main category) ----------
 export const parentOf = (settings, c) => (c?.parent ? catById(settings, c.parent) : null);
-export const childrenOf = (settings, id) => (settings.categories || []).filter((c) => c.parent === id);
+export const childrenOf = (settings, id) => (settings.categories || []).filter((c) => c.parent === id).sort(byName);
 export const mainOf = (settings, c) => parentOf(settings, c) || c;
 // Main categories, each followed by its sub-categories.
+// Categories in alphabetical order, each main category followed by its sub-categories (also alphabetical).
+const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base', numeric: true });
 export function ordered(settings) {
-  const all = settings.categories || [], out = [];
+  const all = [...(settings.categories || [])].sort(byName), out = [];
   for (const c of all) if (!c.parent || !all.some((p) => p.id === c.parent)) { out.push(c); for (const k of all) if (k.parent === c.id) out.push(k); }
   return out;
 }
@@ -76,7 +78,7 @@ export function withSubs(settings, ids) {
   return [...set];
 }
 // Main categories that can take sub-categories (not themselves inside another).
-export const mainCats = (settings, exceptId = null) => (settings.categories || []).filter((c) => !c.parent && c.id !== exceptId);
+export const mainCats = (settings, exceptId = null) => (settings.categories || []).filter((c) => !c.parent && c.id !== exceptId).sort(byName);
 
 export function applyCategory(task, cat) {
   if (!cat) return { ...task, categoryId: null, categoryName: null, categoryColor: null, categoryIcon: null };

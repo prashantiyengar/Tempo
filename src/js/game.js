@@ -485,11 +485,12 @@ export function drainHours(d, s, items, fromKey, toKey, now = Date.now()) {
   return out;
 }
 // The % a drain costs for h hours. `scale` grows with your level (drains cost more the higher you climb).
+// `strength` (% of the costs, default 100) lets a drain cost only a little, e.g. 25%
 export function drainPct(d, h, scale = 1) {
-  const free = +d.free || 0, tol = Math.max(free, +d.tol || 0);
+  const free = +d.free || 0, tol = Math.max(free, +d.tol || 0), k = (d.strength ?? 100) / 100;
   if (h <= free + 1e-9) return 0;
-  if (h <= tol + 1e-9) return Math.min(100, (+d.basePct || 0) * scale);
-  return Math.min(+d.maxPct || 75, ((+d.basePct || 0) + (+d.growPct || 0) * (h - tol)) * scale);
+  if (h <= tol + 1e-9) return Math.min(100, (+d.basePct || 0) * scale) * k;
+  return Math.min(+d.maxPct || 75, ((+d.basePct || 0) + (+d.growPct || 0) * (h - tol)) * scale) * k;
 }
 export const drainScale = (s, level = 1) => 1 + (cfg(s).drainRankScale / 100) * tierOf(Math.max(1, level)).index;
 // What the drains cost in a week. dayXP: { k: { app, busy, life } } for the days of the week (XP before drains).
@@ -686,13 +687,13 @@ export function recovery(s, days) {
 // when would you reach each level? Busy, leisure and app XP keep settling (they count less the longer you play);
 // life growth stays. `extraLifeH` adds that many hours of life growth a week (to show what it would change).
 export const MILESTONES = [10, 25, 50, 75, 100, 150, 200, 250, 300];
-export function projection(s, todayKey, z, { extraLifeH = 0, years = 40 } = {}) {
+export function projection(s, todayKey, z, { extraLifeH = 0, years = 40, weeks = 4, lifeX = 1, restX = 1 } = {}) {
   const c = cfg(s), led = s.game?.ledger || {};
-  const keys = Object.keys(led).filter((k) => k < todayKey).sort().slice(-28);
+  const keys = Object.keys(led).filter((k) => k < todayKey).sort().slice(-7 * Math.max(1, weeks));
   if (keys.length < 3) return null;
   const n = keys.length, sum = (fn) => keys.reduce((a, k) => a + fn(led[k]), 0) / n;
-  const lg = sum((e) => e.lg ?? Math.max(0, e.l || 0));                       // life growth a day (doesn't settle)
-  const raw = sum((e) => (e.nl ?? Math.max(0, (e.a || 0) + (e.b || 0))) / Math.max(0.01, e.f || 1)); // the rest, before settling
+  const lg = lifeX * sum((e) => e.lg ?? Math.max(0, e.l || 0));                       // life growth a day (doesn't settle)
+  const raw = restX * sum((e) => (e.nl ?? Math.max(0, (e.a || 0) + (e.b || 0))) / Math.max(0.01, e.f || 1)); // the rest, before settling
   const lifeDay = sum((e) => Math.max(0, e.l || 0));
   const pen = sum((e) => e.p || 0);
   const active = keys.filter((k) => (led[k].doneN || 0) > 0).length / n;

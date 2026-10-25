@@ -297,7 +297,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
 
 export function sleepCatOptions(s) {
   const esc2 = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  return `<option value="">😴 Sleep (its own group)</option>${(s.categories || []).map((c) => `<option value="${esc2(c.id)}" ${s.sleepCategory === c.id ? 'selected' : ''}>${esc2((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}`;
+  return `<option value="">😴 Sleep (its own group)</option>${([...(s.categories || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }))).map((c) => `<option value="${esc2(c.id)}" ${s.sleepCategory === c.id ? 'selected' : ''}>${esc2((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}`;
 }
 function sleepNote(sl, s) {
   const on = s.sleepAssume !== false;

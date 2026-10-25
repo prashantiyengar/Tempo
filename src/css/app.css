@@ -1327,7 +1327,7 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .note-t { white-space: pre-wrap; font-size: 13px; }
 .note-m { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .day-notes .dn-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.tonow-btn { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; max-width: calc(100% - 140px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 99px; border: 2px solid var(--c, var(--accent)); color: var(--ink); background: var(--panel); cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.tonow-btn { position: absolute; left: 50%; top: 0; transform: translate(-50%, -50%); z-index: 8; max-width: calc(100% - 6px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; border: 1.5px solid var(--c, var(--accent)); color: var(--ink); background: var(--panel); cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.15); pointer-events: auto; }
 .tonow-btn:hover { background: color-mix(in srgb, var(--c, var(--accent)) 14%, var(--panel)); }
 @media (max-width: 900px) { .tonow-btn { display: none; } #fab.has-tonow::after { content: ''; position: absolute; top: 6px; right: 6px; width: 10px; height: 10px; border-radius: 50%; background: #ffb300; box-shadow: 0 0 0 2px var(--accent); } }
 .tonow-mark { position: absolute; left: 0; right: 0; height: 0; border-top: 2px dashed var(--c, var(--accent)); z-index: 4; pointer-events: none; opacity: .8; }
@@ -1392,3 +1392,21 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .glw-list { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 2px; }
 .glw-row { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
 .glw-row input { width: 4.5em; }
+.road-knobs { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 2px 0 6px; }
+.road-knobs .field { min-width: 0; }
+.road-knobs input, .road-knobs select { width: 7.5em; }
+.ts-host { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+.ts-host[hidden] { display: none; }
+.ts-chip { border: 1px solid var(--line2); background: var(--off); color: var(--ink); border-radius: 99px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-chip:hover { border-color: var(--accent); }
+@media (max-width: 900px) { .ts-chip { padding: 6px 12px; font-size: 14px; } }
+.join.hm { align-items: center; gap: 4px; }
+.join.hm input { width: 4.2em; }
+.mini-toggle { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; font: inherit; font-weight: 600; color: inherit; cursor: pointer; padding: 0; }
+.mini-toggle .sec-caret { font-size: 10px; opacity: .6; transition: transform .15s; }
+.mini-toggle[aria-expanded="false"] .sec-caret { transform: rotate(-90deg); }
+.mini-grid[hidden] { display: none; }
+.game-panel.min { padding: 4px 10px 6px; }
+.game-panel.min .gp-t > span { display: none; }
+.game-panel.min .gp-bar { height: 3px; margin-top: 3px; }
+.gp-body[hidden] { display: none; }

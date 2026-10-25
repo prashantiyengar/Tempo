@@ -48,8 +48,10 @@ async def main():
         col = await page.eval_on_selector('.tg-col[data-day="2026-10-25"]', 'e => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top }; }')
         hh = await page.evaluate("window.__tempo.app.state.settings.hourHeight")
         await page.mouse.click(col['x'], col['y'] + 16 * hh); await page.wait_for_selector('.popover .qc'); await page.wait_for_timeout(500)
-        lst = await page.evaluate("[document.querySelector('.popover input[name=title]').getAttribute('list'), [...document.querySelectorAll('#tempo-titles option')].map(o => o.value)]")
-        check('4. typing an event title suggests the last 7 days\' event titles (most recent first)', lst[0] == 'tempo-titles' and lst[1][:1] == ['Breakfast'] and 'Yoga class' in lst[1] and 'Coffee' in lst[1] and 'Old thing' not in lst[1], lst)
+        lst = [None, await page.eval_on_selector_all('.popover .ts-chip', 'cs => cs.map(c => c.textContent)')]
+        await page.fill('.popover input[name=title]', 'o'); await page.wait_for_timeout(100)
+        lst2 = await page.eval_on_selector_all('.popover .ts-chip', 'cs => cs.map(c => c.textContent)')
+        check('4. typing an event title suggests the last 7 days\' event titles (most recent first)', lst[1][:1] == ['Breakfast'] and 'Yoga class' in lst[1] and 'Coffee' in lst[1] and 'Old thing' not in lst[1] + lst2, (lst, lst2))
         await page.click('.popover .qc-cancel')
         # 5. life weights
         await page.evaluate("document.querySelector('#btn-settings').click()"); await page.wait_for_selector('dialog[open] .settings-form')

@@ -130,7 +130,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   const html = `
   <form class="event-form" autocomplete="off">
     <header class="dlg-head">
-      <input name="summary" class="title-input" placeholder="Add title" value="${esc(ev?.summary || init.title || '')}" autofocus list="tempo-titles" autocomplete="off">
+      <input name="summary" class="title-input" placeholder="Add title" value="${esc(ev?.summary || init.title || '')}" autofocus autocomplete="off">
       <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
     </header>
     <div class="dlg-body">
@@ -238,6 +238,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   </form>`;
 
   return modal(html, (dlg, close) => {
+    ctx.titleSuggest?.($('form', dlg)?.summary);
     const f = $('form', dlg);
     f.freq.value = r0.freq;
     f.monthMode.value = r0.monthMode;
@@ -613,8 +614,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
 
       <div class="row only-reading"><div class="seg rformat"><label><input type="radio" name="rformat" value="book" ${r.format !== 'audio' ? 'checked' : ''}><span>📖 Book (pages)</span></label><label><input type="radio" name="rformat" value="audio" ${r.format === 'audio' ? 'checked' : ''}><span>🎧 Audiobook (hours)</span></label></div></div>
       <div class="grid3 only-reading only-audio">
-        <label class="field"><span>Length of the audiobook (hours)</span><input type="number" name="ahours" min="0.25" step="0.25" value="${r.format === 'audio' ? +((r.pages || 60) / 60).toFixed(2) : 8}"></label>
-        <label class="field"><span>Already listened (hours)</span><input type="number" name="adone" min="0" step="0.25" value="${r.format === 'audio' ? +(((+r.startPage || 1) - 1) / 60).toFixed(2) : 0}"></label>
+        ${(() => { const len = r.format === 'audio' ? (+r.pages || 0) + Math.max(0, (+r.startPage || 1) - 1) : 480, done = r.format === 'audio' ? Math.max(0, (+r.startPage || 1) - 1) : 0;
+          const hm = (n, h, m) => `<div class="join hm"><input type="number" name="${h}" min="0" max="200" step="1" value="${Math.floor(n / 60)}" class="num" aria-label="Hours"><span class="muted">h</span><input type="number" name="${m}" min="0" max="59" step="1" value="${n % 60}" class="num" aria-label="Minutes"><span class="muted">min</span></div>`;
+          return `<label class="field"><span>Length of the audiobook</span>${hm(len, 'ah', 'am')}</label><label class="field"><span>Already listened</span>${hm(done, 'adh', 'adm')}</label>`; })()}
         <label class="field"><span>Playback speed</span><select name="aspeed">${[0.8, 1, 1.1, 1.2, 1.25, 1.5, 1.75, 2, 2.5, 3].map((v) => `<option value="${v}" ${(r.format === 'audio' ? +r.speed / 60 : 1) === v ? 'selected' : ''}>×${v}</option>`).join('')}</select></label>
       </div>
       <div class="grid3 only-reading only-book">
@@ -761,7 +763,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
         totalMinutes: Math.max(5, Math.round((+f.hours.value || 0) * 60)),
         // an audiobook is kept as "pages" = minutes of audio still to hear, at (60 × playback speed) per hour
         reading: f.rformat?.value === 'audio'
-          ? (() => { const len = Math.max(15, Math.round((+f.ahours.value || 1) * 60)), done = Math.min(len - 1, Math.max(0, Math.round((+f.adone.value || 0) * 60))); return { format: 'audio', pages: len - done, startPage: done + 1, speed: 60 * (+f.aspeed.value || 1), unit: 'pph', labels: 'actual' }; })()
+          ? (() => { const len = Math.max(5, (+f.ah.value || 0) * 60 + (+f.am.value || 0)), done = Math.min(len - 1, Math.max(0, (+f.adh.value || 0) * 60 + (+f.adm.value || 0))); return { format: 'audio', pages: len - done, startPage: done + 1, speed: 60 * (+f.aspeed.value || 1), unit: 'pph', labels: 'actual' }; })()
           : { pages: Math.max(1, +f.pages.value || 1), startPage: Math.max(1, +f.startPage.value || 1), speed: Math.max(0.1, +f.speed.value || 1), unit: f.unit.value, labels: f.labels.value },
         deadline: T.fromDTInput(f.deadline.value, tz),
         earliestStart: T.fromDTInput(f.earliest.value, tz),
@@ -956,7 +958,7 @@ export function settingsDialog(ctx) {
   const busySet = new Set(s.busyCalendars || allCals.map((c) => c.id));
   const agendaCal = (st.gmeta.calendars || []).find((c) => c.id === (s.taskCalendarId || '')) || (st.gmeta.calendars || []).find((c) => c.primary);
   const agendaOn = !!agendaCal?.notificationSettings?.notifications?.some((n) => n.type === 'agenda' && n.method === 'email');
-  let cats = (s.categories || []).map((c) => ({ ...c }));
+  let cats = C.ordered(s).map((c) => ({ ...c })); // alphabetical, sub-categories under their main one
   let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
   let projects = (s.projects || []).map((p) => ({ ...p }));
   let wx = { unit: W.defaultUnit(s.tz), ...(s.weather || {}) };
@@ -1249,7 +1251,7 @@ export function settingsDialog(ctx) {
     const graph = (d) => { const cv = GM.drainCurve(s, d, gStats); return `${GM.drainCurveSVG(cv, d)}<span class="muted small">Now, at level ${gStats.level} (${esc(gStats.rank.name)}), drains cost ×${gStats.scale.toFixed(2)}. Based on ${gStats.est ? 'a typical' : 'your recent'} ${d.per === 'day' ? `day (≈${cv.dayXP} XP)` : `day (≈${cv.dayXP} XP) and week (≈${cv.weekXP} XP)`}. Not doing it wins the clean bonus: <b class="xp-c">+${cv.cleanDay}</b> for the day${d.per === 'week' ? ` and <b class="xp-c">+${cv.cleanWeek}</b> for the week` : ''}.</span>`; };
     const drawDrains = () => {
       const box = $('.drain-list', dlg); if (!box) return;
-      const sentence = (d) => { const tol = Math.max(+d.free || 0, +d.tol || 0); return `${+d.free ? `The first ${d.free} h a ${d.per} are free. ` : ''}${tol > (+d.free || 0) ? `Up to ${tol} h a ${d.per}: −${d.basePct}% of the XP of ${d.per === 'week' ? 'each day you do it' : 'that day'}. ` : ''}Beyond: +${d.growPct}% per extra hour${d.per === 'week' ? ' of the whole week\'s XP' : ''}, at most ${d.maxPct}%. Costs ${d.types.length === 3 ? 'all' : d.types.join(' + ')} XP.`; };
+      const sentence = (d) => { const tol = Math.max(+d.free || 0, +d.tol || 0); return `${+d.free ? `The first ${d.free} h a ${d.per} are free. ` : ''}${tol > (+d.free || 0) ? `Up to ${tol} h a ${d.per}: −${d.basePct}% of the XP of ${d.per === 'week' ? 'each day you do it' : 'that day'}. ` : ''}Beyond: +${d.growPct}% per extra hour${d.per === 'week' ? ' of the whole week\'s XP' : ''}, at most ${d.maxPct}%. Costs ${d.types.length === 3 ? 'all' : d.types.join(' + ')} XP${(d.strength ?? 100) !== 100 ? ` — at ${d.strength}% strength` : ''}.`; };
       setHTML(box, drains.map((d, i) => `<div class="drain" data-i="${i}">
         <div class="row"><input class="dr-name" value="${esc(d.name || '')}" placeholder="Name, e.g. Gameplay" maxlength="30"><select class="dr-per"><option value="week" ${d.per !== 'day' ? 'selected' : ''}>per week</option><option value="day" ${d.per === 'day' ? 'selected' : ''}>per day</option></select><span class="grow"></span><button type="button" class="icon-btn dr-del" title="Remove" aria-label="Remove">✕</button></div>
         <label class="field"><span>Titles with these words</span><input class="dr-words" value="${esc((d.words || []).join(', '))}" placeholder="e.g. game, gaming, PlayStation"></label>
@@ -1260,6 +1262,7 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Cost while tolerated (%)</span><input type="number" class="dr-base num" min="0" max="100" step="1" value="${d.basePct ?? 10}"></label>
           <label class="field"><span>Extra per hour beyond (%)</span><input type="number" class="dr-grow num" min="0" max="100" step="1" value="${d.growPct ?? 15}"></label>
           <label class="field"><span>At most (%)</span><input type="number" class="dr-max num" min="0" max="100" step="1" value="${d.maxPct ?? 75}"></label>
+          <label class="field" title="How much of these costs to apply — e.g. 25% for an activity that should only cost a little"><span>Strength (% of the costs)</span><input type="number" class="dr-str num" min="0" max="200" step="5" value="${d.strength ?? 100}"></label>
         </div>
         <div class="row small">Costs: ${['app', 'busy', 'life'].map((t) => `<label class="chk"><input type="checkbox" class="dr-type" value="${t}" ${d.types.includes(t) ? 'checked' : ''}> ${t} XP</label>`).join(' ')}</div>
         ${periodHTML(d)}
@@ -1278,6 +1281,7 @@ export function settingsDialog(ctx) {
           d.words = $('.dr-words', row).value.split(/[,;\n]/).map((w) => w.trim()).filter(Boolean);
           d.cats = $$('.dr-cat:checked', row).map((x) => x.value);
           d.free = Math.max(0, +$('.dr-free', row).value || 0); d.tol = Math.max(0, +$('.dr-tol', row).value || 0);
+          d.strength = Math.min(200, Math.max(0, $('.dr-str', row).value === '' ? 100 : +$('.dr-str', row).value)); if (d.strength === 100) delete d.strength;
           d.basePct = Math.min(100, Math.max(0, +$('.dr-base', row).value || 0)); d.growPct = Math.min(100, Math.max(0, +$('.dr-grow', row).value || 0)); d.maxPct = Math.min(100, Math.max(0, +$('.dr-max', row).value || 0));
           d.types = $$('.dr-type:checked', row).map((x) => x.value); if (!d.types.length) d.types = ['app', 'busy', 'life'];
           $('.dr-say', row).textContent = sentence(d);
@@ -1293,7 +1297,7 @@ export function settingsDialog(ctx) {
     const drawBoosts = () => {
       const box = $('.boost-list', dlg); if (!box) return;
       setHTML(box, boosts.map((b, i) => `<div class="drain boost" data-i="${i}">
-        <div class="row"><input class="bo-name" value="${esc(b.name || '')}" placeholder="Name, e.g. Thesis sprint" maxlength="30"><label class="field inline"><span>Extra XP</span><input type="number" class="bo-pct num" min="0" max="300" step="5" value="${b.pct ?? 50}"> %</label><span class="grow"></span><button type="button" class="icon-btn bo-del" title="Remove" aria-label="Remove">✕</button></div>
+        <div class="row"><input class="bo-name" value="${esc(b.name || '')}" placeholder="Name, e.g. Thesis sprint" maxlength="30"><label class="field inline" title="How much extra XP it earns while it lasts (100 = double)"><span>Extra XP</span><input type="number" class="bo-pct num" min="0" max="300" step="5" value="${b.pct ?? 50}"> %</label><span class="grow"></span><button type="button" class="icon-btn bo-del" title="Remove" aria-label="Remove">✕</button></div>
         <label class="field"><span>Titles with these words</span><input class="bo-words" value="${esc((b.words || []).join(', '))}" placeholder="e.g. thesis, xyz"></label>
         <div class="field"><span>…and/or these categories</span><div class="bo-cats">${catPick(s, 'bo-cat', b.cats || [])}</div></div>
         ${periodHTML(b)}
@@ -1410,7 +1414,8 @@ export function settingsDialog(ctx) {
     $('.add-nprof', dlg).onclick = () => { nprofiles.push({ id: N.newProfileId('profile'), name: 'New profile', rules: [{ method: 'popup', minutes: 10 }] }); drawProfiles(); };
     $('.add-period', dlg).onclick = () => { periods.push({ id: 'p-' + Math.random().toString(36).slice(2, 8), name: 'New period', rules: [{ days: [1, 2, 3, 4, 5], start: s.bounds.end, end: '21:00' }] }); drawPeriods(); };
     const drawCats = () => {
-      const order = C.ordered({ categories: cats }).map((c) => cats.indexOf(c));
+      // alphabetical; categories added just now stay at the end until saved, so you can name them
+      const order = [...C.ordered({ categories: cats.filter((c) => !c._new) }).map((c) => cats.indexOf(c)), ...cats.map((c, i) => (c._new ? i : -1)).filter((i) => i >= 0)];
       setHTML($('.cats-list', dlg), order.map((i) => [cats[i], i]).map(([c, i]) => `<div class="cat-row ${c.parent ? 'sub' : ''}" data-i="${i}">
         <span class="sw-dot big" style="background:${esc(c.color)}"></span>
         <details class="ic-pick"><summary class="cat-icbtn" title="Icon" aria-label="Choose icon">${esc(c.icon || '＋')}</summary>
@@ -1511,7 +1516,7 @@ export function settingsDialog(ctx) {
       }
     }));
     drawAccounts();
-    $('.add-cat', dlg).onclick = () => { cats.push({ id: 'cat-' + Math.random().toString(36).slice(2, 8), name: 'New category', color: C.CAT_COLORS[cats.length % C.CAT_COLORS.length], icon: '' }); drawCats(); $$('.cat-nm', dlg).at(-1).select(); };
+    $('.add-cat', dlg).onclick = () => { cats.push({ id: 'cat-' + Math.random().toString(36).slice(2, 8), name: 'New category', color: C.CAT_COLORS[cats.length % C.CAT_COLORS.length], icon: '', _new: true }); drawCats(); $$('.cat-nm', dlg).at(-1).select(); };
     $('.export-json', dlg).onclick = () => ctx.exportJson();
     $('.import-json', dlg).onchange = (e) => { const file = e.target.files[0]; if (file) close({ action: 'import', file }); };
 
@@ -1560,7 +1565,7 @@ export function settingsDialog(ctx) {
         eventProfile: f.eventProfile.value, taskProfile: f.taskProfile.value,
         defaultReminder: (() => { const pr = nprofiles.find((p) => p.id === f.eventProfile.value); const m = pr?.rules.find((r) => r.method === 'popup'); return m ? +m.minutes : s.defaultReminder; })(),
         hoursChange: f.hoursChange.value,
-        categories: cats.map((c) => ({ ...c, name: c.name.trim() || 'Untitled' })),
+        categories: cats.map(({ _new, ...c }) => ({ ...c, name: c.name.trim() || 'Untitled' })),
         askCategory: f.askCategory.checked,
         leave,
         periods: periods.map((p) => ({ ...p, name: p.name.trim() || 'Untitled period', rules: p.rules.filter((r) => r.days.length && r.start && r.end) })),
@@ -1873,7 +1878,7 @@ export function startedLateDialog(ctx, { task, sess }) {
           <label class="chk"><input type="radio" name="fill" value="none" checked> Leave it as free time</label>
           <label class="chk"><input type="radio" name="fill" value="event"> I was doing something else: <input name="evTitle" placeholder="e.g. Phone call" style="flex:1;min-width:0"></label>
           <div class="row late-ev" hidden>
-            <select name="evCat"><option value="">No category</option>${(s.categories || []).map((c) => `<option value="${esc(c.id)}">${esc((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}</select>
+            <select name="evCat"><option value="">No category</option>${C.ordered(s).map((c) => `<option value="${esc(c.id)}">${esc((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}</select>
             ${cals.length > 1 ? `<select name="evCal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def0 ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>` : ''}
           </div>
           ${others.length ? `<label class="chk"><input type="radio" name="fill" value="task"> I worked on another task: <select name="otherTask">${others.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}</option>`).join('')}</select></label>` : ''}
