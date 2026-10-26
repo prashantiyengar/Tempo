@@ -295,6 +295,7 @@ function renderTimeGrid(days, items) {
   const deadlines = st().tasks.filter((t) => !t.archived && Number.isFinite(+t.deadline) && +t.deadline > 0 && S.progress(t).pct < 100);
   const drawErrors = [];
   const toNow = app.toNowIt = toNowItem(timed);
+  app.dayFill = computeDayFill(days, items);
   $('#fab')?.classList.toggle('has-tonow', !!toNow && days.includes(todayK));
 
   const root = el(`<div class="tg" style="--hh:${hh}px;--ncol:${days.length}">
@@ -393,6 +394,7 @@ function renderTimeGrid(days, items) {
 }
 
 function renderMonth({ days, monthKey }, items) {
+  app.dayFill = computeDayFill(days, items);
   const z = tz(), todayK = T.dayKey(Date.now(), z), month = T.parseKey(monthKey).m;
   const root = el(`<div class="month">
     <div class="m-head">${days.slice(0, 7).map((k) => `<div>${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</div>`).join('')}</div>
@@ -457,7 +459,26 @@ function dayMarks(k, todayK) {
   const r = set().dayRatings?.[k], on = notesOn(k), n = on.length, due = on.some(noteDue);
   const rate = k <= todayK ? `<button type="button" class="dm-rate ${r ? 'set' : ''}" data-rate="${k}" title="${esc(r ? `${RATE_WORDS[r.v]} day (${r.v}/5)${r.why ? ` — ${r.why}` : ''} · click to change` : 'Rate this day (0–5)')}">${r ? SMILEYS[r.v] : '☺'}</button>` : '';
   const note = n ? `<button type="button" class="dm-note ${due ? 'due' : ''}" data-dnotes="${k}" title="${n} note${n > 1 ? 's' : ''}${due ? ' — a note for this day you haven\'t read yet' : ''} — click to read">🗒<b>${n > 1 ? n : ''}</b></button>` : '';
-  return rate || note ? `<span class="day-marks">${rate}${note}</span>` : '';
+  const fl = app.dayFill?.[k];
+  const fill = fl ? `<span class="day-fill" title="${esc(`${fl[0]}% of the day is on the calendar${fl[1] != null ? ` · ${fl[1]}% of the work hours` : ''}`)}">${fl[0]}%${fl[1] != null ? `<small> (${fl[1]}%)</small>` : ''}</span>` : '';
+  return rate || note || fill ? `<span class="day-marks">${rate}${note}${fill}</span>` : '';
+}
+// How full each day is: % of the 24 hours taken by events and sessions (overlaps once), and % of the work hours
+function computeDayFill(days, items) {
+  const s = set(), z = tz(), out = {};
+  const occ = items.filter((it) => !it.allDay && !it.declined && it.end > it.start && A.isOccupying(it, s));
+  const inter = (iv, a, b) => { let m = 0, ce = -Infinity; for (const [x, y] of iv) { const p = Math.max(x, a, ce), q = Math.min(y, b); if (q > p) m += q - p; ce = Math.max(ce, Math.min(y, b)); } return m; };
+  for (const k of days) {
+    const a = T.dayStart(k, z), b = T.dayStart(T.addDays(k, 1), z);
+    const iv = occ.filter((it) => it.end > a && it.start < b).map((it) => [Math.max(it.start, a), Math.min(it.end, b)]).sort((x, y) => x[0] - y[0]);
+    if (!iv.length) continue;
+    const dayPct = Math.round((inter(iv, a, b) / (b - a)) * 100);
+    const wins = S.windows(a, b, s.bounds, z).filter((w) => T.dayKey(w.start, z) === k);
+    const wMin = wins.reduce((t, w) => t + (w.end - w.start), 0);
+    const workPct = wMin > 0 ? Math.min(100, Math.round((wins.reduce((t, w) => t + inter(iv, w.start, w.end), 0) / wMin) * 100)) : null;
+    out[k] = [dayPct, workPct];
+  }
+  return out;
 }
 function wireDayMarks(root) {
   $$('.day-marks button', root).forEach((b) => {
@@ -767,6 +788,33 @@ async function ensureCover(t) {
 const coverHTML = (t, cls = 'bc-cover') => { const src = coverFor(t); return src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-title="${esc((t?.title || '').slice(0, 40))}" style="--c:${esc(t?.color || '#7c5cff')}">` : `<span class="${cls} none" style="--c:${esc(t?.color || '#7c5cff')}">${esc((t?.title || '').slice(0, 40))}</span>`; };
 // a cover that doesn't load becomes a plain spine with the title
 const wireCovers = (root) => $$('img.bc-cover, img.cov-prev', root).forEach((img) => { img.onerror = () => { const sp = document.createElement('span'); sp.className = img.className + ' none'; sp.style.cssText = img.style.cssText; sp.textContent = img.dataset.title || '📖'; img.replaceWith(sp); }; });
+// The cover of a book: ISBN or an image address, with a preview — saved without re-planning the reading sessions
+async function editCover(t) {
+  const r0 = t.reading || {};
+  const res = await modal(`<form class="choice cover-f"><h2>📚 ${esc(t.title)}</h2>
+      <div class="row bk-cover-row"><span class="cov-box">${coverHTML(t, 'cov-prev')}</span>
+        <div style="flex:1;display:flex;flex-direction:column;gap:6px"><label class="field"><span>ISBN <em class="muted">(finds the cover)</em></span><input name="isbn" value="${esc(r0.isbn || '')}" placeholder="e.g. 9780141182803" inputmode="numeric" autocomplete="off"></label>
+        <label class="field"><span>…or a cover image address</span><input name="cover" value="${esc(r0.cover || '')}" placeholder="https://…/cover.jpg" autocomplete="off"></label></div></div>
+      <div class="actions"><button type="button" class="btn ghost cov-plan">Edit the reading plan…</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save cover</button></div></form>`,
+  (dlg, close) => {
+    const f = $('form', dlg); wireCovers(dlg);
+    let tm = 0;
+    const prev = () => { const box = $('.cov-box', dlg); setHTML(box, coverHTML({ ...t, reading: { isbn: f.isbn.value.trim(), cover: f.cover.value.trim() } }, 'cov-prev')); wireCovers(box); };
+    for (const n of ['isbn', 'cover']) f[n].addEventListener('input', () => { clearTimeout(tm); tm = setTimeout(prev, 500); });
+    $('.cov-plan', dlg).onclick = () => close('plan');
+    f.onsubmit = (e) => { e.preventDefault(); close({ isbn: f.isbn.value.trim(), cover: f.cover.value.trim() }); };
+  }, { cls: 'narrow' });
+  if (!res || res === 'plan') return res;
+  const cur = st().tasks.find((x) => x.id === t.id); if (!cur) return null;
+  const reading = { ...(cur.reading || {}) }; delete reading.isbn; delete reading.cover;
+  if (res.isbn) reading.isbn = res.isbn; if (res.cover) reading.cover = res.cover;
+  replaceTask({ ...cur, reading });
+  await saveTasks(`cover of “${cur.title}”`);
+  const nt = st().tasks.find((x) => x.id === t.id);
+  await ensureCover(nt);
+  toast('Cover saved');
+  return true;
+}
 // ---------- Bookcase: the books you've read and are reading ----------
 function libraryRows() {
   const now = Date.now();
@@ -814,7 +862,14 @@ async function openLibrary() {
     ${rows.length ? '' : '<p class="muted small">Plan a book with 📖 and it shows up here as you read it.</p>'}
   </div></div>`, (dlg, close) => {
     wireCovers(dlg);
-    $$('.lib-t tr[data-task], .bc-book', dlg).forEach((r) => (r.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === r.dataset.task)); }));
+    $$('.lib-t tr[data-task]', dlg).forEach((r) => (r.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === r.dataset.task)); }));
+    // a book on the shelf: change its cover (ISBN or image) right here — the plan isn't touched
+    $$('.bc-book', dlg).forEach((b) => (b.onclick = async () => {
+      const t = st().tasks.find((x) => x.id === b.dataset.task); if (!t) return;
+      const r = await editCover(t);
+      if (r === 'plan') { close(); editTask(st().tasks.find((x) => x.id === t.id)); return; }
+      if (r) { const tmp = document.createElement('span'); setHTML(tmp, coverHTML(st().tasks.find((x) => x.id === t.id))); $('.bc-cover', b)?.replaceWith(tmp.firstElementChild); wireCovers(b); }
+    }));
     // download covers not kept yet, then show the kept copy
     for (const r of rows) if (coverSrcOf(r.t.reading) && !coverCache()[coverSrcOf(r.t.reading)]) ensureCover(r.t).then(() => { const b = dlg.isConnected && $(`.bc-book[data-task="${CSS.escape(r.t.id)}"]`, dlg); if (b) { const old = $('.bc-cover', b); const tmp = document.createElement('span'); setHTML(tmp, coverHTML(r.t)); old?.replaceWith(tmp.firstElementChild); wireCovers(b); } });
   }, { cls: 'wide' });
@@ -2664,11 +2719,13 @@ async function runCycle({ sync = true, pull = false } = {}) {
       if (E.connected(st()) && set().syncTasksToGoogle) setStatus('Syncing…', 'busy');
       const res = await E.syncTasks(st(), (fn) => fn(st()), (n, total, phase) => setStatus(phase === 'verify' ? 'Checking Google…' : `Syncing ${n}/${total}…`, 'busy'));
       if (navigator.onLine === false || st().offline) offlineStatus();
-      else if (res.ok) setStatus(`Synced ${T.fmtTime(Date.now(), tz(), set().h12)}`, 'ok');
+      else if (res.ok) setStatus(`Synced ${T.fmtTime(Date.now(), tz(), set().h12)}${res.pending ? ` · ${res.pending} more soon` : ''}`, 'ok');
       else if (res.kind === 'local') setStatus('Local only', 'warn');
       else if (res.kind === 'off') setStatus('Not syncing tasks', 'warn');
       else setStatus('Sync problem', 'bad');
       if (res.changed) { E.invalidate(); await render(); }
+      // a big backlog goes through in steps: carry on shortly with the next batch
+      if (res.pending && !app.syncMoreT) app.syncMoreT = setTimeout(() => { app.syncMoreT = null; cycle(); }, 12000);
     } catch (err) { handleError(err); }
     await E.persist(st(), ['tasks', 'orphanGids', 'syncInfo']);
     renderBanner();

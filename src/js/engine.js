@@ -426,6 +426,10 @@ const bodyHash = (body) => JSON.stringify([body.summary, body.start, body.end, b
 // Requests run in parallel (several at once, with automatic back-off when Google rate-limits). Every run also
 // verifies against what is really on Google: sessions that are missing or differ there are written again, stray
 // Tempo copies are removed, and after writing, everything is read back once more to confirm it arrived intact.
+// Scale: at most this many writes / deletions per sync run (the most urgent first), and fewer requests at once when
+// there's a lot to do — so a big backlog goes through in steps instead of running into Google's rate limits.
+export const SYNC_MAX_WRITES = 25, SYNC_MAX_DELETES = 25;
+const lanes = (n) => (n > 40 ? 2 : n > 12 ? 3 : G.PARALLEL);
 export async function syncTasks(state, apply, onProgress) {
   if (!connected(state)) return recordSync(state, apply, { ok: false, kind: 'local', error: 'Not connected to Google — task sessions are only stored in this browser.' });
   if (!state.settings.syncTasksToGoogle) return recordSync(state, apply, { ok: false, kind: 'off', error: 'Writing task sessions to Google is turned off in Settings.' });
@@ -467,7 +471,7 @@ export async function syncTasks(state, apply, onProgress) {
     if (j.gid) seenG.add(j.gid);
   }
   for (let i = jobs.length - 1; i >= 0; i--) if (jobs[i].dupChunk) jobs.splice(i, 1);
-  let n = 0, failed = 0, lastErr = null, repaired = 0, verified = 0, unverified = [], deletedN = 0;
+  let n = 0, failed = 0, lastErr = null, repaired = 0, verified = 0, unverified = [], deletedN = 0, deferred = 0;
   const upsert = async (j) => {
     try {
       let gid = j.gid;
@@ -506,9 +510,11 @@ export async function syncTasks(state, apply, onProgress) {
       // Only remove stray copies of OUR tasks (duplicates) or of tasks deleted here; unknown tasks are imported by pullTasks.
       if (!known.has(gid) && (localIds.has(tid) || tomb.has(tid))) state.orphanGids.includes(gid) || state.orphanGids.push(gid);
     }
-    // 2. Deletions (in parallel)
-    const orphans = [...state.orphanGids.map((g) => [null, g]), ...state.tasks.flatMap((t) => (t.orphanGids || []).map((g) => [t.id, g]))];
-    await G.pool(orphans, G.PARALLEL, async ([taskId, gid]) => {
+    // 2. Deletions (in parallel; a big backlog is spread over several runs)
+    const orphansAll = [...state.orphanGids.map((g) => [null, g]), ...state.tasks.flatMap((t) => (t.orphanGids || []).map((g) => [t.id, g]))];
+    const orphans = orphansAll.slice(0, SYNC_MAX_DELETES);
+    deferred += orphansAll.length - orphans.length;
+    await G.pool(orphans, lanes(orphans.length), async ([taskId, gid]) => {
       const [cal, id] = splitGid(normGid(state, gid));
       await G.deleteEvent(cal, id);
       deletedN++;
@@ -517,15 +523,19 @@ export async function syncTasks(state, apply, onProgress) {
         else s.orphanGids = s.orphanGids.filter((g) => g !== gid);
       });
     });
-    // 3. Creates and updates (in parallel)
-    const todo = jobs.filter((j) => !(j.gid && j.syncHash === j.hash && splitGid(j.gid)[0] === j.cal));
-    await G.pool(todo, G.PARALLEL, upsert);
+    // 3. Creates and updates. With many to write, the most urgent go first (what's happening now and soonest), at
+    // most SYNC_MAX_WRITES per run with fewer requests at once; the rest follow on the next runs (a few seconds later).
+    const now0 = Date.now(), urgency = (j) => (j.sess.end < now0 ? 1e15 + (now0 - j.sess.end) : Math.max(0, j.sess.start - now0));
+    const todoAll = jobs.filter((j) => !(j.gid && j.syncHash === j.hash && splitGid(j.gid)[0] === j.cal)).sort((a, b) => urgency(a) - urgency(b));
+    const todo = todoAll.slice(0, SYNC_MAX_WRITES), later = new Set(todoAll.slice(SYNC_MAX_WRITES));
+    deferred += later.size;
+    await G.pool(todo, lanes(todo.length), upsert);
     // 4. Read back what we wrote and confirm it; write again whatever didn't arrive intact (up to two more rounds).
     if (todo.length || orphans.length) {
       for (let round = 0; round < 4; round++) {
         onProgress?.(n, total, 'verify');
         remote = await readRemote();
-        const bad = jobs.filter((j) => !j.failed && (!j.gid || !matches(remote.get(j.gid), j.body)));
+        const bad = jobs.filter((j) => !later.has(j) && !j.failed && (!j.gid || !matches(remote.get(j.gid), j.body)));
         const strays = orphans.filter(([, g]) => remote.has(normGid(state, g)));
         if (!bad.length && !strays.length) break;
         if (round === 3) { unverified = bad; break; }
@@ -533,17 +543,17 @@ export async function syncTasks(state, apply, onProgress) {
         for (const j of bad) if (j.gid && !remote.has(j.gid)) j.gid = null;
         // Patching didn't take twice: replace the event on Google with a fresh copy.
         if (round === 2) await G.pool(bad.filter((j) => j.gid), G.PARALLEL, async (j) => { try { await G.deleteEvent(...splitGid(j.gid)); } catch { /* already gone */ } j.gid = null; });
-        await G.pool(strays, G.PARALLEL, ([, g]) => G.deleteEvent(...splitGid(normGid(state, g))));
-        await G.pool(bad, G.PARALLEL, upsert);
+        await G.pool(strays, lanes(strays.length), ([, g]) => G.deleteEvent(...splitGid(normGid(state, g))));
+        await G.pool(bad, lanes(bad.length), upsert);
       }
     }
-    verified = jobs.filter((j) => j.gid && !j.failed && !unverified.includes(j)).length;
+    verified = jobs.filter((j) => j.gid && !j.failed && !later.has(j) && !unverified.includes(j)).length;
   } catch (e) {
     return recordSync(state, apply, { ok: false, kind: e instanceof G.PermissionError ? 'permission' : e instanceof G.AuthError ? 'auth' : 'error', error: e.message, total, calId }, e);
   }
   for (const j of unverified) setGid(j.task.id, j.sess.id, j.gid, null); // try again next time
   const onGoogle = state.tasks.filter((t) => !t.archived).reduce((a, t) => a + S.sessions(t).filter((c) => c.gid).length, 0);
-  const base = { total, onGoogle, calId, changed: n + deletedN, deleted: deletedN, verified, repaired, at: Date.now() };
+  const base = { total, onGoogle, calId, changed: n + deletedN, deleted: deletedN, verified, repaired, pending: deferred, at: Date.now() };
   if (failed || unverified.length) {
     const msg = failed ? `${failed} session(s) could not be written: ${lastErr?.message}` : `${unverified.length} session(s) didn't arrive intact on Google; Tempo will retry.`;
     return recordSync(state, apply, { ok: false, kind: 'partial', error: msg, ...base });

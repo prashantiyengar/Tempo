@@ -1427,3 +1427,14 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .np-aside { font-style: italic; opacity: .78; }
 .np-title.long { font-size: clamp(26px, 5vw, 54px); letter-spacing: .02em; }
 @media print { body.review-mode .np-title.long { font-size: 30pt; } }
+.day-fill { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: 2px; }
+.day-fill small { font-size: 9px; opacity: .8; }
+@media (max-width: 900px) {
+  .xp-chip { font-size: 12px !important; padding: 1px 6px !important; }
+  .day-marks { gap: 4px; flex-wrap: wrap; justify-content: center; }
+  .day-marks button.dm-rate { font-size: 19px; padding: 2px 3px; min-width: 26px; min-height: 26px; }
+  .day-marks button.dm-rate:not(.set) { opacity: .45; }
+  .day-marks button.dm-note { font-size: 15px !important; padding: 2px 4px; }
+  .day-fill { font-size: 11px; display: block; width: 100%; text-align: center; }
+  .day-fill small { font-size: 10px; }
+}
