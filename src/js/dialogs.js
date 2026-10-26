@@ -613,6 +613,11 @@ export function taskDialog(ctx, task = null, preset = {}) {
       ${prog ? `<div class="progress-line"><div class="bar"><i style="width:${prog.pct}%;background:${t.color}"></i></div><span class="muted small">${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)} done</span></div>` : ''}
 
       <div class="row only-reading"><div class="seg rformat"><label><input type="radio" name="rformat" value="book" ${r.format !== 'audio' ? 'checked' : ''}><span>📖 Book (pages)</span></label><label><input type="radio" name="rformat" value="audio" ${r.format === 'audio' ? 'checked' : ''}><span>🎧 Audiobook (hours)</span></label></div></div>
+      <div class="row only-reading bk-cover-row">
+        <span class="cov-box">${(() => { const src = ctx.coverFor?.(t); return src ? `<img class="cov-prev" src="${esc(src)}" alt="" referrerpolicy="no-referrer" data-title="📖">` : '<span class="cov-prev none">📖</span>'; })()}</span>
+        <label class="field"><span>ISBN <em class="muted">(finds the cover)</em></span><input name="isbn" value="${esc(r.isbn || '')}" placeholder="e.g. 9780141182803" inputmode="numeric" autocomplete="off"></label>
+        <label class="field grow"><span>…or a cover image address</span><input name="cover" value="${esc(r.cover || '')}" placeholder="https://…/cover.jpg" autocomplete="off"></label>
+      </div>
       <div class="grid3 only-reading only-audio">
         ${(() => { const len = r.format === 'audio' ? (+r.pages || 0) + Math.max(0, (+r.startPage || 1) - 1) : 480, done = r.format === 'audio' ? Math.max(0, (+r.startPage || 1) - 1) : 0;
           const hm = (n, h, m) => `<div class="join hm"><input type="number" name="${h}" min="0" max="200" step="1" value="${Math.floor(n / 60)}" class="num" aria-label="Hours"><span class="muted">h</span><input type="number" name="${m}" min="0" max="59" step="1" value="${n % 60}" class="num" aria-label="Minutes"><span class="muted">min</span></div>`;
@@ -728,6 +733,16 @@ export function taskDialog(ctx, task = null, preset = {}) {
       onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; },
     });
     showColor();
+    // the cover preview follows the ISBN / image address
+    const covPrev = () => {
+      const box = $('.cov-box', dlg); if (!box) return;
+      const src = ctx.coverFor?.({ ...t, reading: { isbn: f.isbn.value.trim(), cover: f.cover.value.trim() } });
+      setHTML(box, src ? `<img class="cov-prev" src="${esc(src)}" alt="" referrerpolicy="no-referrer">` : '<span class="cov-prev none">📖</span>');
+      const img = $('img', box); if (img) img.onerror = () => setHTML(box, '<span class="cov-prev none" title="No cover found">?</span>');
+    };
+    let covT = 0;
+    for (const n of ['isbn', 'cover']) f[n]?.addEventListener('input', () => { clearTimeout(covT); covT = setTimeout(covPrev, 500); });
+    { const img = $('.cov-box img', dlg); if (img) img.onerror = () => setHTML($('.cov-box', dlg), '<span class="cov-prev none">📖</span>'); }
     // Deadline shortcuts, based on the task's own day bounds if set, otherwise the default ones
     $$('[data-dl]', dlg).forEach((b) => (b.onclick = () => {
       const bd = f.bmode.value === 'custom' ? { start: f.bStart.value || '09:00', end: f.bEnd.value || '17:00', days: $$('input[name=bdays]:checked', dlg).map((c) => +c.value) } : s.bounds;
@@ -762,9 +777,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
         title: f.title.value.trim() || (kind === 'reading' ? 'Reading' : 'Task'),
         totalMinutes: Math.max(5, Math.round((+f.hours.value || 0) * 60)),
         // an audiobook is kept as "pages" = minutes of audio still to hear, at (60 × playback speed) per hour
-        reading: f.rformat?.value === 'audio'
+        reading: { ...(f.isbn?.value.trim() ? { isbn: f.isbn.value.trim() } : {}), ...(f.cover?.value.trim() ? { cover: f.cover.value.trim() } : {}), ...(f.rformat?.value === 'audio'
           ? (() => { const len = Math.max(5, (+f.ah.value || 0) * 60 + (+f.am.value || 0)), done = Math.min(len - 1, Math.max(0, (+f.adh.value || 0) * 60 + (+f.adm.value || 0))); return { format: 'audio', pages: len - done, startPage: done + 1, speed: 60 * (+f.aspeed.value || 1), unit: 'pph', labels: 'actual' }; })()
-          : { pages: Math.max(1, +f.pages.value || 1), startPage: Math.max(1, +f.startPage.value || 1), speed: Math.max(0.1, +f.speed.value || 1), unit: f.unit.value, labels: f.labels.value },
+          : { pages: Math.max(1, +f.pages.value || 1), startPage: Math.max(1, +f.startPage.value || 1), speed: Math.max(0.1, +f.speed.value || 1), unit: f.unit.value, labels: f.labels.value }) },
         deadline: T.fromDTInput(f.deadline.value, tz),
         earliestStart: T.fromDTInput(f.earliest.value, tz),
         rank: Math.max(1, Math.round(+f.rank.value || 3)),
@@ -1127,7 +1142,7 @@ export function settingsDialog(ctx) {
         <div class="acct-form"></div>
       </section>
       <section data-pane="7" hidden>
-        ${sect('s-paper', 'Weekly review newspaper', `<label class="field"><span>Name of the newspaper</span><input name="paperName" value="${esc(s.paperName || 'Der Zeitplan')}" maxlength="40"></label>
+        ${sect('s-paper', 'Weekly review newspaper', `<label class="field"><span>Name of the newspaper</span><input name="paperName" value="${esc(s.paperName && s.paperName !== 'Der Zeitplan' ? s.paperName : 'Remembrance of Things Past')}" maxlength="40"></label>
           <label class="field"><span>Hours counted for time use</span><select name="paperScope">${[...Object.entries(A.SCOPES), ...(s.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${(s.paperScope || 'waking') === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`)}
         ${sect('s-papercats', 'Categories in the newspaper', `<div class="field"><span>Categories in the newspaper (untick to leave out)</span><div class="g-catlist paper-cats">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" class="pc" value="${esc(c.id)}" ${(s.paperCats?.exclude || []).includes(c.id) ? '' : 'checked'}> ${esc(C.catLabel(c))}</label>`).join('')}<label class="chk"><input type="checkbox" class="pc" value="__none" ${(s.paperCats?.exclude || []).includes('__none') ? '' : 'checked'}> Without a category</label></div></div>`)}
         ${sect('s-pics', 'Newspaper pictures', `<div class="field"><span>Picture sources (one is picked at random each time)</span><div class="pic-src-list"></div><button type="button" class="btn small add-pic-src">+ Add a source</button></div>
@@ -1536,7 +1551,7 @@ export function settingsDialog(ctx) {
         wiggleMinutes: Math.max(0, f.wiggleMinutes.value === '' ? 15 : +f.wiggleMinutes.value),
         sinceLastBuffer: Math.max(0, Math.min(15, Math.round(+f.sinceLastBuffer.value || 0))),
         tillNextBuffer: Math.max(0, Math.min(15, Math.round(+f.tillNextBuffer.value || 0))),
-        paperName: f.paperName.value.trim().slice(0, 40) || 'Der Zeitplan', paperScope: f.paperScope.value,
+        paperName: f.paperName.value.trim().slice(0, 40) || 'Remembrance of Things Past', paperScope: f.paperScope.value,
         paperCats: { exclude: $$('.paper-cats .pc:not(:checked)', dlg).map((x) => x.value) },
         picSources: picSrc.map((x) => ({ ...x, name: (x.name || '').trim() || 'Pictures', value: (x.value || '').trim() })),
         goalNotice: f.goalNotice.checked, goalNoticeAt: f.goalNoticeAt.value || '09:00',

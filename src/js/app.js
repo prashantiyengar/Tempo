@@ -42,6 +42,7 @@ const ctx = {
   externalChanged() { AC.invalidateExternal(); render(); cycle(); },
   lastEventEnd: (o) => lastEventEnd(o),
   titleSuggest: (inp) => attachTitleSuggest(inp),
+  coverFor: (t) => coverFor(t),
   nextEventStart: (o) => nextEventStart(o),
   get lastBusy() { return app.lastBusy; },
   eventDone: (stp) => projectEventDone(stp),
@@ -721,7 +722,7 @@ function renderSidebar() {
     for (const k of kids) { html.push(row(k)); seen.add(k.id); }
   }
   const books = st().tasks.filter((t) => t.kind === 'reading');
-  const top = books.length ? `<button type="button" class="link small lib-open" title="Books you've read and are reading">📚 Library (${books.length})</button>` : '';
+  const top = books.length ? `<button type="button" class="link small lib-open" title="Books you've read and are reading">📚 Bookcase (${books.length})</button>` : '';
   const oldHTML = old.length ? `<details class="tl-arch" ${app.archOpen ? 'open' : ''}><summary class="muted small">Finished more than a week ago (${old.length})</summary>${old.map(row).join('')}</details>` : '';
   setHTML($('#task-list'), (tasks.length || old.length) ? top + html.join('') + oldHTML : `${top}<p class="muted small empty">No tasks yet. Type one above, or use + Task — Tempo splits it into sessions around your calendar.</p>`);
   $('#task-list .tl-arch')?.addEventListener('toggle', (e) => { app.archOpen = e.target.open; });
@@ -737,7 +738,36 @@ function taskFinishedAt(t, now = Date.now()) {
   const done = (t.frozen || []).filter((c) => c.status === 'done');
   return t.completedAt || (done.length ? Math.max(...done.map((c) => c.end)) : null);
 }
-// ---------- Library: the books you've read and are reading ----------
+// ---------- Covers: from the book's ISBN (Open Library) or an image address you give. Each is downloaded once, made
+// into a small picture of the same size, and kept on this device; if a site doesn't allow downloading, the image is
+// shown straight from its address instead. ----------
+const COVERS = 'tempo:covers';
+const coverCache = () => { try { return JSON.parse(localStorage.getItem(COVERS) || '{}'); } catch { return {}; } };
+const coverSrcOf = (r) => (r?.cover ? r.cover.trim() : r?.isbn ? `https://covers.openlibrary.org/b/isbn/${String(r.isbn).replace(/[^0-9Xx]/g, '')}-M.jpg?default=false` : '');
+function coverFor(t) { const src = coverSrcOf(t?.reading); if (!src) return ''; const c = coverCache()[src]; return c === 'none' ? '' : c || src; }
+const coverBusy = new Set();
+async function ensureCover(t) {
+  const src = coverSrcOf(t?.reading); if (!src || coverBusy.has(src)) return null;
+  const cache = coverCache(); if (cache[src]) return cache[src] === 'none' ? null : cache[src];
+  coverBusy.add(src);
+  try {
+    const res = await fetch(src, { mode: 'cors' });
+    if (!res.ok) { if (res.status === 404) { cache[src] = 'none'; try { localStorage.setItem(COVERS, JSON.stringify(cache)); } catch { /* full */ } } return null; }
+    const bmp = await createImageBitmap(await res.blob());
+    const W = 160, H = 240, cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    const sc = Math.max(W / bmp.width, H / bmp.height), w = bmp.width * sc, h = bmp.height * sc;
+    cv.getContext('2d').drawImage(bmp, (W - w) / 2, (H - h) / 2, w, h);
+    const data = cv.toDataURL('image/jpeg', 0.82);
+    const c2 = coverCache(); c2[src] = data;
+    try { localStorage.setItem(COVERS, JSON.stringify(c2)); } catch { /* storage full: shown from its address */ }
+    return data;
+  } catch { return null; } // (not allowed to download: shown straight from its address)
+  finally { coverBusy.delete(src); }
+}
+const coverHTML = (t, cls = 'bc-cover') => { const src = coverFor(t); return src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" data-title="${esc((t?.title || '').slice(0, 40))}" style="--c:${esc(t?.color || '#7c5cff')}">` : `<span class="${cls} none" style="--c:${esc(t?.color || '#7c5cff')}">${esc((t?.title || '').slice(0, 40))}</span>`; };
+// a cover that doesn't load becomes a plain spine with the title
+const wireCovers = (root) => $$('img.bc-cover, img.cov-prev', root).forEach((img) => { img.onerror = () => { const sp = document.createElement('span'); sp.className = img.className + ' none'; sp.style.cssText = img.style.cssText; sp.textContent = img.dataset.title || '📖'; img.replaceWith(sp); }; });
+// ---------- Bookcase: the books you've read and are reading ----------
 function libraryRows() {
   const now = Date.now();
   return st().tasks.filter((t) => t.kind === 'reading').map((t) => {
@@ -775,12 +805,19 @@ async function openLibrary() {
   const tr = (r) => `<tr data-task="${esc(r.t.id)}"><td><span class="lib-dot" style="background:${esc(r.color || '#7c5cff')}"></span><b>${esc(r.title)}</b></td><td>${r.audio ? `🎧 ${r.finished ? T.fmtDur(r.pages) : `${T.fmtDur(r.read)} / ${T.fmtDur(r.pages)}`}` : `${r.finished ? r.pages : `${r.read} / ${r.pages}`} pp.`}</td><td>${r.from ? `${esc(fmt(r.from))} – ${r.finished ? esc(fmt(r.to)) : 'now'}` : '<span class="muted">not started</span>'}</td><td>${r.mins ? esc(T.fmtDur(Math.round(r.mins))) : '—'}</td><td>${r.finished ? '✓' : `${r.pct}%`}</td></tr>`;
   const table = (list, head) => list.length ? `<h3 class="gd-h">${head} <span class="muted small">${list.length}</span></h3><table class="lib-t"><thead><tr><th>Book</th><th>Pages</th><th>Read</th><th>Time</th><th></th></tr></thead><tbody>${list.map(tr).join('')}</tbody></table>` : '';
   const totPages = read.filter((r) => !r.audio).reduce((a, r) => a + r.pages, 0) + now.filter((r) => !r.audio).reduce((a, r) => a + r.read, 0), totMin = rows.reduce((a, r) => a + r.mins, 0);
-  await modal(`<div class="library"><header class="dlg-head"><h2>📚 Library</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
+  const shelf = (list) => list.map((r) => `<button type="button" class="bc-book" data-task="${esc(r.t.id)}" title="${esc(r.title)}${r.finished ? ' — read' : r.from ? ` — ${r.pct}%` : ' — up next'}">${coverHTML(r.t)}<span class="bc-t">${esc(r.title)}</span>${r.finished ? '' : r.from ? `<span class="bc-bar"><i style="width:${r.pct}%"></i></span>` : ''}</button>`).join('');
+  await modal(`<div class="library bookcase"><header class="dlg-head"><h2>📚 Bookcase</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
     <p class="muted small" style="margin:0">${read.length} book${read.length === 1 ? '' : 's'} read · ${now.length} reading · ${totPages.toLocaleString()} pages · ${T.fmtDur(Math.round(totMin))} of reading</p>
+    ${rows.length ? `<div class="bc-shelf">${shelf([...now, ...read, ...next])}</div>` : ''}
     ${libraryTimeline(rows)}
     ${table(now, 'Reading now')}${table(read, 'Read')}${table(next, 'Up next')}
     ${rows.length ? '' : '<p class="muted small">Plan a book with 📖 and it shows up here as you read it.</p>'}
-  </div></div>`, (dlg, close) => { $$('.lib-t tr[data-task]', dlg).forEach((r) => (r.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === r.dataset.task)); })); }, { cls: 'wide' });
+  </div></div>`, (dlg, close) => {
+    wireCovers(dlg);
+    $$('.lib-t tr[data-task], .bc-book', dlg).forEach((r) => (r.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === r.dataset.task)); }));
+    // download covers not kept yet, then show the kept copy
+    for (const r of rows) if (coverSrcOf(r.t.reading) && !coverCache()[coverSrcOf(r.t.reading)]) ensureCover(r.t).then(() => { const b = dlg.isConnected && $(`.bc-book[data-task="${CSS.escape(r.t.id)}"]`, dlg); if (b) { const old = $('.bc-cover', b); const tmp = document.createElement('span'); setHTML(tmp, coverHTML(r.t)); old?.replaceWith(tmp.firstElementChild); wireCovers(b); } });
+  }, { cls: 'wide' });
 }
 // ---------- "Later": things to schedule, but not yet (synced with your other devices like settings) ----------
 const laterList = () => set().later || [];

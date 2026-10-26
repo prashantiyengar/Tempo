@@ -1,4 +1,4 @@
-// The weekly review as a broadsheet: "Der Zeitplan", a playful weekly newspaper about your own week —
+// The weekly review as a broadsheet: "Remembrance of Things Past", a playful weekly newspaper about your own week —
 // headlines from your time use, what got done, the books you read, a horoscope and the weather outlook.
 // Everything is written on the fly from the review data; nothing leaves the browser.
 import * as T from './tz.js';
@@ -90,6 +90,9 @@ export const PERIODS = {
 
 // extras: { orn: {left, right, top, motto}, joke: {text, source, link}, quote: {text, by} } — picture and online
 // horoscope are filled in afterwards (they load from the network) into .np-pic and .np-horo-live.
+// The paper's name ("Remembrance of Things Past" — the old default "Der Zeitplan" counts as unset)
+export const PAPER_NAME = 'Remembrance of Things Past';
+export const paperTitle = (s) => (s.paperName && s.paperName !== 'Der Zeitplan' ? s.paperName : PAPER_NAME);
 export function renderPaper({ r, s, use, now = Date.now(), signId = null, period = 'week', extras = {}, pics = [], goals = { blocks: [], next: [] }, projects = [], habits = [], game = null }) {
   const z = s.tz;
   const P = PERIODS[period] || PERIODS.week;
@@ -112,6 +115,9 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
   const v = (one, more) => (many ? more : one);
   const say = (tpl, vars = {}) => PH.say(rand, tpl, { noun: P.noun, ...vars });
   const K = (k) => say(PH.KICKERS[k], { de: P.de });
+  // Proustian touches: an epigraph under the title, an epithet for the period, and asides here and there
+  const proust = { epigraph: say(PH.PROUST_EPIGRAPHS), epithet: say(PH.PROUST_EPITHETS) };
+  const aside = () => `<span class="np-aside">${esc(say(PH.PROUST_ASIDES))}</span>`;
   const verbs = { rules: v('rules', 'rule'), dominates: v('dominates', 'dominate'), takes: v('takes', 'take'), edges: v('edges', 'edge'), leads: v('leads', 'lead') };
   const scopeW = awake < use.occupied ? 'the waking' : 'all';
   const lead = !top
@@ -216,15 +222,16 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
     <header class="np-mast">
       <div class="np-ears"><span>Nr. ${nr} · ${r.isCurrent ? P.cur : P.ed}</span><span>Preis: ${Math.round((r.weekEnd - r.from) / T.HOUR)} Stunden</span></div>
       ${extras.orn ? `<div class="np-crown">${extras.orn.top}</div>` : ''}
-      <div class="np-titlerow">${extras.orn ? extras.orn.left : ''}<h1 class="np-title">${esc(s.paperName || 'Der Zeitplan')}</h1>${extras.orn ? extras.orn.right : ''}</div>
+      <div class="np-titlerow">${extras.orn ? extras.orn.left : ''}<h1 class="np-title ${paperTitle(s).length > 16 ? 'long' : ''}">${esc(paperTitle(s))}</h1>${extras.orn ? extras.orn.right : ''}</div>
       ${extras.orn ? `<div class="np-motto"><span>${esc(extras.orn.motto)}</span></div>` : ''}
-      <div class="np-tag">Wochenzeitung für Ihre Zeit · ${esc(de(r.from, { day: 'numeric', month: 'long' }))} – ${esc(de(T.dayStart(wkEndK, z), { day: 'numeric', month: 'long', year: 'numeric' }))}</div>
+      <p class="np-epigraph">“${esc(proust.epigraph)}”</p>
+      <div class="np-tag">Wochenzeitung für Ihre Zeit · ${esc(de(r.from, { day: 'numeric', month: 'long' }))} – ${esc(de(T.dayStart(wkEndK, z), { day: 'numeric', month: 'long', year: 'numeric' }))} · <i>${esc(proust.epithet)}</i></div>
     </header>
     <div class="np-grid">
       <section class="np-lead">
         <span class="np-kicker">${esc(lead.kicker)}</span>
         <h2 class="np-h1">${esc(lead.h)}</h2>
-        <p class="np-sub">${esc(lead.sub)}</p>
+        <p class="np-sub">${esc(lead.sub)} ${aside()}</p>
         <div class="np-cols"><p class="np-drop">${leadBody}</p>
           ${commentHTML}
           ${use.groups.length ? `<figure class="np-fig"><figcaption>Where the hours went</figcaption>${use.groups.slice(0, 6).map((g) => `<div class="np-bar"><span>${esc(g.label)}</span><i style="width:${(g.m / maxG) * 100}%;--c:${esc(g.color)}"></i><b>${dur(g.m)}</b></div>`).join('')}</figure>` : ''}
@@ -280,15 +287,17 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         ${r.risks.length ? `<ul class="np-list">${r.risks.slice(0, 6).map((x) => `<li class="${x.soft ? '' : 'np-bad'}"><b>${esc(x.t.title)}</b> — ${esc(x.why)} <button class="link rv-open" data-task="${esc(x.t.id)}">open</button></li>`).join('')}</ul>` : '<p class="np-small">Nothing looks at risk.</p>'}
         <div class="np-load">${days.map((k) => { const m = r.load[k] || 0; return `<div><i style="height:${(m / maxL) * 100}%" title="${dur(m)}"></i><span>${esc(T.format(T.dayStart(k, z), z, { weekday: 'narrow' }))}</span></div>`; }).join('')}</div>
         <p class="np-small np-mute">Task time planned per day next week.</p>
+        <p class="np-small">${aside()}</p>
       </section>
       <section class="np-corr">
         <span class="np-kicker">${esc(K('corr'))}</span>
         ${r.slips.length ? `<p class="np-small">${esc(say(PH.CORR_INTRO, { period: P.this === 'this week' ? 'the week' : P.this.replace('this ', 'the ').replace('these', 'the'), items: r.slips.length === 1 ? 'item' : 'items' }))} ${r.slips.slice(-6).map((x) => `“${esc(x.title || 'a session')}” ${kindTxt[x.kind]}${x.by ? ` by ${dur(x.by)}` : ''}`).join('; ')}. ${esc(say(PH.CORR_OUTRO))}</p>` : `<p class="np-small">${esc(say(PH.CORR_NONE))}</p>`}
         ${r.sum.overrun ? `<p class="np-small">Also: ${plural(r.sum.overrun, 'session')} ran over time.</p>` : ''}
+        <p class="np-small">${aside()}</p>
       </section>
     </div>
     ${pics.length ? `<details class="np-archive"><summary>Bildarchiv — pictures shown before (${pics.length})</summary><ol>${pics.map((x) => `<li><a href="${esc(x.page)}" target="_blank" rel="noopener">${esc(x.title)}</a>${x.year ? ` <span class="np-mute">(${x.year})</span>` : ''} <span class="np-mute">· ${esc(T.format(x.at, z, { day: 'numeric', month: 'short' }))}</span></li>`).join('')}</ol></details>` : ''}
-    <footer class="np-foot">${esc(s.paperName || 'Der Zeitplan')} is written by Tempo from your calendar · not affiliated with any real newspaper</footer>
+    <footer class="np-foot">${esc(paperTitle(s))} is written by Tempo from your calendar · not affiliated with any real newspaper</footer>
   </article>`;
 }
 
