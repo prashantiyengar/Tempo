@@ -598,6 +598,33 @@ function wireToNow(root) {
     b.addEventListener('click', (e) => { e.stopPropagation(); const it = app.toNowIt; if (it && it.key === b.dataset.tonow) extendToNow(it); });
   });
 }
+// A task session done at a different time than planned (e.g. 03:00–04:00 instead of 21:00): pick when, and it moves
+// there and counts as done — even outside the hours the task is normally planned in.
+async function doneAtAnotherTime(task, sess) {
+  if (!task || !sess) return;
+  const z = tz(), len = Math.max(5, Math.round((sess.end - sess.start) / T.MIN)), now = Math.floor(Date.now() / (5 * T.MIN)) * 5 * T.MIN;
+  const st0 = Math.min(now - len * T.MIN, sess.start), dt = (ms) => T.toDTInput(ms, z);
+  const r = await modal(`<form class="choice done-at-f"><h2>🕓 When did you do it?</h2>
+      <p class="muted small" style="margin:0">${esc(task.title)} — session planned ${esc(T.format(sess.start, z, { weekday: 'short', day: 'numeric', month: 'short' }))} ${esc(T.fmtTime(sess.start, z, set().h12))}–${esc(T.fmtTime(sess.end, z, set().h12))} (${T.fmtDur(len)})</p>
+      <label class="field"><span>Day</span><input type="date" name="d" value="${dt(st0).slice(0, 10)}" max="${dt(Date.now()).slice(0, 10)}"></label>
+      <div class="row"><label class="field"><span>From</span><input type="time" name="a" value="${dt(st0).slice(11, 16)}" step="300"></label><label class="field"><span>To</span><input type="time" name="b" value="${dt(st0 + len * T.MIN).slice(11, 16)}" step="300"></label></div>
+      <p class="muted small dat-say" style="margin:0"></p>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">✓ Mark done then</button></div></form>`,
+  (dlg, close) => {
+    const f = $('form', dlg);
+    UI.linkRange(f.a, f.b);
+    const read = () => { const a = T.atTime(f.d.value, f.a.value || '00:00', z); let b = T.atTime(f.d.value, f.b.value || '00:00', z); if (b <= a) b = T.atTime(T.addDays(f.d.value, 1), f.b.value, z); return { a, b }; };
+    const say = () => { const { a, b } = read(); $('.dat-say', dlg).textContent = a > Date.now() ? 'That is still to come — pick a time that has passed.' : `${T.fmtDur(Math.round((b - a) / T.MIN))} done — the session moves there and the rest of the task is planned again.`; };
+    f.addEventListener('input', say); f.addEventListener('change', say); say();
+    f.onsubmit = (e) => { e.preventDefault(); const { a, b } = read(); if (a > Date.now()) return; close({ a, b: Math.min(b, Math.max(Date.now(), a + 5 * T.MIN)) }); };
+  }, { cls: 'narrow' });
+  if (!r) return;
+  replaceTask(S.doneAt(task, sess.id, r.a, r.b));
+  logHistory({ kind: 'done', task, sess, t: r.a });
+  await saveTasks(`“${task.title}” done at another time`);
+  toast(`✓ “${task.title}” done ${T.format(r.a, z, { weekday: 'short' })} ${T.fmtTime(r.a, z, set().h12)}–${T.fmtTime(r.b, z, set().h12)} — the rest of the task re-planned`);
+  cycle();
+}
 async function extendToNow(it) {
       const end = Math.floor(Date.now() / T.MIN) * T.MIN;
       try {
@@ -1798,26 +1825,28 @@ async function refreshTitleList() {
     const seen = new Set(), titles = [];
     for (const it of evs) { const t = it.ev.summary.trim(), k = t.toLowerCase(); if (!seen.has(k)) { seen.add(k); titles.push(t); } }
     app.titleList = titles.slice(0, 80);
-    document.querySelectorAll('.ts-host').forEach((h) => h._ts?.());
+    document.querySelectorAll('.ts-live').forEach((h) => h._ts?.());
   } catch (err) { console.warn('Tempo: title suggestions', err); }
 }
 function attachTitleSuggest(inp) {
   if (!inp || inp.dataset.ts) return; inp.dataset.ts = '1';
-  const box = document.createElement('div'); box.className = 'ts-host'; box.setAttribute('role', 'listbox');
-  inp.insertAdjacentElement('afterend', box);
+  // a small dropdown under the title (it never pushes the title aside): shows once you start typing
+  const wrap = document.createElement('span'); wrap.className = 'ts-wrap';
+  inp.replaceWith(wrap); wrap.appendChild(inp);
+  const box = document.createElement('div'); box.className = 'ts-host'; box.setAttribute('role', 'listbox'); box.hidden = true;
+  wrap.appendChild(box);
   let shown = false;
   const draw = () => {
     const q = inp.value.trim().toLowerCase(), list = app.titleList || [];
-    const hits = (q ? list.filter((t) => t.toLowerCase() !== q && t.toLowerCase().includes(q)).sort((a, b) => (b.toLowerCase().startsWith(q) - a.toLowerCase().startsWith(q))) : list).slice(0, 6);
+    const hits = q ? list.filter((t) => t.toLowerCase() !== q && t.toLowerCase().includes(q)).sort((a, b) => (b.toLowerCase().startsWith(q) - a.toLowerCase().startsWith(q))).slice(0, 4) : [];
     box.hidden = !shown || !hits.length;
-    setHTML(box, hits.map((t) => `<button type="button" class="ts-chip" data-t="${esc(t)}">${esc(t)}</button>`).join(''));
-    $$('.ts-chip', box).forEach((b) => { b.addEventListener('pointerdown', (e) => e.preventDefault()); b.onclick = () => { inp.value = b.dataset.t; inp.dispatchEvent(new Event('input', { bubbles: true })); shown = false; draw(); inp.focus(); }; });
+    setHTML(box, hits.map((t) => `<button type="button" class="ts-item" role="option" data-t="${esc(t)}">${esc(t)}</button>`).join(''));
+    $$('.ts-item', box).forEach((b) => { b.addEventListener('pointerdown', (e) => e.preventDefault()); b.onclick = () => { inp.value = b.dataset.t; inp.dispatchEvent(new Event('input', { bubbles: true })); shown = false; draw(); inp.focus(); }; });
   };
-  box._ts = draw;
-  inp.addEventListener('focus', () => { shown = true; draw(); });
+  box._ts = draw; box.classList.add('ts-live');
   inp.addEventListener('input', () => { shown = true; draw(); });
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !box.hidden) { e.stopPropagation(); shown = false; draw(); } });
   inp.addEventListener('blur', () => setTimeout(() => { shown = false; draw(); }, 150));
-  draw();
 }
 function quickCreate(rect, sel, onClose) {
   refreshTitleList();
@@ -2064,6 +2093,7 @@ function openChunk(it, rect) {
       <div class="pop-actions">
         ${isDone ? '<button class="btn small undone">↺ Mark undone</button>' : '<button class="btn small primary done">✓ Mark done</button>'}
         <button class="btn small partial">◐ Partly done…</button>
+        <button class="btn small done-at" title="You did it at a different time (e.g. early this morning): move it there and mark it done">🕓 Done at another time…</button>
         ${p.pct < 100 || !isDone ? `<button class="btn small fin-task" title="${task.kind === 'reading' ? 'Count this session up to the last page and remove the sessions not done yet' : 'Count all remaining work as done in this session and remove the sessions not done yet'}">🏁 Task finished here</button>` : ''}
         ${(!isDone || sess.auto) && sess.start <= now && sess.end > now ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}
         ${(!isDone || sess.auto) && sess.start < now && sess.end > now + T.MIN ? '<button class="btn small late">⏰ Started late…</button>' : ''}
@@ -2082,6 +2112,7 @@ function openChunk(it, rect) {
     $('.undone', pop)?.addEventListener('click', () => act((t) => (sess.kind === 'pinned' ? S.unpinSession(t, sess.id) : S.markUndone(t, sess.id)), 'Marked undone — remaining sessions shifted', { kind: 'undone', task, sess }));
     $('.unpin', pop)?.addEventListener('click', () => act((t) => S.unpinSession(t, sess.id), 'Unpinned'));
     $('.to-now', pop)?.addEventListener('click', () => { close(); extendToNow(it); });
+    $('.done-at', pop)?.addEventListener('click', () => { close(); doneAtAnotherTime(st().tasks.find((t) => t.id === task.id), sess); });
     $('.fin-task', pop)?.addEventListener('click', async () => {
       close();
       const cur = st().tasks.find((t) => t.id === task.id); if (!cur) return;

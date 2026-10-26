@@ -1395,11 +1395,13 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .road-knobs { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 2px 0 6px; }
 .road-knobs .field { min-width: 0; }
 .road-knobs input, .road-knobs select { width: 7.5em; }
-.ts-host { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+.ts-wrap { position: relative; display: block; flex: 1 1 auto; min-width: 0; }
+.ts-wrap > input { width: 100%; box-sizing: border-box; }
+.ts-host { position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 80; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line2); border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,.14); overflow: hidden; max-width: 340px; }
 .ts-host[hidden] { display: none; }
-.ts-chip { border: 1px solid var(--line2); background: var(--off); color: var(--ink); border-radius: 99px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ts-chip:hover { border-color: var(--accent); }
-@media (max-width: 900px) { .ts-chip { padding: 6px 12px; font-size: 14px; } }
+.ts-item { text-align: left; border: 0; background: none; padding: 5px 10px; font-size: 13px; color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ts-item + .ts-item { border-top: 1px solid var(--line); }
+.ts-item:hover, .ts-item:focus { background: var(--off); }
 .join.hm { align-items: center; gap: 4px; }
 .join.hm input { width: 4.2em; }
 .mini-toggle { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; font: inherit; font-weight: 600; color: inherit; cursor: pointer; padding: 0; }

@@ -712,6 +712,14 @@ export function markPartial(task, chunkId, { credit, start, end, squeeze = false
     frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), nc],
   };
 }
+// Done at another time: the session moves to [start, end) — any time, even outside the task's hours — and counts as
+// done (the time spent is its work); the rest of the task is planned again around it.
+export function doneAt(task, chunkId, start, end) {
+  const c = [...(task.planned || []), ...(task.frozen || [])].find((x) => x.id === chunkId);
+  if (!c || !(end > start)) return task;
+  const nc = { ...c, start, end, status: 'done', auto: false, overdue: undefined, syncHash: null, partial: undefined, credit: undefined, squeeze: undefined, slotMin: undefined, actualMin: Math.round((end - start) / T.MIN) };
+  return { ...task, planned: (task.planned || []).filter((x) => x.id !== chunkId), frozen: [...(task.frozen || []).filter((x) => x.id !== chunkId), nc] };
+}
 // Kept going: the session now ends at `end` (a done session stays done and counts the extra time; others are pinned).
 export function extendSession(task, chunkId, end) {
   const f = (task.frozen || []).find((x) => x.id === chunkId);
