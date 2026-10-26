@@ -116,11 +116,13 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 
 /* ---------- time grid ---------- */
 .tg { display: flex; flex-direction: column; flex: 1; min-height: 0; --gut: 58px; }
-.tg-head, .tg-allday { display: grid; grid-template-columns: var(--gut) repeat(var(--ncol), 1fr); padding-right: var(--sbw, 0px); }
+.tg-head, .tg-allday { display: grid; grid-template-columns: var(--gut) repeat(var(--ncol), minmax(0, 1fr)); padding-right: var(--sbw, 0px); }
 .tg-head { border-bottom: 1px solid var(--line); }
 .tg-gutter { display: flex; align-items: flex-end; justify-content: flex-end; padding: 0 8px 4px 0; }
 .tz-label { font-size: 10px; color: var(--muted); }
-.tg-dayhead { display: flex; flex-direction: column; align-items: center; padding: 6px 0 6px; gap: 1px; }
+.tg-dayhead { display: flex; flex-direction: column; align-items: center; padding: 6px 0 6px; gap: 1px; min-width: 0; overflow: hidden; }
+/* whatever sits under a date (marks, fill %) must never widen its column past the schedule's */
+.tg-dayhead > * { max-width: 100%; }
 .tg-dayhead .wd { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
 .tg-dayhead .dn { border: 0; background: none; font-size: 22px; font-weight: 500; width: 40px; height: 40px; border-radius: 50%; cursor: pointer; }
 .tg-dayhead .dn:hover { background: var(--off); }
@@ -129,17 +131,17 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .tg-dayhead.past .dn { color: var(--muted); }
 .tg-allday { border-bottom: 1px solid var(--line2); min-height: 30px; }
 .tg-allday .tg-gutter { align-items: center; font-size: 10px; }
-.ad-area { display: grid; grid-template-columns: repeat(var(--ncol), 1fr); gap: 2px 0; padding: 3px 0; grid-column: 2 / -1; position: relative; }
+.ad-area { display: grid; grid-template-columns: repeat(var(--ncol), minmax(0, 1fr)); gap: 2px 0; padding: 3px 0; grid-column: 2 / -1; position: relative; }
 .ad-cell { border-left: 1px solid var(--line); cursor: cell; }
 .ad-cell.sel { background: color-mix(in srgb, var(--accent) 14%, transparent); }
 .ad-bar { position: relative; z-index: 1; margin: 0 3px; background: var(--c); color: #fff; border-radius: 5px; font-size: 12px; font-weight: 600; padding: 3px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .ad-bar.ro { opacity: .85; }
 .tg-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; position: relative; }
-.tg-body { position: relative; display: grid; grid-template-columns: var(--gut) 1fr; }
+.tg-body { position: relative; display: grid; grid-template-columns: var(--gut) minmax(0, 1fr); }
 .tg-hours { position: relative; }
 .tg-hours .hr { position: absolute; left: 0; right: 0; height: var(--hh); }
 .tg-hours .hr span { position: absolute; right: 8px; top: -7px; font-size: 10.5px; color: var(--muted); }
-.tg-cols { display: grid; grid-template-columns: repeat(var(--ncol), 1fr); position: relative;
+.tg-cols { display: grid; grid-template-columns: repeat(var(--ncol), minmax(0, 1fr)); position: relative;
   background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(color-mix(in srgb, var(--line) 45%, transparent) 1px, transparent 1px);
   background-size: 100% var(--hh), 100% calc(var(--hh) / 2); }
 .tg-col { position: relative; border-left: 1px solid var(--line); cursor: cell; touch-action: none; }
@@ -1435,6 +1437,9 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
   .day-marks button.dm-rate { font-size: 19px; padding: 2px 3px; min-width: 26px; min-height: 26px; }
   .day-marks button.dm-rate:not(.set) { opacity: .45; }
   .day-marks button.dm-note { font-size: 15px !important; padding: 2px 4px; }
-  .day-fill { font-size: 11px; display: block; width: 100%; text-align: center; }
-  .day-fill small { font-size: 10px; }
+  .day-fill { font-size: 11px; display: block; width: 100%; text-align: center; white-space: normal; line-height: 1.15; margin-left: 0; }
+  .day-fill small { display: block; font-size: 10px; }
+  /* seven narrow columns: keep the XP chip whole (no "+170…") */
+  .tg[style*="--ncol:7"] .xp-chip { font-size: 11px !important; padding: 1px 3px !important; letter-spacing: -.02em; }
+  .tg[style*="--ncol:7"] .xp-chip .xc-w { display: none; }
 }

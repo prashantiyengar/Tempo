@@ -1100,7 +1100,7 @@ function gameDayChip(k, items) {
   if (k < today && led) { const n = led.net - dr; return `<button type="button" class="xp-chip ${n < 0 ? 'neg' : ''}" data-xpday="${k}" title="XP that day: ${n >= 0 ? '+' : ''}${n}${dr ? ` (after −${dr} drained)` : ''} — click for the breakdown">${n >= 0 ? '+' : ''}${n} XP</button>`; }
   if (k < (set().game?.started || today)) return '';
   const d = GM.dayXP(k, set(), gameCtx(items));
-  if (k > today) return d.potential.total ? `<button type="button" class="xp-chip pot" data-xpday="${k}" title="XP you can earn by completing this day's events and sessions — click for details">+${d.potential.total} possible</button>` : '';
+  if (k > today) return d.potential.total ? `<button type="button" class="xp-chip pot" data-xpday="${k}" title="XP you can earn by completing this day's events and sessions — click for details">+${d.potential.total}<span class="xc-w"> possible</span></button>` : '';
   d.net -= dr;
   return `<button type="button" class="xp-chip ${d.net < 0 ? 'neg' : ''}" data-xpday="${k}" title="${esc(`${d.net >= 0 ? 'Earned' : 'Net'} ${d.net} XP so far${k === today && d.potential.total ? `, ${d.potential.total} more to earn today` : ''} — click for the breakdown`)}">${d.net >= 0 ? '+' : ''}${d.net}${k === today && d.potential.total ? ` <i>· +${d.potential.total} to go</i>` : ''}</button>`;
 }
