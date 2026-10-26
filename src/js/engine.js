@@ -117,6 +117,40 @@ const cache = new Map(); // key -> {at, items}
 const TTL = 90 * 1000;
 export function invalidate() { cache.clear(); }
 
+// Edits you just made on Google. Google's event lists can lag a few seconds behind a change (a stretched occurrence of
+// a repeating event especially), and planning from the old copy would leave task sessions on top of the new time —
+// so for a few minutes our own copy of an edited event wins over an older one in the list.
+const recent = new Map(); // calId::id -> {ev, gone, at}
+const RECENT_MS = 3 * 60 * 1000;
+export function noteEdit(calId, ev, gone = false) {
+  if (!calId || !ev?.id) return;
+  recent.set(`${calId}::${ev.id}`, { ev: { ...ev, _calId: calId }, gone, at: Date.now() });
+}
+export function forgetEdits() { recent.clear(); }
+function overlay(calId, items, from, to, tz) {
+  const now = Date.now(), mine = new Map();
+  for (const [k, r] of recent) {
+    if (now - r.at > RECENT_MS) { recent.delete(k); continue; }
+    if (r.ev._calId === calId) mine.set(r.ev.id, r);
+  }
+  if (!mine.size) return items;
+  const newer = (a, b) => a?.updated && b?.updated && a.updated > b.updated; // the list already has a later version
+  const out = [];
+  for (const e of items) {
+    const r = mine.get(e.id);
+    if (!r) { out.push(e); continue; }
+    mine.delete(e.id);
+    if (newer(e, r.ev)) out.push(e);
+    else if (!r.gone) out.push(r.ev);
+  }
+  for (const r of mine.values()) {
+    if (r.gone || r.ev.status === 'cancelled' || r.ev.recurrence?.length) continue;
+    const iv = interval(r.ev, tz);
+    if (iv.end > from && iv.start < to) out.push(r.ev);
+  }
+  return out;
+}
+
 // Any change on Google (visible calendars + task calendars) since the per-calendar cursors? Updates the cursors.
 export async function googleChanged(state, cursors) {
   if (!connected(state)) return false;
@@ -163,7 +197,7 @@ export async function googleEvents(state, from, to, { calendars, force } = {}) {
   const all = await Promise.all(cals.map(async (c) => {
     const key = `${c.id}|${from}|${to}`;
     const hit = cache.get(key);
-    if (hit && !force && Date.now() - hit.at < TTL) return hit.items;
+    if (hit && !force && Date.now() - hit.at < TTL) return overlay(c.id, hit.items, from, to, state.settings.tz);
     let items;
     try {
       items = (await G.listEvents(c.id, from, to)).map((e) => ({ ...e, _calId: c.id }));
@@ -177,7 +211,7 @@ export async function googleEvents(state, from, to, { calendars, force } = {}) {
     state.offline = null;
     cache.set(key, { at: Date.now(), items });
     saveSnap(c.id, from, to, items);
-    return items;
+    return overlay(c.id, items, from, to, state.settings.tz);
   }));
   // Task sessions we know about are drawn from the scheduler (with their labels, status and actions), so the
   // Google copies are hidden to avoid duplicates. Tempo events we DON'T know (not yet imported) stay visible.

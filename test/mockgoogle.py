@@ -15,6 +15,8 @@ class MockGoogle:
         self.rate_every = 0       # every Nth write answers 403 rateLimitExceeded
         self.lose_inserts = 0     # this many inserts answer "OK" but are never stored
         self.inflight = 0; self.max_inflight = 0; self.writes = 0
+        self.lag_instances = 0    # after a change to one occurrence, list reads show the old one for this many seconds
+        self._stale = 0; self._stale_ex = None
     def cal_id(self, c):
         c = urllib.parse.unquote(c)
         return 'me@example.com' if c == 'primary' else c
@@ -54,7 +56,12 @@ class MockGoogle:
             if m == 'GET' and not eid:
                 items = list(evs.values())
                 if q.get('singleEvents', ['false'])[0] == 'true':
-                    items = self.single_events(cid, items, q)
+                    import time as _t
+                    if self._stale > _t.time():
+                        live = self.exceptions; self.exceptions = self._stale_ex
+                        try: items = self.single_events(cid, items, q)
+                        finally: self.exceptions = live
+                    else: items = self.single_events(cid, items, q)
                 if 'updatedMin' in q:
                     items = [e for e in items if e.get('updated', '') > q['updatedMin'][0]]
                 if 'privateExtendedProperty' in q:
@@ -65,7 +72,10 @@ class MockGoogle:
             if inst is not None:
                 ex = self.exceptions.setdefault(cid, {})
                 if m == 'GET': return await ok(inst)
-                if m == 'PATCH': ex[eid] = {**inst, **body, 'updated': self.now()}; return await ok(ex[eid])
+                if m == 'PATCH':
+                    if self.lag_instances:
+                        import copy; import time as _t; self._stale_ex = copy.deepcopy(self.exceptions); self._stale = _t.time() + self.lag_instances
+                    ex[eid] = {**inst, **body, 'updated': self.now()}; return await ok(ex[eid])
                 if m == 'DELETE': ex[eid] = {**inst, 'status': 'cancelled'}; return await route.fulfill(status=204, headers=self.cors())
             if m == 'GET': return await (ok(evs[eid]) if eid in evs else ok({'error': {'message': 'Not Found'}}, 404))
             if m in ('POST', 'PATCH', 'DELETE'):

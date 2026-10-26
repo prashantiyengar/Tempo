@@ -2090,6 +2090,10 @@ async function afterEventChange() {
   setStatus('');
   await render();
   cycle(); // busy time changed -> tasks may need to move
+  // Google's lists can trail a change by a few seconds (a series edit especially): look again shortly so task
+  // sessions still sitting on the new time move off it.
+  for (const t of app.recheckT || []) clearTimeout(t);
+  app.recheckT = [6000, 30000].map((ms) => setTimeout(() => { E.invalidate(); cycle({ sync: true }); }, ms));
 }
 
 function fmtWhen(it) {

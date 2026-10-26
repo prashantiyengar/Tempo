@@ -3,7 +3,7 @@
 import * as T from './tz.js';
 import * as G from './gcal.js';
 import { parseRRule, buildRRule, untilFromMs, expand } from './rrule.js';
-import { LOCAL_CAL, interval, invalidate } from './engine.js';
+import { LOCAL_CAL, interval, invalidate, noteEdit } from './engine.js';
 import { newId } from './scheduler.js';
 
 const STRIP = ['id', 'etag', 'iCalUID', 'htmlLink', 'created', 'updated', 'creator', 'organizer', 'recurringEventId', 'originalStartTime',
@@ -82,6 +82,7 @@ export async function createEvent(state, calId, body, { conference = false } = {
   if (!b.recurrence?.length) delete b.recurrence;
   let ev = await G.insertEvent(calId, b, { conference });
   if (!b.recurrence?.length) ev = await G.confirmEvent(calId, ev.id, b);
+  if (!b.recurrence?.length) noteEdit(calId, ev);
   invalidate();
   return { ...ev, _calId: calId };
 }
@@ -120,8 +121,9 @@ export async function updateEvent(state, ev, changes, scope = 'this', { conferen
     if (isInst) delete changes.recurrence;
     if (conference && !ev.conferenceData) changes.conferenceData = { createRequest: { requestId: newId('meet'), conferenceSolutionKey: { type: 'hangoutsMeet' } } };
     if (!isInst && changes.recurrence && !changes.recurrence.length) changes.recurrence = null;
-    await G.patchEvent(calId, ev.id, clean(changes), { conference: conference && !ev.conferenceData, notify: !!ev.attendees?.length });
-    if (!changes.recurrence?.length) await G.confirmEvent(calId, ev.id, changes);
+    let saved = await G.patchEvent(calId, ev.id, clean(changes), { conference: conference && !ev.conferenceData, notify: !!ev.attendees?.length });
+    if (!changes.recurrence?.length) saved = (await G.confirmEvent(calId, ev.id, changes)) || saved;
+    if (saved?.id && !saved.recurrence?.length) noteEdit(calId, saved);
   } else {
     const master = await G.getEvent(calId, ev.recurringEventId);
     if (scope === 'all') {
@@ -172,7 +174,7 @@ export async function deleteEvent(state, ev, scope = 'this') {
     return;
   }
   const calId = ev._calId;
-  if (!isInst || scope === 'this') await G.deleteEvent(calId, ev.id);
+  if (!isInst || scope === 'this') { await G.deleteEvent(calId, ev.id); if (!ev.recurrence?.length) noteEdit(calId, ev, true); }
   else if (scope === 'all') await G.deleteEvent(calId, ev.recurringEventId);
   else {
     const master = await G.getEvent(calId, ev.recurringEventId);
