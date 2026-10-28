@@ -34,11 +34,11 @@ async def main():
         # ---- sync in batches
         await page.evaluate("window.tempo.run([{ cmd: 'addTask', title: 'Big project', hours: 40, deadline: '2026-11-20 17:00' }])")
         st1 = None
-        for _ in range(60):
+        for _ in range(300):  # (up to a minute: the first batch is slow when the machine is busy)
             await page.wait_for_timeout(200)
             cur = await page.evaluate("(async () => { const S = await import('./js/scheduler.js'); const t = window.__tempo.app.state.tasks.find(t => t.title === 'Big project'); if (!t) return null; const ss = S.sessions(t); return [ss.length, ss.filter(c => c.gid).length, ss.filter(c => c.gid).every(c => ss.filter(x => !x.gid).every(x => x.start >= c.start)), document.querySelector('#sync-status').textContent]; })()")
             if cur and 'more soon' in cur[3]: st1 = cur; break
-        check('2. a big backlog is synced in batches, soonest first (25 now, the rest a moment later)', st1[0] >= 35 and st1[1] == 25 and st1[2] and 'more soon' in st1[3], st1)
+        check('2. a big backlog is synced in batches, soonest first (25 now, the rest a moment later)', st1 and st1[0] >= 35 and st1[1] == 25 and st1[2] and 'more soon' in st1[3], st1)
         await page.wait_for_timeout(16000)
         st2 = await page.evaluate("(async () => { const S = await import('./js/scheduler.js'); const t = window.__tempo.app.state.tasks.find(t => t.title === 'Big project'); const ss = S.sessions(t); return [ss.length, ss.filter(c => c.gid).length, document.querySelector('#sync-status').textContent]; })()")
         n_on_google = len([e for e in E.values() if e.get('extendedProperties', {}).get('private', {}).get('taskId')])

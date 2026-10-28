@@ -35,16 +35,30 @@ export function isValidTz(tz) {
   try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
 }
 
-export function partsOf(ms, tz) {
+// Asking Intl for a time zone's wall-clock time is slow (it was most of the cost of drawing the calendar), so the
+// UTC offset is worked out once per time zone and quarter hour and remembered: offsets only change at DST
+// transitions, and those fall on quarter-hour boundaries.
+function rawParts(ms, tz) {
   const o = {};
   for (const p of fmt(tz).formatToParts(new Date(ms))) if (p.type !== 'literal') o[p.type] = +p.value;
   if (o.hour === 24) o.hour = 0;
   return { y: o.year, m: o.month, d: o.day, h: o.hour, mi: o.minute, s: o.second };
 }
-
+const Q = 15 * 60000, offCache = new Map();
 export function offsetMin(ms, tz) {
-  const p = partsOf(ms, tz);
-  return (Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - Math.floor(ms / 1000) * 1000) / MIN;
+  const b = Math.floor(ms / Q), key = tz + '|' + b;
+  let v = offCache.get(key);
+  if (v === undefined) {
+    const t = b * Q, p = rawParts(t, tz);
+    v = (Date.UTC(p.y, p.m - 1, p.d, p.h, p.mi, p.s) - t) / MIN;
+    if (offCache.size > 50000) offCache.clear();
+    offCache.set(key, v);
+  }
+  return v;
+}
+export function partsOf(ms, tz) {
+  const d = new Date(ms + offsetMin(ms, tz) * MIN);
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes(), s: d.getUTCSeconds() };
 }
 
 // Wall-clock time in `tz` -> epoch ms. Overflowing fields (d=32, h=24) roll over like Date.UTC.
@@ -104,6 +118,11 @@ export function format(ms, tz, opts) {
   if (!f) { f = new Intl.DateTimeFormat(undefined, { timeZone: tz, ...opts }); dispCache.set(key, f); }
   return f.format(new Date(ms));
 }
+// "Wed, 28 Oct" — the short date used across the app
+export const DATE_SHORT = { weekday: 'short', day: 'numeric', month: 'short' };
+export const fmtDate = (ms, tz) => format(ms, tz, DATE_SHORT);
+// Hours for charts and tables: "2.5h", "12h"
+export const fmtHours = (min) => { const v = min / 60; return v >= 10 ? `${Math.round(v)}h` : `${Math.round(v * 10) / 10}h`; };
 export function fmtTime(ms, tz, h12) {
   return format(ms, tz, { hour: 'numeric', minute: '2-digit', hour12: !!h12 });
 }

@@ -6,6 +6,7 @@
 // Scheduling earns a little; completing earns most. Rescheduling costs XP, more each time the same task slips.
 // Past days are settled once into a ledger (settings.game.ledger, synced); today is worked out live.
 import * as T from './tz.js';
+import * as I from './items.js';
 import { clipItems } from './scopes.js';
 
 // ---------- settings you can adjust (Settings → Game mode → Advanced) ----------
@@ -197,7 +198,6 @@ export const RANKS = [
 ];
 // kept for compatibility: the ranks as [level, name, icon, colour]
 export const eraOf = (L) => { let e = ERAS[0]; for (const x of ERAS) if (L >= x.from) e = x; return e; };
-export const TIERS = RANKS.map(([L, n, ic]) => [L, n, ic, eraOf(L).color]);
 export const tierOf = (L) => {
   let i = 0; RANKS.forEach((x, j) => { if (L >= x[0]) i = j; });
   const [from, name, icon, desc] = RANKS[i], era = eraOf(from);
@@ -229,7 +229,7 @@ export function emblemSVG(L, size = 64) {
 const isLife = (it, g) => (g.lifeCats || []).includes(catOf(it)) || (g.lifeCats || []).includes(parentCat(it, g));
 // how much a life-growth category counts (e.g. Study at 50%): its own weight, else its main category's, else 100%
 const lifeWeight = (it, g) => { const w = g.lifeWeights || {}, c = catOf(it), p = parentCat(it, g); const v = w[c] ?? w[p]; return v == null ? 1 : Math.max(0, +v) / 100; };
-const catOf = (it) => (it.kind === 'chunk' ? it.task?.categoryId : it.catId) || null;
+const catOf = I.catOf;
 const parentCat = (it, g) => g._parents?.[catOf(it)] || null;
 export const isSleepItem = (it, s) => !!(it.ev?.extendedProperties?.private?.tempoSleep || (s.sleepCategory && catOf(it) === s.sleepCategory) || /\bsleep\b|😴/i.test(it.title || ''));
 const isRest = (it, s, g) => !isSleepItem(it, s) && ((g.restCats || []).includes(catOf(it)) || /^leisure$/i.test(catOf(it) || ''));
@@ -471,7 +471,7 @@ export function dayXP(k, s, ctx, now = Date.now()) {
   r.potential.total = r.potential.busy + r.potential.life + r.potential.app;
   return r;
 }
-function merge(iv) { iv.sort((a, b) => a[0] - b[0]); const out = []; for (const x of iv) { const l = out[out.length - 1]; if (l && x[0] <= l[1]) l[1] = Math.max(l[1], x[1]); else out.push([...x]); } return out; }
+const merge = I.mergePairs;
 
 // ---------- XP drains: categories (or words) that cost XP ----------
 // { id, name, cats, words, per: 'day' | 'week', free: hours with no cost, tol: hours tolerated, basePct: cost while
@@ -480,18 +480,7 @@ function merge(iv) { iv.sort((a, b) => a[0] - b[0]); const out = []; for (const 
 // Example "Gameplay": weekly, tolerate 2 h at 10% of the XP of the days you played; beyond that +15% an hour of the
 // whole week's XP, up to 75%.
 export const DRAIN_DEFAULT = { name: 'Gameplay', cats: [], words: ['game', 'gaming'], per: 'week', free: 0, tol: 2, basePct: 10, growPct: 15, maxPct: 75, types: ['app', 'busy', 'life'] };
-const foldD = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-export function drainMatcher(d, s) {
-  const set = new Set(d.cats || []);
-  for (const c of s.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
-  const ws = (d.words || []).map((w) => foldD(String(w).trim())).filter(Boolean);
-  const re = ws.length ? new RegExp(`(^|[^\\p{L}\\p{N}])(${ws.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'u') : null;
-  return (it) => {
-    if (it.allDay || it.declined || (it.kind === 'chunk' && it.sess?.kind === 'waived')) return false;
-    if (set.size && set.has((it.kind === 'chunk' ? it.task?.categoryId : it.catId) || '__none')) return true;
-    return !!re && re.test(foldD(it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`));
-  };
-}
+export const drainMatcher = (d, s) => I.itemMatcher({ cats: d.cats, words: d.words }, s);
 // Hours of a drain per day in [fromKey, toKey) (elapsed only, overlaps counted once)
 export function drainHours(d, s, items, fromKey, toKey, now = Date.now()) {
   const z = s.tz, m = drainMatcher(d, s), out = {};

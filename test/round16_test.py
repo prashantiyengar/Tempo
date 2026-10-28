@@ -84,7 +84,7 @@ async def main():
         r = await page.evaluate("window.tempo.run([{cmd:'addLater', text:'Call plumber'}, {cmd:'listLater'}])")
         print('   AI:', [x['text'] for x in r[1]['result']])
         await page.wait_for_timeout(2500)
-        sh = [e for e in E.values() if (e.get('extendedProperties') or {}).get('private', {}).get('tempoSettings')]
+        sh = [e for e in E.values() if (e.get('extendedProperties') or {}).get('private', {}).get('tempoSettingsV2')]
         print('   synced in settings event:', bool(sh) and 'Renew passport' in json.dumps(sh[0]))
         await page.click('.side-tabs [data-st=tasks]')
         # 3. weather

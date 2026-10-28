@@ -88,7 +88,7 @@ async def main():
         print('4. Termine:', w)
         await page.screenshot(path=f'{OUT}/k3-paper.png', full_page=True)
         await page.wait_for_timeout(2500)
-        sh = [e for e in E.values() if (e.get('extendedProperties') or {}).get('private', {}).get('tempoSettings')]
+        sh = [e for e in E.values() if (e.get('extendedProperties') or {}).get('private', {}).get('tempoSettingsV2')]
         print('   parent synced:', bool(sh) and '"parent":"work"' in ''.join(v for k, v in sorted(sh[0]['extendedProperties']['private'].items()) if k.startswith('s_')))
         print('ERRORS:', errs)
         await b.close()

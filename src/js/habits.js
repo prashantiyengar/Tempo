@@ -6,6 +6,7 @@
 // Yes/no habits: a day is done (✓), skipped (», doesn't break a streak) or not done. Number habits: the amount on
 // each day, against a target per day, week or month (e.g. 8 glasses a day, 20 km a week).
 import * as T from './tz.js';
+import * as I from './items.js';
 import { catMinutes, timingDay, timingText } from './goals.js';
 import { clipItems } from './scopes.js';
 
@@ -74,15 +75,8 @@ export function toggled(h, k) {
 }
 // Words match at the start of a word, ignoring case and accents: "run" finds "Run", "running", "Morning run",
 // but not "brunch".
-const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-export function matcher(words) {
-  const ws = (words || []).map((w) => fold(String(w).trim())).filter(Boolean);
-  if (!ws.length) return () => false;
-  const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${ws.map(esc).join('|')})`, 'u');
-  return (text) => re.test(fold(text));
-}
-const itemTitle = (it) => (it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`);
+export const matcher = (words) => I.wordMatcher(words) || (() => false);
+const itemTitle = I.titleOf;
 function applyHours(h, items, keys, s, now, from, today) {
   const z = s.tz, a = h.auto, lim = (+a.hours || 0) * 60;
   const autoLog = { ...(h.autoLog || {}) }, autoHit = { ...(h.autoHit || {}) };

@@ -5,6 +5,7 @@ import * as S from './scheduler.js';
 import * as G from './gcal.js';
 import { esc } from './ui.js';
 import * as C from './categories.js';
+import * as I from './items.js';
 
 const GOOGLE_NAMES = { 1: 'Lavender', 2: 'Sage', 3: 'Grape', 4: 'Flamingo', 5: 'Banana', 6: 'Tangerine', 7: 'Peacock', 8: 'Graphite', 9: 'Blueberry', 10: 'Basil', 11: 'Tomato' };
 const TASK_NAMES = { '#4f6bed': 'Indigo', '#0f9d76': 'Green', '#e2683c': 'Orange', '#c2459b': 'Magenta', '#8a5cf6': 'Violet', '#d4a20a': 'Mustard', '#2a9bd6': 'Sky', '#d6455b': 'Rose', '#5c7a3a': 'Olive', '#6b7280': 'Gray' };
@@ -154,13 +155,7 @@ export function groupOf(it, by, ctx) {
   return { key: hex, label: (s.colorLabels || {})[hex] || (fallback !== hex ? fallback : colorName(hex) || hex), color: hex, editable: true };
 }
 
-export function isOccupying(it, s) {
-  if (it.kind === 'chunk') return true;
-  if (it.declined) return false;
-  if (it.ev?.transparency === 'transparent') return false;
-  if (it.allDay && !s.allDayBlocks) return false;
-  return true;
-}
+export const isOccupying = (it, s) => I.takesTime(it, { allDay: !!s.allDayBlocks });
 
 export function periodRange(period, s, now, custom) {
   const tz = s.tz, today = T.dayKey(now, tz);
@@ -180,7 +175,7 @@ export function periodRange(period, s, now, custom) {
 }
 
 const h = (m) => (m / 60);
-const fmtH = (m) => { const v = m / 60; return v >= 10 ? `${Math.round(v)}h` : `${(Math.round(v * 10) / 10).toString()}h`; };
+const fmtH = T.fmtHours;
 const fmtG = (m) => (m < 60 ? `${Math.round(m)} min` : fmtH(m));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 
@@ -215,7 +210,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
       <div class="tile"><span class="t-l">Hours in scope</span><span class="t-v">${fmtH(totals.available)}</span><span class="t-s">${esc((SCOPES[opts.scope] || (settings.periods || []).find((p) => 'period:' + p.id === opts.scope)?.name || '').toLowerCase())}</span></div>
       <div class="tile"><span class="t-l">Occupied</span><span class="t-v">${fmtH(occupied)}</span><span class="t-s">${pct(occupied, totals.available)}% of scope</span></div>
       <div class="tile"><span class="t-l">Free</span><span class="t-v">${fmtH(totals.free)}</span><span class="t-s">${pct(totals.free, totals.available)}% of scope${totals.gaps ? ` · <span class="gap-sw" title="Short gaps between items"></span> ${fmtG(totals.gaps)} gaps not counted` : ''}</span></div>
-      <div class="tile"><span class="t-l">Busiest day</span><span class="t-v">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free - (days[k].gaps || 0)]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? esc(T.format(T.dayStart(b[0], tz), tz, { weekday: 'short', day: 'numeric', month: 'short' })) : '—'; })()}</span><span class="t-s">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free - (days[k].gaps || 0), days[k].available]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? `${fmtH(b[1])} of ${fmtH(b[2])} occupied` : 'nothing scheduled'; })()}</span></div>
+      <div class="tile"><span class="t-l">Busiest day</span><span class="t-v">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free - (days[k].gaps || 0)]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? esc(T.fmtDate(T.dayStart(b[0], tz), tz)) : '—'; })()}</span><span class="t-s">${(() => { const b = dayKeys.map((k) => [k, days[k].available - days[k].free - (days[k].gaps || 0), days[k].available]).sort((a, b) => b[1] - a[1])[0]; return b && b[1] > 0 ? `${fmtH(b[1])} of ${fmtH(b[2])} occupied` : 'nothing scheduled'; })()}</span></div>
     </div>`;
 
   // ---- 100% bar
@@ -243,7 +238,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
     const cx = PADL + i * slot + (slot - bw) / 2;
     let acc = 0;
     const parts = [...shown.map((g) => ({ m: gs[g] || 0, c: meta(g).color, l: meta(g).label })), { m: d.gaps || 0, c: 'var(--gap-c)', l: 'Short gaps' }, { m: d.free, c: null, l: 'Free' }].filter((p) => p.m > 0);
-    const dl = T.format(T.dayStart(k, tz), tz, { weekday: 'short', day: 'numeric', month: 'short' });
+    const dl = T.fmtDate(T.dayStart(k, tz), tz);
     parts.forEach((p, j) => {
       const y1 = ys(acc), y0 = ys(acc + p.m);
       const top = j === parts.length - 1;
@@ -295,7 +290,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
         <span class="grow"></span>
         <button class="btn small ghost" data-o="csv">Download CSV</button>
       </div>
-      <p class="muted small an-sub">${esc(rangeInfo.label)}: ${esc(T.format(rangeInfo.from, tz, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: settings.h12 }))} – ${esc(T.format(rangeInfo.to - 1, tz, { weekday: 'short', day: 'numeric', month: 'short' }))} · ${esc(scopeNote(opts.scope, settings))}${taskMin ? '' : ''}</p>
+      <p class="muted small an-sub">${esc(rangeInfo.label)}: ${esc(T.format(rangeInfo.from, tz, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: settings.h12 }))} – ${esc(T.fmtDate(rangeInfo.to - 1, tz))} · ${esc(scopeNote(opts.scope, settings))}${taskMin ? '' : ''}</p>
     </div>
     ${opts.scope === 'full' ? sleepNote(sleep, settings) : ''}
     ${tiles}
@@ -305,8 +300,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
 }
 
 export function sleepCatOptions(s) {
-  const esc2 = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  return `<option value="">😴 Sleep (its own group)</option>${C.treeOptionsHTML(s, s.sleepCategory, esc2)}`;
+  return `<option value="">😴 Sleep (its own group)</option>${C.treeOptionsHTML(s, s.sleepCategory)}`;
 }
 function sleepNote(sl, s) {
   const on = s.sleepAssume !== false;

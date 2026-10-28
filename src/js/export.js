@@ -207,7 +207,7 @@ export function renderWeek({ days, items, settings, title, scale = 2, summary = 
 
 // ---------- Time-used infographic at the bottom of each printed page ----------
 const SUMMARY_H = 190;
-const fmtH = (m) => { const h = m / 60; return h >= 10 ? `${Math.round(h)}h` : `${Math.round(h * 10) / 10}h`; };
+const fmtH = T.fmtHours;
 function drawSummary(ctx, s, x, y, w) {
   const h = SUMMARY_H - 24;
   ctx.fillStyle = '#f7f8fa'; rr(ctx, x, y, w, h, 12); ctx.fill();

@@ -17,7 +17,6 @@ export const CAT_ICON_GROUPS = [
   ['Nature & time', ['🌞', '🌙', '💧', '🔥', '⚡', '⭐', '⏰']],
   ['Symbols & colors', ['🎯', '🚀', '📌', '✅', '❗', '❓', '⚠️', '🔔', '🔒', '♻️', '🏁', '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪']],
 ];
-export const CAT_ICONS = CAT_ICON_GROUPS.flatMap(([, list]) => list).filter((x, i, a) => a.indexOf(x) === i);
 // The icon grid, by theme. Icons other categories already use are left out (except `keep`, the current one).
 export function iconGridHTML(settings, { keep = '', exceptId = null } = {}) {
   const used = new Set((settings?.categories || []).filter((c) => c.id !== exceptId).map((c) => c.icon).filter(Boolean));
@@ -59,8 +58,6 @@ export const catById = (settings, id) => (id ? (settings.categories || []).find(
 
 // ---------- Sub-categories (one level: a category can sit inside a main category) ----------
 export const parentOf = (settings, c) => (c?.parent ? catById(settings, c.parent) : null);
-export const childrenOf = (settings, id) => (settings.categories || []).filter((c) => c.parent === id).sort(byName);
-export const mainOf = (settings, c) => parentOf(settings, c) || c;
 // Main categories, each followed by its sub-categories.
 // Categories in alphabetical order, each main category followed by its sub-categories (also alphabetical).
 const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base', numeric: true });
@@ -84,11 +81,6 @@ export const treeOptionsHTML = (settings, selected = null, escFn = esc) => order
 // "Work › Meetings" (with icons) for sub-categories.
 export const fullLabel = (settings, c) => { const p = parentOf(settings, c); return p ? `${catLabel(p)} › ${catLabel(c)}` : catLabel(c); };
 // A set of category ids plus all their sub-categories (counting "Work" also counts "Work › Meetings").
-export function withSubs(settings, ids) {
-  const set = new Set(ids || []);
-  for (const c of settings.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
-  return [...set];
-}
 // Main categories that can take sub-categories (not themselves inside another).
 export const mainCats = (settings, exceptId = null) => (settings.categories || []).filter((c) => !c.parent && c.id !== exceptId).sort(byName);
 

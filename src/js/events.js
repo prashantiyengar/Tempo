@@ -99,7 +99,7 @@ export async function updateEvent(state, ev, changes, scope = 'this', { conferen
     const occ = ev._occ;
     if (scope === 'this') {
       master.exdates = [...(master.exdates || []), occ];
-      const { recurrence, ...rest } = changes;
+      const { recurrence: _rec, ...rest } = changes;
       state.localEvents.push({ ...clean(ev), ...clean(rest), id: newId('l'), recurrence: undefined, _local: true });
     } else if (scope === 'all') {
       const times = (changes.start || changes.end) ? shiftedTimes(master, ev, changes, tz) : {};

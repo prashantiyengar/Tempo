@@ -1,7 +1,6 @@
 // Notification profiles: named sets of reminders ("Default": a notification 10 minutes before; "Important": that plus
 // emails 4 hours and 1 day before). Events and tasks pick a profile; Google sends the emails and phone/desktop
 // notifications, Tempo shows desktop notifications for the popup reminders when that is switched on.
-import * as T from './tz.js';
 
 export const DEFAULT_PROFILES = [
   { id: 'default', name: 'Default', rules: [{ method: 'popup', minutes: 10 }] },
@@ -59,4 +58,3 @@ export function matchProfile(s, ev) {
 export const newProfileId = (name) => `${(name || 'profile').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 16) || 'profile'}-${Math.random().toString(36).slice(2, 6)}`;
 export const unitOf = (m) => (m && m % 1440 === 0 ? ['days', m / 1440] : m && m % 60 === 0 ? ['hours', m / 60] : ['minutes', m]);
 export const toMinutes = (v, unit) => Math.max(0, Math.round(+v || 0)) * (unit === 'days' ? 1440 : unit === 'hours' ? 60 : 1);
-export const DAY_MIN = T.DAY / T.MIN;

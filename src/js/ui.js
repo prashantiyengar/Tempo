@@ -70,9 +70,6 @@ export function choose(title, message, options, { cancel = 'Cancel' } = {}) {
   }, { cls: 'narrow' });
 }
 
-export function confirmBox(title, message, okLabel = 'OK', danger = false) {
-  return choose(title, message, [{ value: true, label: okLabel, danger }]);
-}
 
 // A click only counts if the press that started it happened after `el` appeared. The tap that opened a sheet or
 // dialog on a phone is followed by emulated mouse events at the same spot; without this they'd hit whatever button

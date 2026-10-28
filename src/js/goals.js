@@ -2,6 +2,7 @@
 // Stored in settings.goals (synced like your other settings) as { "<key>": [{ id, text, done, at }] }, ranked by order.
 //   w:YYYY-MM-DD  week starting that day      m:YYYY-MM  calendar month      y  the next 12 months (rolling)
 import * as T from './tz.js';
+import * as I from './items.js';
 import { clipItems } from './scopes.js';
 
 export const weekKey = (wk) => `w:${wk}`;
@@ -22,9 +23,8 @@ export const withHeadCats = (s, head, cats) => ({ ...(s.goalHeads || {}), [head]
 // Text a goal looks for in the titles of events and tasks, e.g. "Moby Dick" (several: any of them).
 export const goalWords = (g) => (Array.isArray(g?.words) ? g.words : []).map((w) => String(w).trim()).filter(Boolean);
 export const parseWords = (str) => [...new Set(String(str || '').split(/[,;\n]/).map((w) => w.trim().replace(/^["“”']+|["“”']+$/g, '')).filter(Boolean))].slice(0, 10);
-const fold = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-export const titleOf = (it) => (it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`);
-export const titleHas = (it, words) => { const t = fold(titleOf(it)); return words.some((w) => t.includes(fold(w))); };
+export const titleOf = I.titleOf;
+export const titleHas = (it, words) => !!I.wordMatcher(words)?.(I.titleOf(it));
 // What counts for a goal: its own categories and/or text in titles ("either" = any match, "both" = category and text).
 export const goalMatch = (g) => ({ cats: g.cats || [], words: goalWords(g), mode: g.wmode === 'both' ? 'both' : 'either' });
 export const hasOwnMatch = (g) => !!(g.cats?.length || goalWords(g).length);
@@ -32,18 +32,12 @@ export const hasOwnMatch = (g) => !!(g.cats?.length || goalWords(g).length);
 // Time spent (before now) and planned (after now) in [from, to) on events and task sessions in these categories
 // (and/or whose titles contain one of `words`).
 export function timeIn(items, cats, from, to, now = Date.now(), settings = null, { words = [], mode = 'either' } = {}) {
-  // counting a main category also counts its sub-categories
-  const set = new Set(cats || []);
-  if (settings) for (const c of settings.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
+  // (counting a main category also counts its sub-categories)
   let done = 0, planned = 0;
-  if (!set.size && !words.length) return { done, planned };
+  if (!(cats || []).length && !words.length) return { done, planned };
+  const m = I.itemMatcher({ cats, words, mode }, settings);
   for (const it of items) {
-    if (it.allDay || it.declined || it.ev?.transparency === 'transparent') continue;
-    const cat = it.kind === 'chunk' ? it.task?.categoryId : it.catId;
-    const byCat = set.size ? set.has(cat || '__none') : null, byText = words.length ? titleHas(it, words) : null;
-    const ok = byCat == null ? byText : byText == null ? byCat : mode === 'both' ? byCat && byText : byCat || byText;
-    if (!ok) continue;
-    if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) continue;
+    if (!I.takesTime(it) || !m(it)) continue;
     const a = Math.max(it.start, from), b = Math.min(it.end, to);
     if (b <= a) continue;
     done += Math.max(0, Math.min(b, now) - a) / T.MIN;
@@ -55,45 +49,15 @@ export function timeIn(items, cats, from, to, now = Date.now(), settings = null,
 // Elapsed minutes (before `now`) in [from, to) spent on events and task sessions in these categories (sub-categories
 // included); overlapping entries are counted once.
 export function catMinutes(items, cats, from, to, now = Date.now(), settings = null) {
-  const set = new Set(cats || []);
-  if (settings) for (const c of settings.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
-  if (!set.size) return 0;
-  const end = Math.min(to, now), iv = [];
-  for (const it of items) {
-    if (it.allDay || it.declined || it.ev?.transparency === 'transparent') continue;
-    if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) continue;
-    if (!set.has((it.kind === 'chunk' ? it.task?.categoryId : it.catId) || '__none')) continue;
-    const a = Math.max(it.start, from), b = Math.min(it.end, end);
-    if (b > a) iv.push([a, b]);
-  }
-  iv.sort((x, y) => x[0] - y[0]);
-  let m = 0, cs = -1, ce = -1;
-  for (const [a, b] of iv) { if (a > ce) { if (ce > cs) m += ce - cs; cs = a; ce = b; } else ce = Math.max(ce, b); }
-  if (ce > cs) m += ce - cs;
-  return m / T.MIN;
+  if (!(cats || []).length) return 0;
+  const m = I.itemMatcher({ cats }, settings);
+  return I.unionLength(I.clipPairs(items.filter((it) => I.takesTime(it) && m(it)), from, Math.min(to, now))) / T.MIN;
 }
 // ---------- Time-of-day rules: something has to start by, or end before, a time ----------
 // r = { which: 'startBy' | 'endBy', time: 'HH:MM', cats: [...], words: [...] } — what counts: events and task sessions in
 // those categories and/or with one of the words in the title (words match at the start of a word, any case).
-const foldW = (x) => String(x || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-export function wordMatcher(words) {
-  const ws = (words || []).map((w) => foldW(String(w).trim())).filter(Boolean);
-  if (!ws.length) return null;
-  const re = new RegExp(`(^|[^\\p{L}\\p{N}])(${ws.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'u');
-  return (t) => re.test(foldW(t));
-}
-export function timingMatches(r, s) {
-  const set = new Set(r.cats || []);
-  for (const c of s.categories || []) if (c.parent && set.has(c.parent)) set.add(c.id);
-  const wm = wordMatcher(r.words);
-  return (it) => {
-    if (it.allDay || it.declined) return false;
-    if (it.kind === 'chunk' && (it.status === 'waived' || it.sess?.kind === 'waived')) return false;
-    const byCat = set.size ? set.has((it.kind === 'chunk' ? it.task?.categoryId : it.catId) || '__none') : false;
-    const byWord = wm ? wm(it.kind === 'chunk' ? `${it.task?.title || ''} ${it.title || ''}` : `${it.title || ''} ${it.ev?.summary || ''}`) : false;
-    return byCat || byWord;
-  };
-}
+export const wordMatcher = I.wordMatcher;
+export const timingMatches = (r, s) => I.itemMatcher({ cats: r.cats, words: r.words }, s);
 export const timingText = (r) => `${r.which === 'endBy' ? 'ends before' : 'starts by'} ${r.time}`;
 // Was the rule kept on day k? ok: true / false, or null when it can't be told yet (the time hasn't come).
 //   startBy: something that counts started that day at or before the time
@@ -125,11 +89,11 @@ export function ruleStatus(g, s, items, fromKey, toKey, now = Date.now()) {
   if (r.kind === 'timing') {
     // every day of the period, or on at least N days
     const today = T.dayKey(now, s.tz), total = T.daysBetween(fromKey, toKey);
-    let okN = 0, badN = 0, left = 0;
+    let okN = 0, left = 0;
     for (let k = fromKey; k < toKey; k = T.addDays(k, 1)) {
       if (k > today) { left++; continue; }
       const d = timingDay(items, k, { ...r, cats: r.cats?.length ? r.cats : (r.words?.length ? [] : goalCats(s, g)) }, s, now);
-      if (d.ok === true) okN++; else if (d.ok === false) badN++; else left++;
+      if (d.ok === true) okN++; else if (d.ok !== false) left++;
     }
     const need = r.days ? Math.min(total, +r.days) : total;
     return { done: okN >= need, failed: okN + left < need, onTrack: okN + left >= need, text: `${okN}/${need} days ${timingText(r)}` };
@@ -291,7 +255,7 @@ export function travelIn(items, fromKey, toKey, s) {
   return trips.sort((x, y) => x.start - y.start);
 }
 export function fmtTrip(t, s) {
-  const z = s.tz, d = (ms) => T.format(ms, z, { weekday: 'short', day: 'numeric', month: 'short' });
+  const z = s.tz, d = (ms) => T.fmtDate(ms, z);
   const last = t.allDay ? t.end - 1 : t.end;
   const same = T.dayKey(t.start, z) === T.dayKey(last, z);
   return `${d(t.start)}${same ? (t.allDay ? '' : ' ' + T.fmtTime(t.start, z, s.h12)) : ' – ' + d(last)}`;

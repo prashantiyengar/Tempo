@@ -150,39 +150,12 @@ export function weeklyReview(state, now = Date.now(), { weekKey = null, endKey =
     const lp = t.lastPlan || {};
     if (lp.shortfall > 0 && !t.repeat) risks.push({ t, why: `not enough time before the deadline (${T.fmtDur(lp.shortfall)} short)` });
     else if (t.repeat && lp.periods?.length) risks.push({ t, why: `not enough free time in ${lp.periods.length} upcoming ${t.repeat.every === 'day' ? 'day' : 'week'}${lp.periods.length > 1 ? 's' : ''}` });
-    else if (lp.late > 0) risks.push({ t, why: `eats into its safety margin — finishes ${T.format(lp.finish, z, { weekday: 'short', day: 'numeric', month: 'short' })}` });
-    else if (t.deadline >= nextFrom && t.deadline < nextTo && S.progress(t, now).pct < 100) risks.push({ t, why: `due ${T.format(t.deadline, z, { weekday: 'short', day: 'numeric', month: 'short' })}`, soft: true });
+    else if (lp.late > 0) risks.push({ t, why: `eats into its safety margin — finishes ${T.fmtDate(lp.finish, z)}` });
+    else if (t.deadline >= nextFrom && t.deadline < nextTo && S.progress(t, now).pct < 100) risks.push({ t, why: `due ${T.fmtDate(t.deadline, z)}`, soft: true });
   }
   // next week's load per day
   const load = {};
   for (const t of active) for (const c of S.sessions(t)) if (c.start >= nextFrom && c.start < nextTo && c.kind !== 'done') { const k = T.dayKey(c.start, z); load[k] = (load[k] || 0) + c.minutes; }
   const slips = sum.records.filter((r) => ['skipped', 'undone', 'moved'].includes(r.kind));
   return { reviewWeek, from, to, weekEnd, sum, completed, doneEvents, allEvents, skippedFrequent, reading, risks, load, slips, nextFrom, isCurrent: current };
-}
-
-export function renderReview(state, now = Date.now()) {
-  const r = weeklyReview(state, now);
-  const s = state.settings, z = s.tz;
-  const fmtD = (ms) => T.format(ms, z, { weekday: 'short', day: 'numeric', month: 'short' });
-  const days = Array.from({ length: 7 }, (_, i) => T.addDays(T.dayKey(r.nextFrom, z), i));
-  const maxL = Math.max(60, ...Object.values(r.load), +s.dailyCapMinutes || 0);
-  const kindTxt = { skipped: 'deleted', undone: 'marked undone', moved: 'pushed later' };
-  const cats = Object.values(r.sum.cats).filter((c) => c.act || c.plan).sort((a, b) => b.act - a.act);
-  return `
-    <div class="review">
-      <section><h3>${r.to >= now ? 'This week so far' : 'Last week'} <span class="muted small">${esc(fmtD(r.from))} – ${esc(fmtD(r.to - 1))}</span></h3>
-        <div class="an-tiles">
-          <div class="tile"><span>Done</span><b>${r.sum.done + r.sum.partial}</b><em>${r.sum.partial} partly · ${T.fmtDur(Math.round(r.sum.actMin))} spent</em></div>
-          <div class="tile"><span>Slipped</span><b>${r.sum.slipped}</b><em>${r.sum.skipped} deleted · ${r.sum.undone} undone · ${r.sum.moved} pushed</em></div>
-          <div class="tile"><span>Tasks finished</span><b>${r.completed.length + r.doneEvents.length}</b><em>${esc([...r.completed.map((t) => t.title), ...r.doneEvents.map((e) => e.title)].slice(0, 3).join(', ')) || '—'}</em></div>
-        </div>
-        ${cats.length ? `<div class="rv-cats">${cats.map((c) => `<span class="rv-cat"><i class="sw-dot" style="background:${esc(c.color)}"></i>${esc(c.name)} <b>${T.fmtDur(Math.round(c.act))}</b>${c.plan && Math.abs(c.act - c.plan) > 10 ? ` <em class="muted">of ${T.fmtDur(Math.round(c.plan))}</em>` : ''}</span>`).join('')}</div>` : ''}
-        ${r.slips.length ? `<details class="rv-slips"><summary>What slipped (${r.slips.length})</summary><ul>${r.slips.slice(-12).map((x) => `<li>${esc(x.title || 'Session')} — ${kindTxt[x.kind]}${x.by ? ` by ${T.fmtDur(x.by)}` : ''} <span class="muted small">${esc(fmtD(x.t))}</span></li>`).join('')}</ul></details>` : '<p class="muted small">Nothing slipped. 🎉</p>'}
-      </section>
-      <section><h3>At risk next week</h3>
-        ${r.risks.length ? `<ul class="rv-risks">${r.risks.map((x) => `<li class="${x.soft ? '' : 'bad'}"><b>${esc(x.t.title)}</b> — ${esc(x.why)} <button class="link rv-open" data-task="${esc(x.t.id)}">Open</button></li>`).join('')}</ul>` : '<p class="muted small">Nothing looks at risk. ✓</p>'}
-        <div class="rv-load">${days.map((k) => { const m = r.load[k] || 0; return `<div class="rl"><div class="rl-bar"><i style="height:${(m / maxL) * 100}%" class="${s.dailyCapMinutes && m > s.dailyCapMinutes ? 'over' : ''}" data-tip="${T.fmtDur(m)} of task time"></i></div><span>${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</span><em>${m ? T.fmtDur(m) : ''}</em></div>`; }).join('')}</div>
-        <p class="muted small">Task time planned per day next week${s.dailyCapMinutes ? ` (cap ${T.fmtDur(s.dailyCapMinutes)})` : ''}.</p>
-      </section>
-    </div>`;
 }

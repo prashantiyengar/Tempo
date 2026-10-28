@@ -378,7 +378,7 @@ export function taskFromEvents(taskId, events, calId, settings, now = Date.now()
     else planned.push(c);
   }
   for (const w of def.waived || []) if (!seen.has(w.id)) frozen.push({ ...w, status: 'waived' });
-  const { waived, ...rest } = def;
+  const { waived: _waived, ...rest } = def;
   return { ...rest, id: taskId, calendarId: def.calendarId || events[0]?._cal || calId, frozen, planned, skipped: def.skipped || [], orphanGids: [], imported: Date.now() };
 }
 
@@ -606,22 +606,49 @@ export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bou
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
   'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'goalRepeats', 'paperCats', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'later', 'weather', 'leave', 'habits', 'sleepEvents', 'sleepCal', 'sleepDone', 'sleepEventsFrom', 'sleepDelayMin', 'autoFills', 'autoFillDone', 'game', 'notes', 'dayRatings'];
 const normCat = ({ id, name, color, icon, prefer, parent }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}), ...(parent ? { parent } : {}) });
+// Game data each device works out for itself from your calendar (the day-by-day XP log and the rules it was counted
+// with) isn't shared: it grows every day and would soon pass Google's size limit; only the game's inputs are.
+const GAME_LOCAL = ['ledger', 'weeks', 'rulesV', 'cfgHash'];
+const gameShared = (g) => (g ? Object.fromEntries(Object.entries(g).filter(([k]) => !GAME_LOCAL.includes(k))) : g);
 function sharedOf(s) {
   const o = {};
-  for (const k of SHARED_KEYS) if (s[k] !== undefined) o[k] = k === 'categories' ? (s.categories || []).map(normCat) : s[k];
+  for (const k of SHARED_KEYS) if (s[k] !== undefined) o[k] = k === 'categories' ? (s.categories || []).map(normCat) : k === 'game' ? gameShared(s[k]) : s[k];
   return o;
+}
+// Take on a shared value, keeping this device's own game log
+function applyShared(s, k, v) {
+  if (k === 'game') { const keep = Object.fromEntries(GAME_LOCAL.filter((x) => s.game?.[x] !== undefined).map((x) => [x, s.game[x]])); s.game = v ? { ...gameShared(v), ...keep } : v; }
+  else s[k] = v;
 }
 const hashOf = (o) => JSON.stringify(o ?? null);
 const isDefault = (k, v) => k === 'categories'
   ? false : hashOf(v) === hashOf(S.DEFAULT_SETTINGS[k]);
 const isBuiltin = (c) => S.DEFAULT_SETTINGS.categories.some((d) => d.id === c.id && d.name === c.name && d.color === c.color && (d.icon || '') === (c.icon || ''));
 export function sharedDirty(state) { return hashOf(sharedOf(state.settings)) !== state.settings.sharedHash; }
-function encodeShared(obj, rev) {
-  const json = JSON.stringify(obj), out = { tempoSettings: '1', sRev: String(rev) };
-  const n = Math.ceil(json.length / SHARED_PART);
-  for (let i = 0; i < n; i++) out['s_' + i] = json.slice(i * SHARED_PART, (i + 1) * SHARED_PART);
-  out.sN = String(n);
-  return out;
+// Settings are stored on hidden events, as many as needed: Google allows 32 KB of properties per event, so each
+// carries at most PART_CHUNKS pieces (~25 KB). A new version is written in full before the old one is removed, so
+// another device never reads half of one.
+const PART_CHUNKS = 56;
+export function encodeParts(obj, rev) {
+  const json = JSON.stringify(obj), chunks = [];
+  for (let i = 0; i < json.length; i += SHARED_PART) chunks.push(json.slice(i, i + SHARED_PART));
+  const parts = [];
+  for (let i = 0; i < Math.max(1, chunks.length); i += PART_CHUNKS) parts.push(chunks.slice(i, i + PART_CHUNKS));
+  return parts.map((cs, i) => ({ tempoSettingsV2: '1', sRev: String(rev), sPart: String(i), sParts: String(parts.length), sN: String(cs.length), ...Object.fromEntries(cs.map((c, j) => ['s_' + j, c])) }));
+}
+// The newest complete version among the part events: { rev, obj, events } or null
+export function decodeParts(events) {
+  const byRev = new Map();
+  for (const e of events) { const p = e.extendedProperties?.private || {}; if (!byRev.has(p.sRev)) byRev.set(p.sRev, []); byRev.get(p.sRev).push(e); }
+  for (const rev of [...byRev.keys()].sort((a, b) => +b - +a)) {
+    const evs = byRev.get(rev), n = +evs[0].extendedProperties.private.sParts || 1;
+    const parts = Array.from({ length: n }, (_, i) => evs.find((e) => +e.extendedProperties.private.sPart === i));
+    if (parts.some((x) => !x)) continue; // still being written (or lost): an older complete one
+    let json = '';
+    for (const e of parts) { const p = e.extendedProperties.private; for (let j = 0; j < +p.sN; j++) { if (p['s_' + j] == null) { json = null; break; } json += p['s_' + j]; } if (json == null) break; }
+    try { if (json != null) return { rev: +rev, obj: JSON.parse(json), events: evs }; } catch { /* damaged: try an older one */ }
+  }
+  return null;
 }
 function decodeShared(p) {
   const n = +p.sN; if (!n) return null;
@@ -670,30 +697,37 @@ export async function syncShared(state, { force = false } = {}) {
   const s = state.settings;
   if (!connected(state) || (!force && !sharedDirty(state))) return { changed: false };
   const cal = primaryId(state);
-  const found = await G.findByProperty(cal, 'tempoSettings=1');
-  const ev = found.sort((a, b) => (+b.extendedProperties.private.sRev || 0) - (+a.extendedProperties.private.sRev || 0))[0];
-  const remote = ev ? decodeShared(ev.extendedProperties.private) : null;
-  const remoteRev = ev ? +ev.extendedProperties.private.sRev || 0 : 0;
+  const [v2, legacy] = await Promise.all([G.findByProperty(cal, 'tempoSettingsV2=1'), G.findByProperty(cal, 'tempoSettings=1')]);
+  const cur = decodeParts(v2);
+  const ev = legacy.sort((a, b) => (+b.extendedProperties.private.sRev || 0) - (+a.extendedProperties.private.sRev || 0))[0];
+  let remote = cur?.obj || null, remoteRev = cur?.rev || 0;
+  // a single settings event from an older version of Tempo (or a device not yet updated) that saved more recently
+  const legRev = ev ? +ev.extendedProperties.private.sRev || 0 : 0;
+  if (ev && legRev > remoteRev) { const lr = decodeShared(ev.extendedProperties.private); if (lr) { remote = lr; remoteRev = legRev; } }
+  if (remote?.game) remote = { ...remote, game: gameShared(remote.game) };
   const local = sharedOf(s);
   const base = s.sharedBase || null;
   let next = local, push = false;
   if (!remote) push = true;
   else if (remoteRev > (s.sharedRev || 0) || !base) ({ merged: next, push } = mergeShared(local, remote, base));
   else push = hashOf(local) !== hashOf(base);
+  if (legacy.length || (cur && v2.length > cur.events.length)) push = true; // move to the new format / tidy up
   const changed = hashOf(next) !== hashOf(local);
-  if (changed) for (const k of Object.keys(next)) s[k] = next[k];
+  if (changed) for (const k of Object.keys(next)) applyShared(s, k, next[k]);
   let rev = remoteRev;
   if (push) {
     rev = Math.max(Date.now(), remoteRev + 1);
-    const priv = encodeShared(next, rev);
-    const body = {
-      summary: 'Tempo settings — please keep', description: 'Used by Tempo Calendar to share your categories, work hours and other settings between devices.',
-      start: { date: '2000-01-01' }, end: { date: '2000-01-02' }, transparency: 'transparent', visibility: 'private',
-      reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv },
-    };
-    if (ev) await G.patchEvent(cal, ev.id, { summary: body.summary, extendedProperties: { private: { ...Object.fromEntries(Object.keys(ev.extendedProperties.private).filter((k) => k.startsWith('s_')).map((k) => [k, ''])), ...priv } } });
-    else await G.insertEvent(cal, body);
-    for (const extraEv of found.filter((x) => x !== ev)) await G.deleteEvent(cal, extraEv.id); // stray duplicates
+    const parts = encodeParts(next, rev);
+    for (const [i, priv] of parts.entries()) {
+      await G.insertEvent(cal, {
+        summary: `Tempo settings — please keep${parts.length > 1 ? ` (${i + 1}/${parts.length})` : ''}`, description: 'Used by Tempo Calendar to share your categories, work hours and other settings between devices.',
+        start: { date: '2000-01-01' }, end: { date: '2000-01-02' }, transparency: 'transparent', visibility: 'private',
+        reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv },
+      });
+    }
+    // only once the new version is complete: remove the old ones
+    for (const old of [...v2, ...legacy]) await G.deleteEvent(cal, old.id);
+    s.sharedSize = JSON.stringify(next).length;
   }
   s.sharedRev = rev;
   s.sharedBase = sharedOf(s);

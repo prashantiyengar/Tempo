@@ -9,6 +9,10 @@ import { WEB_CLIENT_ID, CHROME_CLIENT_ID } from './config.js';
 const API = 'https://www.googleapis.com/calendar/v3';
 export const CAL_SCOPE = 'https://www.googleapis.com/auth/calendar';
 const SCOPES = [CAL_SCOPE, 'openid', 'email'];
+// Backups to Google Drive use Tempo's own hidden app folder (it can't see your other files). That permission is
+// only asked for when you turn backups on.
+export const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+const scopesOf = (a) => [...SCOPES, ...(a?.drive ? [DRIVE_SCOPE] : [])];
 
 export class AuthError extends Error { constructor(msg) { super(msg); this.name = 'AuthError'; } }
 export class PermissionError extends Error { constructor(msg) { super(msg); this.name = 'PermissionError'; } }
@@ -63,7 +67,7 @@ export async function getToken(interactive = false) {
 
 async function chromeToken(interactive) {
   let r;
-  try { r = await ext.identity.getAuthToken({ interactive, scopes: SCOPES }); }
+  try { r = await ext.identity.getAuthToken({ interactive, scopes: scopesOf(await getAuth()) }); }
   catch (e) { throw new AuthError(interactive ? (e.message || String(e)) : 'Google sign-in expired — click Reconnect.'); }
   const token = typeof r === 'string' ? r : r?.token;
   if (!token) throw new AuthError('Google did not return a sign-in token.');
@@ -82,7 +86,7 @@ export const SCOPE_MSG = 'Google did not grant calendar access. Reconnect and ti
 async function webToken(clientId, a, interactive) {
   const params = new URLSearchParams({
     client_id: clientId, response_type: 'token', redirect_uri: redirectUri(),
-    scope: SCOPES.join(' '), include_granted_scopes: 'true',
+    scope: scopesOf(a).join(' '), include_granted_scopes: 'true',
   });
   params.set('prompt', promptFor(a, interactive));
   if (a.email) params.set('login_hint', a.email);
@@ -108,9 +112,24 @@ async function webToken(clientId, a, interactive) {
   const scope = frag.get('scope') || '';
   if (scope && !scope.split(' ').includes(CAL_SCOPE)) { await setAuth({ token, expires: 0, consented: false }); throw new PermissionError(SCOPE_MSG); }
   const expires = Date.now() + (+frag.get('expires_in') || 3600) * 1000;
-  await setAuth({ token, expires, connected: true, needsReconnect: false, lastAuthError: null, consented: true });
+  await setAuth({ token, expires, connected: true, needsReconnect: false, lastAuthError: null, consented: true, ...driveGrant(a, scope) });
   return token;
 }
+
+// Did Google grant Drive access when it was asked for? (If you unticked it, backups turn themselves off.)
+const driveGrant = (a, scope) => (a?.drive && scope ? (scope.split(' ').includes(DRIVE_SCOPE) ? { driveOk: true } : { drive: false, driveOk: false, driveRefused: Date.now() }) : {});
+// Turn on Drive backups: ask Google for the extra permission (a consent screen, once).
+export async function enableDrive(returnState) {
+  const a = await getAuth();
+  if (!clientFor(a)) throw new AuthError('Connect Google Calendar first.');
+  await setAuth({ drive: true, consented: false });
+  if (isWeb) return redirectToGoogle(clientFor(a).id, { ...a, drive: true, consented: false }, 'interactive', returnState);
+  await dropToken();
+  await getToken(true);
+  return (await getAuth()).drive !== false;
+}
+export async function disableDrive() { await setAuth({ drive: false, driveOk: false }); }
+export async function driveEnabled() { const a = await getAuth(); return !!(a.drive && a.connected); }
 
 // ---------- Web app: OAuth by redirecting the whole page to Google and back ----------
 const RS = 'tempo:oauth';
@@ -119,7 +138,7 @@ export function redirectToGoogle(clientId, a, kind = 'interactive', returnState 
   sessionStorage.setItem(RS, JSON.stringify({ nonce, kind, at: Date.now(), ret: returnState }));
   const params = new URLSearchParams({
     client_id: clientId, response_type: 'token', redirect_uri: redirectUri(),
-    scope: SCOPES.join(' '), include_granted_scopes: 'true', state: nonce,
+    scope: scopesOf(a).join(' '), include_granted_scopes: 'true', state: nonce,
     prompt: promptFor(a, kind !== 'silent'),
   });
   if (a.email) params.set('login_hint', a.email);
@@ -149,7 +168,7 @@ export async function completeRedirect() {
   const scope = frag.get('scope') || '';
   if (!token) return { ok: false, kind, ret, error: 'No access token returned.' };
   if (scope && !scope.split(' ').includes(CAL_SCOPE)) { await setAuth({ token: null, expires: 0, needsReconnect: true, consented: false }); return { ok: false, kind, ret, error: SCOPE_MSG, code: 'scope' }; }
-  await setAuth({ token, expires: Date.now() + (+frag.get('expires_in') || 3600) * 1000, connected: true, needsReconnect: false, lastAuthError: null, consented: true });
+  await setAuth({ token, expires: Date.now() + (+frag.get('expires_in') || 3600) * 1000, connected: true, needsReconnect: false, lastAuthError: null, consented: true, ...driveGrant(await getAuth(), scope) });
   if (kind === 'interactive') {
     try { const info = await req('GET', 'https://openidconnect.googleapis.com/v1/userinfo'); await setAuth({ email: info.email }); } catch { /* cosmetic */ }
   }
@@ -214,18 +233,18 @@ const idempotent = (method, body) => method !== 'POST' || !!body?.id;
 // No network: the app keeps working with what it saved (calendar snapshot, tasks); no point retrying.
 export class OfflineError extends Error {}
 export const isOffline = (e) => e instanceof OfflineError || (globalThis.navigator?.onLine === false && /reach Google|network|fetch/i.test(e?.message || ''));
-async function req(method, path, { query, body, retry = true, attempt = 0 } = {}) {
+async function req(method, path, { query, body, raw = null, drive = false, retry = true, attempt = 0 } = {}) {
   if (globalThis.navigator?.onLine === false) throw new OfflineError('You are offline.');
   const token = await getToken(false);
   const url = new URL(path.startsWith('http') ? path : API + path);
   if (query) for (const [k, v] of Object.entries(query)) if (v != null) url.searchParams.set(k, v);
-  const again = () => sleep(Math.min(16000, 400 * 2 ** attempt) + Math.random() * 300).then(() => req(method, path, { query, body, retry, attempt: attempt + 1 }));
+  const again = () => sleep(Math.min(16000, 400 * 2 ** attempt) + Math.random() * 300).then(() => req(method, path, { query, body, raw, drive, retry, attempt: attempt + 1 }));
   let res;
   try {
     res = await fetch(url, {
       method,
-      headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
+      headers: { Authorization: 'Bearer ' + token, ...(raw ? { 'Content-Type': raw.type } : body ? { 'Content-Type': 'application/json' } : {}) },
+      body: raw ? raw.body : body ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
     if (globalThis.navigator?.onLine === false) throw new OfflineError('You are offline.');
@@ -233,7 +252,7 @@ async function req(method, path, { query, body, retry = true, attempt = 0 } = {}
     if (attempt < MAX_TRIES - 1 && idempotent(method, body)) return again();
     throw new Error(`Couldn't reach Google (${e.message || 'network error'})`);
   }
-  if (res.status === 401 && retry) { await dropToken(); return req(method, path, { query, body, retry: false, attempt }); }
+  if (res.status === 401 && retry) { await dropToken(); return req(method, path, { query, body, raw, drive, retry: false, attempt }); }
   if (res.status === 204 || res.status === 410) return null;
   const json = await res.json().catch(() => ({}));
   // Rate limits and temporary server errors: back off exponentially and try again.
@@ -243,6 +262,7 @@ async function req(method, path, { query, body, retry = true, attempt = 0 } = {}
   if (!res.ok) {
     const msg = json?.error?.message || `Google API error ${res.status}`;
     if (res.status === 409) { const e = new Error(msg); e.status = 409; throw e; }
+    if (drive && (res.status === 403 || res.status === 401)) throw new PermissionError('Google Drive access isn’t granted — turn on Drive backups again (Settings → Backup) to allow it.');
     if (res.status === 403 && /insufficient|scope|permission/i.test(msg) && !/writer|owner|access to/i.test(msg)) await setAuth({ consented: false });
     if (res.status === 403 && /insufficient|scope|permission/i.test(msg)) throw new PermissionError(/writer|owner|access to/i.test(msg) ? `You don't have write access to that calendar (${msg}).` : SCOPE_MSG);
     if (res.status === 401) { await setAuth({ needsReconnect: true }); throw new AuthError('Google sign-in expired — click Reconnect.'); }
@@ -252,6 +272,21 @@ async function req(method, path, { query, body, retry = true, attempt = 0 } = {}
 }
 
 const enc = encodeURIComponent;
+
+// ---------- Google Drive (Tempo's hidden app folder): backups ----------
+const DRIVE = 'https://www.googleapis.com/drive/v3';
+export async function driveList() {
+  const r = await req('GET', DRIVE + '/files', { drive: true, query: { spaces: 'appDataFolder', fields: 'files(id,name,modifiedTime,size)', orderBy: 'modifiedTime desc', pageSize: 100 } });
+  return r?.files || [];
+}
+export async function driveUpload(name, obj) {
+  const b = 'tempo' + Math.random().toString(36).slice(2);
+  const meta = { name, parents: ['appDataFolder'], mimeType: 'application/json' };
+  const body = `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(obj)}\r\n--${b}--`;
+  return req('POST', 'https://www.googleapis.com/upload/drive/v3/files', { drive: true, query: { uploadType: 'multipart', fields: 'id,name,modifiedTime,size' }, raw: { type: `multipart/related; boundary=${b}`, body } });
+}
+export const driveGet = (id) => req('GET', `${DRIVE}/files/${enc(id)}`, { drive: true, query: { alt: 'media' } });
+export const driveDelete = (id) => req('DELETE', `${DRIVE}/files/${enc(id)}`, { drive: true });
 
 export async function listCalendars() {
   const out = [];
@@ -315,7 +350,6 @@ export const deleteEvent = (calId, id) => req('DELETE', `/calendars/${enc(calId)
 export const patchCalendarListEntry = (calId, body) => req('PATCH', `/users/me/calendarList/${enc(calId)}`, { body });
 export const createCalendar = (summary, timeZone) => req('POST', '/calendars', { body: { summary, timeZone } });
 export const getSettingTz = () => req('GET', '/users/me/settings/timezone').then((r) => r?.value);
-export const getColors = () => req('GET', '/colors');
 
 export async function listTaskEvents(calId, timeMin, timeMax) {
   const out = [];
@@ -332,7 +366,7 @@ export async function listTaskEvents(calId, timeMin, timeMax) {
 
 // Events carrying a private property (e.g. Tempo's settings record), regardless of date.
 export async function findByProperty(calId, prop) {
-  const r = await req('GET', `/calendars/${enc(calId)}/events`, { query: { privateExtendedProperty: prop, maxResults: 50, showDeleted: 'false' } });
+  const r = await req('GET', `/calendars/${enc(calId)}/events`, { query: { privateExtendedProperty: prop, maxResults: 250, showDeleted: 'false' } });
   return (r.items || []).filter((e) => e.status !== 'cancelled');
 }
 

@@ -115,7 +115,7 @@ export function parseTask(text, s, tasks = [], now = Date.now()) {
     chips.push(`⏱ ${T.fmtDur(draft.totalMinutes)}${d.minutes ? '' : ' (default)'}`);
   }
   if (d.deadline && !draft.repeat) { draft.deadline = d.deadline; chips.push(`due ${T.format(d.deadline, s.tz, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 })}`); }
-  if (d.earliestStart) { draft.earliestStart = d.earliestStart; chips.push(`not before ${T.format(d.earliestStart, s.tz, { weekday: 'short', day: 'numeric', month: 'short' })}`); }
+  if (d.earliestStart) { draft.earliestStart = d.earliestStart; chips.push(`not before ${T.fmtDate(d.earliestStart, s.tz)}`); }
   if (d.marginDays) { draft.marginDays = d.marginDays; chips.push(`aim ${d.marginDays} day${d.marginDays === 1 ? '' : 's'} early`); }
   if (d.after) draft.after = d.after;
   if (d.periodId) { const p = (s.periods || []).find((x) => x.id === d.periodId); draft.periodId = p.id; draft.periodName = p.name; draft.periodRules = p.rules; chips.push(`🌙 ${p.name}`); }

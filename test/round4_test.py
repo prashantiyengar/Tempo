@@ -47,7 +47,7 @@ async def main():
         print('1. icon choices:', await A.eval_on_selector_all(f'{row} .ic-btn', 'e => e.length'), '| color swatches:', await A.eval_on_selector_all(f'{row} .sw', 'e => e.length'))
         await A.click('dialog button[type=submit] >> nth=-1'); await A.wait_for_timeout(2500)
         print('   A:', await cats(A))
-        se = [e for evs in g.events.values() for e in evs.values() if e.get('extendedProperties', {}).get('private', {}).get('tempoSettings')]
+        se = [e for evs in g.events.values() for e in evs.values() if e.get('extendedProperties', {}).get('private', {}).get('tempoSettingsV2')]
         print('   settings record on Google:', len(se), '| date', se[0]['start'] if se else None)
 
         # 2. Device B (fresh) gets them

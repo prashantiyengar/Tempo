@@ -1,14 +1,12 @@
 // Time scopes for automatic tracking: only count events and task sessions (or the part of them) that fall in some
 // hours — all the time, within the day bounds (work hours), outside them ("after hours"), the waking hours, or one of
 // your time periods. Used by XP drains, automatic habits and goal rules.
-import * as T from './tz.js';
 import * as S from './scheduler.js';
 
 export function scopeOptions(s) {
   return [['', 'All days and times'], ['bounds', `Within the day bounds (${s.bounds?.start || '09:00'}–${s.bounds?.end || '17:00'})`], ['outside', 'Outside the day bounds (“after hours”)'], ['waking', 'Waking hours (day bounds and extended hours)'],
     ...(s.periods || []).map((p) => ['period:' + p.id, `Time period: ${p.name}`])];
 }
-export const scopeLabel = (s, scope) => (scopeOptions(s).find(([v]) => v === (scope || ''))?.[1] || 'All days and times');
 export function scopeWins(scope, from, to, s) {
   const tz = s.tz;
   if (!scope || scope === 'full') return [{ start: from, end: to }];

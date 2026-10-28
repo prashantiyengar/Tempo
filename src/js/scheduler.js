@@ -664,7 +664,7 @@ export function refitOngoing(task, s, now = Date.now()) {
   for (const c of task.frozen || []) {
     if (c.auto && c.status === 'done' && c.start < now && c.end > now) {
       const fits = windows(c.start - T.DAY, c.end + T.DAY, b, s.tz).some((w) => w.start <= c.start && w.end >= c.end);
-      if (!fits) { const { status, auto, ...rest } = c; back.push({ ...rest, start: now + T.MIN, end: now + T.MIN + (c.end - c.start), syncHash: null }); continue; }
+      if (!fits) { const { status: _st, auto: _au, ...rest } = c; back.push({ ...rest, start: now + T.MIN, end: now + T.MIN + (c.end - c.start), syncHash: null }); continue; }
     }
     keep.push(c);
   }

@@ -186,7 +186,7 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         <h3 class="np-h3">${esc(projH)}</h3>
         ${projects.map((x) => `<div class="np-pj"><div class="np-ghh"><b>📁 ${esc(x.name)}</b> <span class="np-mute">${x.complete ? 'complete' : `${x.pct}% · ${x.steps}`}${x.done ? ` · ${dur(x.done)} ${P.this}` : ''}</span><span class="np-gbar"><i style="width:${x.pct}%"></i></span></div>
           ${x.finished.length ? `<p class="np-small">✓ ${x.finished.map((t) => esc(t)).join(' · ')}</p>` : ''}
-          ${x.next && !x.complete ? `<p class="np-small np-mute">Next: ${esc(x.next.title)}${x.next.at ? ` (${esc(T.format(x.next.at, z, { weekday: 'short', day: 'numeric', month: 'short' }))})` : ''}${x.late ? ' — <b>behind schedule</b>' : ''}</p>` : ''}</div>`).join('')}
+          ${x.next && !x.complete ? `<p class="np-small np-mute">Next: ${esc(x.next.title)}${x.next.at ? ` (${esc(T.fmtDate(x.next.at, z))})` : ''}${x.late ? ' — <b>behind schedule</b>' : ''}</p>` : ''}</div>`).join('')}
       </section>`;
   // ---- habits: kept / expected this period, score, streak, a square per day
   const hbPct = habits.length ? Math.round(habits.reduce((a, x) => a + x.pct, 0) / habits.length) : 0;

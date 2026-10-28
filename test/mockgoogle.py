@@ -17,6 +17,30 @@ class MockGoogle:
         self.inflight = 0; self.max_inflight = 0; self.writes = 0
         self.lag_instances = 0    # after a change to one occurrence, list reads show the old one for this many seconds
         self._stale = 0; self._stale_ex = None
+    # --- Google Drive app folder (backups)
+    drive_files = None
+    drive_denied = False
+    async def drive(self, route, m, path, q):
+        if self.drive_files is None: self.drive_files = {}
+        def ok(obj, status=200): return route.fulfill(status=status, headers=self.cors(), content_type='application/json', body=json.dumps(obj))
+        if self.drive_denied: return await ok({'error': {'code': 403, 'message': 'Request had insufficient authentication scopes.'}}, 403)
+        mm = re.match(r'^/drive/v3/files/([^/]+)$', path)
+        if m == 'GET' and path == '/drive/v3/files':
+            files = sorted(self.drive_files.values(), key=lambda f: f['modifiedTime'], reverse=True)
+            return await ok({'files': [{k: f[k] for k in ('id', 'name', 'modifiedTime', 'size')} for f in files]})
+        if m == 'POST' and path == '/upload/drive/v3/files':
+            raw = route.request.post_data or ''
+            parts = [p for p in raw.split('\r\n\r\n')[1:]]
+            meta = json.loads(parts[0].split('\r\n--')[0]); content = parts[1].split('\r\n--')[0]
+            fid = f'f{next(self.seq)}'; n = len(self.drive_files)
+            self.drive_files[fid] = {'id': fid, 'name': meta['name'], 'parents': meta.get('parents'), 'modifiedTime': f'2026-10-28T{8 + n // 60:02d}:{n % 60:02d}:00.000Z', 'size': str(len(content)), 'content': content}
+            return await ok({k: self.drive_files[fid][k] for k in ('id', 'name', 'modifiedTime', 'size')})
+        if mm and m == 'GET' and q.get('alt', [''])[0] == 'media':
+            f = self.drive_files.get(mm.group(1))
+            return await (route.fulfill(status=200, headers=self.cors(), content_type='application/json', body=f['content']) if f else ok({'error': {'message': 'Not Found'}}, 404))
+        if mm and m == 'DELETE':
+            self.drive_files.pop(mm.group(1), None); return await route.fulfill(status=204, headers=self.cors())
+        return await ok({'error': {'message': 'unhandled drive ' + path}}, 404)
     def cal_id(self, c):
         c = urllib.parse.unquote(c)
         return 'me@example.com' if c == 'primary' else c
@@ -36,6 +60,8 @@ class MockGoogle:
         if m == 'OPTIONS':
             return await route.fulfill(status=204, headers=self.cors())
         self.log.append(f'{m} {path}')
+        if path.startswith('/drive/v3/files') or path.startswith('/upload/drive/v3/files'):
+            return await self.drive(route, m, path, q)
         body = json.loads(req.post_data) if req.post_data else None
         def ok(obj, status=200): return route.fulfill(status=status, headers=self.cors(), content_type='application/json', body=json.dumps(obj))
         if path.startswith('/v1/userinfo') or 'userinfo' in path: return await ok({'email': 'me@example.com'})

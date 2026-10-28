@@ -67,7 +67,7 @@ async def main():
         r = await page.evaluate("window.tempo.run([{cmd:'addGoal', period:'year', text:'Learn Spanish to B1'}, {cmd:'markGoal', period:'next week', goal:1}, {cmd:'listGoals'}])")
         print('   AI:', json.dumps(r[2]['result'][:2])[:300])
         await page.wait_for_timeout(2500)
-        sh = [e for e in E.values() if (e.get('extendedProperties') or {}).get('private', {}).get('tempoSettings')]
+        sh = [e for e in E.values() if (e.get('extendedProperties') or {}).get('private', {}).get('tempoSettingsV2')]
         print('   synced:', bool(sh) and 'grant draft' in json.dumps(sh[0]))
         # 2. newspaper
         await page.click('#view-seg button[data-view=review]'); await page.wait_for_selector('.np-goals'); await page.wait_for_timeout(2500)
