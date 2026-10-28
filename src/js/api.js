@@ -247,9 +247,9 @@ export function createApi(h) {
       h.set().goals = GL.update(h.set(), key, g.id, { done: a.done !== false }); await E.persist(h.st(), ['settings']); h.render?.(); return { goal: g.text, done: a.done !== false };
     } },
     listLater: { about: 'Notes in the "Later" list: things to schedule, but not yet.', run: () => (h.set().later || []).map((x) => ({ id: x.id, text: x.text, added: fmt(x.created), minutes: x.minutes || undefined, deadline: x.deadline ? fmt(x.deadline) : undefined })) },
-    addLater: { params: 'text, hours? (likely duration), deadline? (date)', about: 'Add a note to the "Later" list.', write: true, run: async (a) => {
+    addLater: { params: 'text, hours? (likely duration), deadline? (date), category?', about: 'Add a note to the "Later" list.', write: true, run: async (a) => {
       const text = String(a.text || '').trim().slice(0, 300) || err('Missing "text".');
-      const item = { id: S.newId('l'), text, created: Date.now(), ...(+a.hours > 0 ? { minutes: Math.round(+a.hours * 60) } : {}), ...(a.deadline ? { deadline: when(a.deadline, { end: true }) } : {}) };
+      const item = { id: S.newId('l'), text, created: Date.now(), ...(+a.hours > 0 ? { minutes: Math.round(+a.hours * 60) } : {}), ...(a.deadline ? { deadline: when(a.deadline, { end: true }) } : {}), ...(a.category ? { catId: catByName(a.category).id } : {}) };
       h.set().later = [...(h.set().later || []), item]; await E.persist(h.st(), ['settings']); h.render?.(); return { added: text, id: item.id };
     } },
     removeLater: { params: 'note (id or text)', about: 'Remove a note from the "Later" list (e.g. after scheduling it).', write: true, run: async (a) => {

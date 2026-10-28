@@ -1446,3 +1446,17 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 /* fill-in blocks in Settings: one card per rule */
 .fill-rule { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 8px 0; display: grid; gap: 6px; }
 .fill-rule .fr-name { flex: 1; min-width: 8em; }
+/* task dialog: split into sessions or one block */
+.blockmode-row { margin: 6px 0 2px; }
+.blockmode label span { white-space: nowrap; }
+.single-block .t-sessions-only { opacity: .45; }
+/* categories shown as their tree: a main category with sub-categories on its own line */
+.cat-tree { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cat-tree-subs { display: contents; }
+.cat-tree > .cat-chip:first-child { font-weight: 600; }
+.an-subrow td:first-child { padding-left: 22px; }
+.an-sub { color: var(--ink2); }
+/* Later: category on a note */
+.later-cat-in { max-width: 9em; font-size: 12px; }
+.later-cat { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--ink2); }
+.later-cat i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); display: inline-block; }

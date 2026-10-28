@@ -97,6 +97,13 @@ export function totalMinutes(task) {
 }
 
 export function params(task, s) {
+  // One block: all of the task's hours in a single session (no splitting)
+  if (task.single) {
+    const tot = Math.max(5, task.repeat ? +task.repeat.minutes || 60 : totalMinutes(task));
+    return { chunk: tot, minChunk: tot, wiggle: 0, maxPerDay: null,
+      breakMin: task.breakMinutes != null && task.breakMinutes !== '' ? +task.breakMinutes : s.breakMinutes,
+      bounds: task.ignoreBounds ? s.overflowBounds : (task.bounds || periodRules(task, s) || s.bounds), single: true };
+  }
   const chunk = +task.chunkMinutes || s.chunkMinutes;
   return {
     chunk,
@@ -274,6 +281,7 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366, gUse
   else if (remaining < Math.min(p.minChunk, workLeft)) remaining = workLeft; // nothing left to squeeze into: add time
   const res = { planned: [], shortfall: 0, overdue: 0, suggestedDeadline: null, fitsIgnoringBounds: null, remaining: Math.max(0, workLeft), late: 0, finish: null };
   if (remaining <= 0) return res;
+  if (p.single) { p.chunk = p.minChunk = Math.max(5, remaining); p.wiggle = 0; } // what's left, still in one piece
   const from = Math.max(ceilTo(now, 5 * T.MIN), task.earliestStart || 0);
   const deadline = task.deadline || from + 30 * T.DAY;
   const soft = Math.max(from, deadline - marginDays(task, settings) * T.DAY);

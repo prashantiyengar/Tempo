@@ -31,7 +31,7 @@ const expandAll = () => { try { return localStorage.getItem('tempo:expandAll') =
 export function catPick(s, cls, sel, { none = 'None chosen' } = {}) {
   sel = new Set(sel || []);
   return `<div class="cp" data-cp="${esc(cls)}"><div class="cp-sum"><span class="cp-chips">${cpChips(s, [...sel], none)}</span><button type="button" class="btn small cp-open" aria-expanded="false">Choose categories…</button></div>
-    <div class="cp-grid g-pick" hidden>${C.ordered(s).map((c) => `<label class="cat-chip ${c.parent ? 'sub' : ''} ${sel.has(c.id) ? 'on' : ''}" style="--c:${esc(c.color)}" title="${esc(C.fullLabel(s, c))}"><input type="checkbox" class="${esc(cls)}" value="${esc(c.id)}" ${sel.has(c.id) ? 'checked' : ''} hidden><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</label>`).join('')}
+    <div class="cp-grid g-pick" hidden>${C.treeChipsHTML(s, (c) => `<label class="cat-chip ${c.parent ? 'sub' : ''} ${sel.has(c.id) ? 'on' : ''}" style="--c:${esc(c.color)}" title="${esc(C.fullLabel(s, c))}"><input type="checkbox" class="${esc(cls)}" value="${esc(c.id)}" ${sel.has(c.id) ? 'checked' : ''} hidden><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</label>`)}
       <div class="cp-done-row"><button type="button" class="btn small primary cp-done">Done</button></div></div></div>`;
 }
 function cpChips(s, ids, none) {
@@ -606,6 +606,10 @@ export function taskDialog(ctx, task = null, preset = {}) {
     </header>
     <div class="dlg-body">
       <input name="title" class="title-input" placeholder="${t.kind === 'reading' ? 'Book title' : 'Task name'}" value="${esc(t.title)}" autofocus>
+      <div class="row blockmode-row"><div class="seg blockmode" role="radiogroup" aria-label="How to schedule the hours">
+        <label title="Tempo splits the hours into sessions around your calendar"><input type="radio" name="blockmode" value="split" ${!t.single ? 'checked' : ''}><span>✂ Split into sessions</span></label>
+        <label title="All the hours in one uninterrupted block"><input type="radio" name="blockmode" value="single" ${t.single ? 'checked' : ''}><span>▭ One block</span></label>
+      </div></div>
       <div class="row catcol">
         <div class="field grow"><span>Category</span><div class="cat-host"></div></div>
         <div class="field color-field"><span>Color</span><div class="swatches small">${TASK_COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${t.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
@@ -688,11 +692,11 @@ export function taskDialog(ctx, task = null, preset = {}) {
 
       ${sect('t-sessions', 'Sessions', `
         <div class="grid3">
-          <label class="field"><span>Session length (min)</span><input type="number" name="chunk" min="5" step="5" placeholder="${s.chunkMinutes} (default)" value="${t.chunkMinutes ?? ''}"></label>
-          <label class="field"><span>Shortest session (min)</span><input type="number" name="minChunk" min="5" step="5" placeholder="${s.minChunkMinutes ? s.minChunkMinutes + ' (default)' : '= session length'}" value="${t.minChunkMinutes ?? ''}"></label>
-          <label class="field"><span>Max per day (min)</span><input type="number" name="maxDay" min="5" step="5" placeholder="no limit" value="${t.maxPerDayMinutes ?? ''}"></label>
+          <label class="field"><span>Session length (min)</span><input type="number" class="t-sessions-only" name="chunk" min="5" step="5" placeholder="${s.chunkMinutes} (default)" value="${t.chunkMinutes ?? ''}"></label>
+          <label class="field"><span>Shortest session (min)</span><input type="number" class="t-sessions-only" name="minChunk" min="5" step="5" placeholder="${s.minChunkMinutes ? s.minChunkMinutes + ' (default)' : '= session length'}" value="${t.minChunkMinutes ?? ''}"></label>
+          <label class="field"><span>Max per day (min)</span><input type="number" class="t-sessions-only" name="maxDay" min="5" step="5" placeholder="no limit" value="${t.maxPerDayMinutes ?? ''}"></label>
           <label class="field"><span>Break between (min)</span><input type="number" name="break" min="0" step="5" placeholder="${s.breakMinutes} (default)" value="${t.breakMinutes ?? ''}"></label>
-          <label class="field"><span>Wiggle room (min)</span><input type="number" name="wiggle" min="0" step="5" placeholder="${s.wiggleMinutes ?? 15} (default)" value="${t.wiggleMinutes ?? ''}" title="Also use free slots up to this much shorter than the session length"></label>
+          <label class="field"><span>Wiggle room (min)</span><input type="number" class="t-sessions-only" name="wiggle" min="0" step="5" placeholder="${s.wiggleMinutes ?? 15} (default)" value="${t.wiggleMinutes ?? ''}" title="Also use free slots up to this much shorter than the session length"></label>
           ${ctx.taskCalendars().length > 1 ? `<label class="field"><span>Google calendar</span><select name="calendarId">${ctx.taskCalendars().map((c) => `<option value="${esc(c.id)}" ${c.id === (t.calendarId || ctx.defaultTaskCal()) ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select></label>` : ''}
         </div>`)}
 
@@ -783,7 +787,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
         deadline: T.fromDTInput(f.deadline.value, tz),
         earliestStart: T.fromDTInput(f.earliest.value, tz),
         rank: Math.max(1, Math.round(+f.rank.value || 3)),
-        chunkMinutes: num(f.chunk.value), minChunkMinutes: num(f.minChunk.value), maxPerDayMinutes: num(f.maxDay.value),
+        chunkMinutes: num(f.chunk.value), minChunkMinutes: num(f.minChunk.value), maxPerDayMinutes: num(f.maxDay.value), single: f.blockmode.value === 'single' || undefined,
         breakMinutes: num(f.break.value), wiggleMinutes: num(f.wiggle.value), reminderMinutes: f.notify.value === 'custom' ? num(f.reminder.value) : null, emailReminderMinutes: f.notify.value === 'custom' ? num(f.emailReminder.value) : null,
         notifyProfile: f.notify.value || null,
         color: f.color.value || t.color,
@@ -849,7 +853,10 @@ export function taskDialog(ctx, task = null, preset = {}) {
       const draft = draft0.projectId === '__new' ? { ...draft0, projectId: null } : draft0;
       const total = S.totalMinutes(draft);
       const p = S.params(draft, s);
-      $('.calc', dlg).textContent = kind === 'reading' && draft.reading?.format === 'audio'
+      const one = !!draft.single;
+      $$('.t-sessions-only', dlg).forEach((x) => { x.disabled = one; });
+      dlg.classList.toggle('single-block', one);
+      $('.calc', dlg).textContent = one ? (draft.repeat ? `One block of ${T.fmtDur(draft.repeat.minutes)} each ${draft.repeat.every}` : `One block of ${T.fmtDur(total)} — not split into sessions`) : kind === 'reading' && draft.reading?.format === 'audio'
         ? `≈ ${T.fmtDur(total)} of listening (${T.fmtDur(draft.reading.pages)} of audio at ×${+(draft.reading.speed / 60).toFixed(2)}) · ≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`
         : kind === 'reading'
         ? `≈ ${T.fmtDur(total)} of reading · ${+(S.pagesPerHour(draft.reading)).toFixed(1)} pages/hour · ≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`
@@ -1242,7 +1249,7 @@ export function settingsDialog(ctx) {
     };
     drawPeriods();
     // fill-in blocks
-    const catOpts = (sel) => `<option value="">Choose a category…</option>${C.ordered(s).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? 'selected' : ''}>${esc((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}`;
+    const catOpts = (sel) => `<option value="">Choose a category…</option>${C.treeOptionsHTML(s, sel)}`;
     const drawFills = () => {
       setHTML($('.fills-list', dlg), fills.map((r, i) => `<div class="fill-rule period" data-i="${i}">
         <div class="row"><label class="chk small"><input type="checkbox" class="fr-on" ${r.on !== false ? 'checked' : ''} aria-label="On"></label><select class="fr-cat" aria-label="Category">${catOpts(r.catId)}</select><input class="fr-name" value="${esc(r.name || '')}" maxlength="40" placeholder="Title (default: the category)" aria-label="Title"><span class="grow"></span><button type="button" class="icon-btn fr-del" title="Remove" aria-label="Remove fill-in block">✕</button></div>
@@ -1927,7 +1934,7 @@ export function startedLateDialog(ctx, { task, sess }) {
           <label class="chk"><input type="radio" name="fill" value="none" checked> Leave it as free time</label>
           <label class="chk"><input type="radio" name="fill" value="event"> I was doing something else: <input name="evTitle" placeholder="e.g. Phone call" style="flex:1;min-width:0"></label>
           <div class="row late-ev" hidden>
-            <select name="evCat"><option value="">No category</option>${C.ordered(s).map((c) => `<option value="${esc(c.id)}">${esc((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}</select>
+            <select name="evCat"><option value="">No category</option>${C.treeOptionsHTML(s)}</select>
             ${cals.length > 1 ? `<select name="evCal">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def0 ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>` : ''}
           </div>
           ${others.length ? `<label class="chk"><input type="radio" name="fill" value="task"> I worked on another task: <select name="otherTask">${others.map((t) => `<option value="${esc(t.id)}">${esc(t.title)}</option>`).join('')}</select></label>` : ''}
@@ -2086,7 +2093,7 @@ export function projectDialog(ctx, project = null) {
           <option value="prefix" ${p0.titleMode !== 'suffix' && p0.titleMode !== 'none' ? 'selected' : ''}>At the start — “Name: step”</option>
           <option value="suffix" ${p0.titleMode === 'suffix' ? 'selected' : ''}>At the end — “step — Name”</option>
           <option value="none" ${p0.titleMode === 'none' ? 'selected' : ''}>Not added</option></select></label>
-        <label class="field"><span>Category for its tasks and events</span><select name="catId"><option value="">— none —</option>${C.ordered(s).map((c) => `<option value="${esc(c.id)}" ${p0.catId === c.id ? 'selected' : ''}>${c.parent ? '↳ ' : ''}${esc(C.catLabel(c))}</option>`).join('')}</select></label>
+        <label class="field"><span>Category for its tasks and events</span><select name="catId"><option value="">— none —</option>${C.treeOptionsHTML(s, p0.catId)}</select></label>
         <label class="chk"><input type="checkbox" name="sequential" ${p0.sequential !== false ? 'checked' : ''}> Steps run in order (each starts after the previous is done)</label>
       </div>
       <div class="sub-h">Steps</div>

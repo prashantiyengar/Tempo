@@ -69,6 +69,18 @@ export function ordered(settings) {
   for (const c of all) if (!c.parent || !all.some((p) => p.id === c.parent)) { out.push(c); for (const k of all) if (k.parent === c.id) out.push(k); }
   return out;
 }
+// The category tree: [{ main, subs: [...] }] in alphabetical order (sub-categories under their main one).
+export function tree(settings) {
+  const all = ordered(settings), out = [];
+  for (const c of all) { if (!c.parent || !all.some((p) => p.id === c.parent)) out.push({ main: c, subs: [] }); else out[out.length - 1]?.subs.push(c); }
+  return out;
+}
+// Chips laid out as the tree: a main category with sub-categories gets its own line (main, then ↳ subs); main
+// categories without any flow together. chip(c) renders one chip.
+export const treeChipsHTML = (settings, chip) => tree(settings).map(({ main, subs }) => (subs.length
+  ? `<div class="cat-tree">${chip(main)}<span class="cat-tree-subs">${subs.map(chip).join('')}</span></div>` : chip(main))).join('');
+// <option>s in tree order: sub-categories indented under their main category
+export const treeOptionsHTML = (settings, selected = null, escFn = esc) => ordered(settings).map((c) => `<option value="${escFn(c.id)}" ${c.id === selected ? 'selected' : ''}>${c.parent ? '\u00a0\u00a0\u00a0↳ ' : ''}${escFn(catLabel(c))}</option>`).join('');
 // "Work › Meetings" (with icons) for sub-categories.
 export const fullLabel = (settings, c) => { const p = parentOf(settings, c); return p ? `${catLabel(p)} › ${catLabel(c)}` : catLabel(c); };
 // A set of category ids plus all their sub-categories (counting "Work" also counts "Work › Meetings").
@@ -151,7 +163,7 @@ function chipPicker(host, { settings, selected, onChange, onCreate, allowNone = 
     setHTML(host, `
       <div class="cat-chips">
         ${allowNone ? `<button type="button" class="cat-chip none ${!sel ? 'on' : ''}" data-cat="">None</button>` : ''}
-        ${ordered(settings).map((c) => `<button type="button" class="cat-chip ${c.parent ? 'sub' : ''} ${sel === c.id ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}" title="${esc(fullLabel(settings, c))}"><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`).join('')}
+        ${treeChipsHTML(settings, (c) => `<button type="button" class="cat-chip ${c.parent ? 'sub' : ''} ${sel === c.id ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}" title="${esc(fullLabel(settings, c))}"><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`)}
         <button type="button" class="cat-chip add" data-add="1">+ New</button>
       </div>
       ${adding ? `<div class="cat-new">

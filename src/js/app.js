@@ -1685,17 +1685,18 @@ function renderLater() {
   const due = (x) => { if (!x.deadline) return ''; const k = T.dayKey(x.deadline, z), d = T.daysBetween(today, k); return `<span class="later-due ${d < 0 ? 'over' : d <= 3 ? 'soon' : ''}" title="Deadline">by ${esc(T.format(x.deadline, z, { weekday: 'short', day: 'numeric', month: 'short' }))}</span>`; };
   const oldIn = $('.later-add input[name=t]', box), lDraft = oldIn?.value || '', lHad = oldIn && document.activeElement === oldIn;
   setHTML(box, `<form class="later-add"><input name="t" placeholder="Something to schedule later…" maxlength="300" autocomplete="off" aria-label="Add a note"><button class="btn small" type="submit">Add</button>
-      <div class="later-more"><label title="How long it will likely take">⏱ <input name="h" type="number" min="0" step="0.25" placeholder="h" aria-label="Hours"></label><label title="Must be done by">by <input name="d" type="date" aria-label="Deadline"></label></div></form>
+      <div class="later-more"><label title="How long it will likely take">⏱ <input name="h" type="number" min="0" step="0.25" placeholder="h" aria-label="Hours"></label><label title="Must be done by">by <input name="d" type="date" aria-label="Deadline"></label><select name="c" class="later-cat-in" aria-label="Category" title="Category"><option value="">🏷 Category</option>${C.treeOptionsHTML(set(), app.laterCat || null)}</select></div></form>
     ${list.length ? list.map((x) => `<div class="later-row" data-id="${esc(x.id)}">
-      <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="later-meta">${x.minutes ? `<span class="later-dur">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}${due(x)}<span class="muted small">added ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span>${laterChip(x)}</span></button>
+      <button type="button" class="later-t" title="Edit">${esc(x.text)}<span class="later-meta">${x.minutes ? `<span class="later-dur">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}${due(x)}${(() => { const c = C.catById(set(), x.catId); return c ? `<span class="later-cat" style="--c:${esc(c.color)}" title="${esc(C.fullLabel(set(), c))}"><i></i>${esc(C.catLabel(c))}</span>` : ''; })()}<span class="muted small">added ${esc(T.format(x.created, z, { day: 'numeric', month: 'short' }))}</span>${laterChip(x)}</span></button>
       <span class="later-acts"><button type="button" class="icon-btn sm l-task" title="Make it a task (Tempo finds the time)${laterTip(x)}">⧉</button><button type="button" class="icon-btn sm l-event" title="Put it on the calendar as an event${laterTip(x)}">📅</button><button type="button" class="icon-btn sm l-del" title="Remove">✕</button></span>
     </div>`).join('') : '<p class="muted small empty">Jot down things you need to schedule, but not right away. Turn one into a task or an event when you\'re ready.</p>'}`);
   if (lDraft) { const i = $('.later-add input[name=t]', box); i.value = lDraft; if (lHad) i.focus(); }
   $('.later-add', box).onsubmit = async (e) => {
     e.preventDefault();
     const v = e.target.t.value.trim(); if (!v) return;
-    const h = parseFloat(e.target.h.value), d = e.target.d.value;
-    await saveLater([...laterList(), { id: S.newId('l'), text: v.slice(0, 300), created: Date.now(), ...(h > 0 ? { minutes: Math.round(h * 60) } : {}), ...(d ? { deadline: T.atTime(d, set().bounds?.end || '17:00', z) } : {}) }], `add “${v.slice(0, 30)}” to Later`);
+    const h = parseFloat(e.target.h.value), d = e.target.d.value, c = e.target.c.value;
+    app.laterCat = c || null; // keep the category for the next note
+    await saveLater([...laterList(), { id: S.newId('l'), text: v.slice(0, 300), created: Date.now(), ...(h > 0 ? { minutes: Math.round(h * 60) } : {}), ...(d ? { deadline: T.atTime(d, set().bounds?.end || '17:00', z) } : {}), ...(c ? { catId: c } : {}) }], `add “${v.slice(0, 30)}” to Later`);
     $('#later-list .later-add input')?.focus();
   };
   $$('.later-row', box).forEach((r) => {
@@ -1704,7 +1705,8 @@ function renderLater() {
     $('.l-del', r).onclick = () => { drop(); toast('Removed from Later'); };
     $('.l-task', r).onclick = async () => {
       closeDrawer(); const ids = new Set(st().tasks.map((t) => t.id));
-      await newTask({ kind: 'generic', title: item.text, ...(item.minutes ? { totalMinutes: item.minutes } : {}), ...(item.deadline ? { deadline: item.deadline } : {}) });
+      const lc = C.catById(set(), item.catId);
+      await newTask({ kind: 'generic', title: item.text, ...(item.minutes ? { totalMinutes: item.minutes } : {}), ...(item.deadline ? { deadline: item.deadline } : {}), ...(lc ? { draft: C.applyCategory({}, lc) } : {}) });
       const nt = st().tasks.find((t) => !ids.has(t.id));
       if (nt) { replaceTask({ ...nt, fromLater: { created: item.created || Date.now(), at: Date.now() } }); await saveTasks(false); drop(); laterToast(item); }
     };
@@ -1713,18 +1715,19 @@ function renderLater() {
       const start = Math.ceil((Date.now() + 15 * T.MIN) / (15 * T.MIN)) * 15 * T.MIN;
       const n0 = createdEvents;
       app.laterTag = { created: item.created };
-      try { await newEvent({ start, end: start + Math.min(8 * 60, item.minutes || set().defaultEventMinutes || 60) * T.MIN, title: item.text }); } finally { app.laterTag = null; }
+      try { await newEvent({ start, end: start + Math.min(8 * 60, item.minutes || set().defaultEventMinutes || 60) * T.MIN, title: item.text, ...(C.catById(set(), item.catId) ? { categoryId: item.catId } : {}) }); } finally { app.laterTag = null; }
       if (createdEvents > n0) { drop(); laterToast(item); }
     };
     $('.later-t', r).onclick = async () => {
       const v = await modal(`<form class="choice"><h2>Edit note</h2><textarea name="v" rows="3" maxlength="300" style="width:100%">${esc(item.text)}</textarea>
         <div class="row"><label class="field"><span>Likely takes (hours)</span><input name="h" type="number" min="0" step="0.25" value="${item.minutes ? +(item.minutes / 60).toFixed(2) : ''}" placeholder="—"></label>
         <label class="field"><span>Must be done by</span><input name="d" type="date" value="${item.deadline ? T.dayKey(item.deadline, z) : ''}"></label></div>
+        <label class="field"><span>Category</span><select name="c"><option value="">— none —</option>${C.treeOptionsHTML(set(), item.catId || null)}</select></label>
         <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Save</button></div></form>`,
-      (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); close({ text: f.v.value.trim(), h: parseFloat(f.h.value), d: f.d.value }); }; setTimeout(() => f.v.focus(), 30); }, { cls: 'narrow' });
+      (dlg, close) => { const f = $('form', dlg); f.onsubmit = (e) => { e.preventDefault(); close({ text: f.v.value.trim(), h: parseFloat(f.h.value), d: f.d.value, c: f.c.value }); }; setTimeout(() => f.v.focus(), 30); }, { cls: 'narrow' });
       if (v == null) return;
       if (!v.text) return drop();
-      const upd = { text: v.text.slice(0, 300), minutes: v.h > 0 ? Math.round(v.h * 60) : undefined, deadline: v.d ? T.atTime(v.d, set().bounds?.end || '17:00', z) : undefined };
+      const upd = { text: v.text.slice(0, 300), minutes: v.h > 0 ? Math.round(v.h * 60) : undefined, deadline: v.d ? T.atTime(v.d, set().bounds?.end || '17:00', z) : undefined, catId: v.c || undefined };
       await saveLater(laterList().map((x) => (x.id === item.id ? { ...x, ...upd } : x)), 'edit note');
     };
   });
@@ -3787,7 +3790,7 @@ async function pickGoalCats(current, head) {
   const s = set(), [hid, label, icon] = head, hc = GL.headCats(s, hid), cur = new Set(current || []);
   return modal(`<form class="choice"><h2>Categories for this goal</h2>
       <p class="muted small">Time in events and task sessions of these categories counts towards the goal. Picking a main category includes its sub-categories.</p>
-      <div class="g-pick">${C.ordered(s).map((c) => `<button type="button" class="cat-chip ${c.parent ? 'sub' : ''} ${cur.has(c.id) ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}" title="${esc(C.fullLabel(s, c))}"><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`).join('')}</div>
+      <div class="g-pick">${C.treeChipsHTML(s, (c) => `<button type="button" class="cat-chip ${c.parent ? 'sub' : ''} ${cur.has(c.id) ? 'on' : ''}" data-cat="${esc(c.id)}" style="--c:${esc(c.color)}" title="${esc(C.fullLabel(s, c))}"><i></i>${c.parent ? '<span class="cat-sub">↳</span>' : ''}${c.icon ? `<span class="cat-ic">${esc(c.icon)}</span>` : ''}${esc(c.name)}</button>`)}</div>
       <p class="muted small">None picked = use the ${icon} ${esc(label)} categories${hc.length ? ` (${esc(hc.map((id) => C.catLabel(C.catById(s, id)) || 'No category').join(', '))})` : ' (none set yet)'}.</p>
       <div class="actions"><button type="button" class="btn ghost g-pick-clear">Use ${esc(label)}'s</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">Apply</button></div></form>`,
   (dlg, close) => {
@@ -3823,7 +3826,7 @@ async function editGoal(key, id) {
         <label class="field"><span>Time budget (h)</span><input name="b" type="number" min="0" step="0.25" value="${g.budget ? +(g.budget / 60).toFixed(2) : ''}" placeholder="none" style="width:110px"></label>
       </div>
       <details ${own.size ? 'open' : ''}><summary class="small">Count only these categories for this goal (otherwise the head's)</summary>
-        <div class="g-catlist">${C.ordered(s).map((c) => `<label class="chk"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
+        <div class="g-catlist">${C.ordered(s).map((c) => `<label class="chk ${c.parent ? 'sub' : ''}"><input type="checkbox" name="c" value="${esc(c.id)}" ${own.has(c.id) ? 'checked' : ''}> ${esc(C.catLabel(c))}</label>`).join('')}</div></details>
       ${wordsFieldHTML(GL.goalWords(g), g.wmode)}
       ${goalRuleHTML(g.rule, key.startsWith('w:') ? 'week' : key.startsWith('m:') ? 'month' : 'year')}
       ${gameOn() ? '<p class="small g-xp-prev"></p>' : ''}

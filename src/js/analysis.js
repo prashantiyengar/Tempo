@@ -4,6 +4,7 @@ import { projectOf } from './projects.js';
 import * as S from './scheduler.js';
 import * as G from './gcal.js';
 import { esc } from './ui.js';
+import * as C from './categories.js';
 
 const GOOGLE_NAMES = { 1: 'Lavender', 2: 'Sage', 3: 'Grape', 4: 'Flamingo', 5: 'Banana', 6: 'Tangerine', 7: 'Peacock', 8: 'Graphite', 9: 'Blueberry', 10: 'Basil', 11: 'Tomato' };
 const TASK_NAMES = { '#4f6bed': 'Indigo', '#0f9d76': 'Green', '#e2683c': 'Orange', '#c2459b': 'Magenta', '#8a5cf6': 'Violet', '#d4a20a': 'Mustard', '#2a9bd6': 'Sky', '#d6455b': 'Rose', '#5c7a3a': 'Olive', '#6b7280': 'Gray' };
@@ -128,7 +129,7 @@ export function groupOf(it, by, ctx) {
     const p = c?.parent ? (s.categories || []).find((x) => x.id === c.parent) : null;
     if (c && p && by === 'maincat') c = p; // roll sub-categories up into their main category
     const lbl = (x) => `${x.icon ? x.icon + ' ' : ''}${x.name}`;
-    if (c) return { key: 'cat:' + c.id, label: p && by === 'category' ? `${lbl(p)} › ${lbl(c)}` : lbl(c), color: c.color };
+    if (c) return { key: 'cat:' + c.id, label: p && by === 'category' ? `${lbl(p)} › ${lbl(c)}` : lbl(c), color: c.color, ...(p && by === 'category' ? { parent: 'cat:' + p.id, short: lbl(c) } : {}) };
     return it.kind === 'chunk' ? { key: 'cat:none-t', label: 'Uncategorized tasks', color: '#c0c4cc' } : { key: 'cat:none-e', label: 'Uncategorized events', color: '#9aa0aa' };
   }
   if (by === 'project') {
@@ -189,7 +190,14 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
   const { totals, days } = data;
   const occupied = totals.available - totals.free - totals.gaps;
   const gapsNote = totals.gaps ? `<p class="muted small an-gaps"><span class="gap-sw"></span> ${fmtG(totals.gaps)} of short gaps (≤ ${GAP_MAX} min) between back-to-back items — not counted as free.</p>` : '';
-  const order = Object.entries(totals.groups).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  let order = Object.entries(totals.groups).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  // By category: as the category tree — each main category (biggest first, counting its sub-categories), then its subs
+  if (opts.by === 'category') {
+    const par = (k) => groups[k]?.parent || k, sums = {};
+    for (const k of order) sums[par(k)] = (sums[par(k)] || 0) + totals.groups[k];
+    const mains = [...new Set(order.map(par))].sort((a, b) => sums[b] - sums[a]);
+    order = mains.flatMap((m) => [...(order.includes(m) ? [m] : []), ...order.filter((k) => groups[k]?.parent === m)]);
+  }
   // Fold the long tail into "Other" so the chart stays readable (fixed order, no generated hues).
   const MAXG = 8;
   const main = order.slice(0, MAXG), rest = order.slice(MAXG);
@@ -267,8 +275,9 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
     const m = meta(k);
     const keys = k === '__other' ? rest : [k];
     const n = keys.reduce((a, x) => a + Object.keys(totals.titles[x] || {}).length, 0);
-    const name = m.editable ? `<button type="button" class="link lbl-edit" data-hex="${esc(k)}" title="Rename this color">${esc(m.label)} ✎</button>` : esc(m.label);
-    return `<tr><td><details class="an-det"><summary><span class="sw-dot" style="background:${m.color}"></span>${name}<span class="muted small an-count">${n} item${n === 1 ? '' : 's'} ▾</span></summary>${titleList(keys)}</details></td>
+    const sub = opts.by === 'category' && m.parent && shown.includes(m.parent);
+    const name = m.editable ? `<button type="button" class="link lbl-edit" data-hex="${esc(k)}" title="Rename this color">${esc(m.label)} ✎</button>` : sub ? `<span class="an-sub" title="${esc(m.label)}">↳ ${esc(m.short || m.label)}</span>` : esc(m.label);
+    return `<tr class="${sub ? 'an-subrow' : ''}"><td><details class="an-det"><summary><span class="sw-dot" style="background:${m.color}"></span>${name}<span class="muted small an-count">${n} item${n === 1 ? '' : 's'} ▾</span></summary>${titleList(keys)}</details></td>
       <td class="num">${fmtH(T0[k] || 0)}</td><td class="num">${pct(T0[k] || 0, totals.available)}%</td><td class="num">${pct(T0[k] || 0, occupied)}%</td></tr>`;
   }).join('');
   const table = `<table class="an-table"><thead><tr><th>${opts.by === 'color' ? 'Color' : opts.by === 'category' || opts.by === 'maincat' ? 'Category' : opts.by === 'type' ? 'Type' : opts.by === 'project' ? 'Project' : 'Task or calendar'}</th><th class="num">Hours</th><th class="num">% of scope</th><th class="num">% of occupied</th></tr></thead>
@@ -297,7 +306,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
 
 export function sleepCatOptions(s) {
   const esc2 = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  return `<option value="">😴 Sleep (its own group)</option>${([...(s.categories || [])].sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }))).map((c) => `<option value="${esc2(c.id)}" ${s.sleepCategory === c.id ? 'selected' : ''}>${esc2((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}`;
+  return `<option value="">😴 Sleep (its own group)</option>${C.treeOptionsHTML(s, s.sleepCategory, esc2)}`;
 }
 function sleepNote(sl, s) {
   const on = s.sleepAssume !== false;
