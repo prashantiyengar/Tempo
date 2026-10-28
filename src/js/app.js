@@ -76,6 +76,38 @@ const ctx = {
 
 const returnState = (extra = {}) => ({ view: app.view, cursor: app.cursor, ...extra });
 
+// Web app: Google's browser sign-ins last an hour. Renew it a few minutes before it runs out — by a quick silent trip
+// to Google and back (no prompt, same view) at a moment you aren't using the app: no dialog open, not typing, no
+// tap for 15 s, page visible. Only if Google refuses (e.g. you signed out of Google) does Tempo ask you to reconnect.
+let lastInput = Date.now();
+for (const evn of ['pointerdown', 'keydown', 'wheel', 'touchstart']) addEventListener(evn, () => { lastInput = Date.now(); }, { passive: true, capture: true });
+const RENEW_GAP = 3 * T.MIN;
+function quietMoment() {
+  const ae = document.activeElement;
+  return !document.hidden && !document.querySelector('dialog[open], .popover, .sheet.open') && !(ae && ae !== document.body && ae.matches?.('input, textarea, select, [contenteditable="true"]')) && Date.now() - lastInput > 15000 && !app.dragging;
+}
+async function renewSoon(force = false) {
+  if (!isWeb || !app.state || !E.connected(st())) return;
+  clearTimeout(app.renewT);
+  const exp = await G.tokenExpiry();
+  if (!force && exp > Date.now() + 5 * T.MIN) return planRenew();
+  const tried = +sessionStorage.getItem('tempo:silentAt') || 0;
+  if (Date.now() - tried < RENEW_GAP) { app.renewT = setTimeout(() => renewSoon(force), RENEW_GAP - (Date.now() - tried) + 1000); return; }
+  if (!quietMoment() && !(exp <= Date.now() && document.visibilityState === 'visible' && Date.now() - lastInput > 4000 && !document.querySelector('dialog[open]'))) { app.renewT = setTimeout(() => renewSoon(force), 5000); return; }
+  sessionStorage.setItem('tempo:silentAt', String(Date.now()));
+  document.body.classList.add('signing-in');
+  G.silentRenew(returnState({ scroll: $('.tg-scroll')?.scrollTop ?? null }));
+}
+async function planRenew() {
+  if (!isWeb || !app.state || !E.connected(st())) return;
+  clearTimeout(app.renewT);
+  const exp = await G.tokenExpiry();
+  const wait = exp - 4 * T.MIN - Date.now();
+  if (wait <= 0) return renewSoon();
+  app.renewT = setTimeout(() => renewSoon(), Math.min(wait, 2 ** 31 - 1));
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && isWeb) renewSoon(); });
+
 // Reconnect: in the web app, try a silent renew first and fall back to the Google prompt only if needed.
 function reconnectGoogle() {
   if (isWeb) return G.silentRenew(returnState({ autoInteractive: true }));
@@ -622,12 +654,11 @@ function wireToNow(root) {
 }
 // A task session done at a different time than planned (e.g. 03:00–04:00 instead of 21:00): pick when, and it moves
 // there and counts as done — even outside the hours the task is normally planned in.
-async function doneAtAnotherTime(task, sess) {
-  if (!task || !sess) return;
+function askDoneWhen(title, sess, { what = 'session', move = 'the session moves there and the rest of the task is planned again' } = {}) {
   const z = tz(), len = Math.max(5, Math.round((sess.end - sess.start) / T.MIN)), now = Math.floor(Date.now() / (5 * T.MIN)) * 5 * T.MIN;
   const st0 = Math.min(now - len * T.MIN, sess.start), dt = (ms) => T.toDTInput(ms, z);
-  const r = await modal(`<form class="choice done-at-f"><h2>🕓 When did you do it?</h2>
-      <p class="muted small" style="margin:0">${esc(task.title)} — session planned ${esc(T.format(sess.start, z, { weekday: 'short', day: 'numeric', month: 'short' }))} ${esc(T.fmtTime(sess.start, z, set().h12))}–${esc(T.fmtTime(sess.end, z, set().h12))} (${T.fmtDur(len)})</p>
+  return modal(`<form class="choice done-at-f"><h2>🕓 When did you do it?</h2>
+      <p class="muted small" style="margin:0">${esc(title)} — ${what} planned ${esc(T.format(sess.start, z, { weekday: 'short', day: 'numeric', month: 'short' }))} ${esc(T.fmtTime(sess.start, z, set().h12))}–${esc(T.fmtTime(sess.end, z, set().h12))} (${T.fmtDur(len)})</p>
       <label class="field"><span>Day</span><input type="date" name="d" value="${dt(st0).slice(0, 10)}" max="${dt(Date.now()).slice(0, 10)}"></label>
       <div class="row"><label class="field"><span>From</span><input type="time" name="a" value="${dt(st0).slice(11, 16)}" step="300"></label><label class="field"><span>To</span><input type="time" name="b" value="${dt(st0 + len * T.MIN).slice(11, 16)}" step="300"></label></div>
       <p class="muted small dat-say" style="margin:0"></p>
@@ -636,16 +667,36 @@ async function doneAtAnotherTime(task, sess) {
     const f = $('form', dlg);
     UI.linkRange(f.a, f.b);
     const read = () => { const a = T.atTime(f.d.value, f.a.value || '00:00', z); let b = T.atTime(f.d.value, f.b.value || '00:00', z); if (b <= a) b = T.atTime(T.addDays(f.d.value, 1), f.b.value, z); return { a, b }; };
-    const say = () => { const { a, b } = read(); $('.dat-say', dlg).textContent = a > Date.now() ? 'That is still to come — pick a time that has passed.' : `${T.fmtDur(Math.round((b - a) / T.MIN))} done — the session moves there and the rest of the task is planned again.`; };
+    const say = () => { const { a, b } = read(); $('.dat-say', dlg).textContent = a > Date.now() ? 'That is still to come — pick a time that has passed.' : `${T.fmtDur(Math.round((b - a) / T.MIN))} done — ${move}.`; };
     f.addEventListener('input', say); f.addEventListener('change', say); say();
     f.onsubmit = (e) => { e.preventDefault(); const { a, b } = read(); if (a > Date.now()) return; close({ a, b: Math.min(b, Math.max(Date.now(), a + 5 * T.MIN)) }); };
   }, { cls: 'narrow' });
+}
+async function doneAtAnotherTime(task, sess) {
+  if (!task || !sess) return;
+  const z = tz();
+  const r = await askDoneWhen(task.title, sess);
   if (!r) return;
   replaceTask(S.doneAt(task, sess.id, r.a, r.b));
   logHistory({ kind: 'done', task, sess, t: r.a });
   await saveTasks(`“${task.title}” done at another time`);
   toast(`✓ “${task.title}” done ${T.format(r.a, z, { weekday: 'short' })} ${T.fmtTime(r.a, z, set().h12)}–${T.fmtTime(r.b, z, set().h12)} — the rest of the task re-planned`);
   cycle();
+}
+// An event you did at a different time: this occurrence moves there and is marked done
+async function eventDoneAtAnotherTime(it) {
+  if (!it?.ev || !it.editable) return;
+  const z = tz(), ev = it.ev;
+  const r = await askDoneWhen(it.title, it, { what: 'event', move: `the event${ev.recurringEventId ? ' (just this occurrence)' : ''} moves there, marked done` });
+  if (!r) return;
+  try {
+    setStatus('Saving…');
+    const zone = ev.start.timeZone || z, priv = { ...(ev.extendedProperties?.private || {}), tempoDone: '1' };
+    await EV.updateEvent(st(), ev, { start: { dateTime: new Date(r.a).toISOString(), timeZone: zone }, end: { dateTime: new Date(r.b).toISOString(), timeZone: ev.end.timeZone || zone }, extendedProperties: { ...(ev.extendedProperties || {}), private: priv } }, 'this');
+    undoableEventChange(`“${it.title}” done at another time`, ev, 'this');
+    await afterEventChange();
+    toast(`✓ “${it.title}” done ${T.format(r.a, z, { weekday: 'short' })} ${T.fmtTime(r.a, z, set().h12)}–${T.fmtTime(r.b, z, set().h12)}`);
+  } catch (err) { handleError(err); render(); }
 }
 async function extendToNow(it) {
       const end = Math.floor(Date.now() / T.MIN) * T.MIN;
@@ -1081,7 +1132,18 @@ function gameCtx(items) {
     if (GL.hasOwnMatch(g)) { const m = GL.goalMatch(g); return GL.timeIn(items, m.cats, from, to, now, s, m).done; }
     return GL.timeIn(items, GL.headCats(s, GL.headOf(g)), from, to, now, s).done;
   };
-  return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), habitStreak: (h, k) => HB.streaks(h, s, k).current, goals: [], goalsAll, goalMinutes, history: s.history || [] };
+  // life-growth minutes earlier in day k's week (from the settled days, else counted from the items)
+  const lifeBefore = (k) => {
+    let m = 0; const z = s.tz;
+    for (let d = T.startOfWeek(k, s.weekStart ?? 1); d < k; d = T.addDays(d, 1)) {
+      const led = s.game?.ledger?.[d];
+      if (led && led.gm != null) { m += led.gm; continue; }
+      const a = T.dayStart(d, z), b = T.dayStart(T.addDays(d, 1), z);
+      for (const it of items) if (!it.allDay && it.start >= a && it.start < b) { const x = GM.itemXP(it, s, now); if (x.done && x.grow) m += Math.max(0, Math.min(it.end, now) - it.start) / T.MIN; }
+    }
+    return m;
+  };
+  return { items, tasks, projects: P.list(s), projectsDone, habits: HB.list(s), habitDone: (h, k) => HB.isDone(h, k), habitStreak: (h, k) => HB.streaks(h, s, k).current, goals: [], goalsAll, goalMinutes, history: s.history || [], lifeBefore };
 }
 // 🚩 on the day you reached a new level (today: as soon as it happens)
 function levelFlag(k) {
@@ -1113,7 +1175,7 @@ function drainLines(k) {
 // Click a day's XP: how the number came about (and what's still to earn that day)
 async function xpBreakdown(k, rect) {
   const s = set(), z = tz(), today = T.dayKey(Date.now(), z);
-  const items = await collectItems([T.addDays(k, -1), T.addDays(k, 14)]);
+  const items = await collectItems([[T.addDays(k, -1), T.startOfWeek(k, s.weekStart ?? 1)].sort()[0], T.addDays(k, 14)]);
   const d = GM.dayXP(k, s, gameCtx(items)), led = s.game?.ledger?.[k];
   const by = { busy: [], life: [], app: [], pen: [] };
   for (const [l, ty, x] of d.lines) (by[ty] || by.app).push([l, x]);
@@ -1167,7 +1229,7 @@ async function gameRefresh() {
     const open = []; for (let k = first; k < today; k = T.addDays(k, 1)) if (!g.ledger[k]) open.push(k);
     // (from the start of the earliest goal period still open, so progress on goals is counted right)
     const goalFrom = Object.entries(s.goals || {}).filter(([key, l]) => (l || []).length && !key.startsWith('y')).map(([key, l]) => GM.goalPeriod(key, l[0], z)).filter((p) => p.to > (open[0] || today)).map((p) => p.from);
-    const itemsFrom = [open[0] || today, ...goalFrom, T.startOfWeek(today, s.weekStart ?? 1), today].sort()[0];
+    const itemsFrom = [T.startOfWeek(open[0] || today, s.weekStart ?? 1), ...goalFrom, T.startOfWeek(today, s.weekStart ?? 1), today].sort()[0];
     const items = await collectItems([itemsFrom, T.addDays(today, 30)]);
     const ctx = gameCtx(items);
     // the day each task / project was first finished: finishing XP is given that day only, never again
@@ -1186,7 +1248,7 @@ async function gameRefresh() {
     }
     for (const k of open) {
       const d = GM.dayXP(k, s, ctx, now);
-      const e = g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, lg: d.lg, nl: d.nl, f: d.f, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
+      const e = g.ledger[k] = { a: d.app, b: d.busy, l: d.life, p: d.pen, net: d.net, lg: d.lg, nl: d.nl, f: d.f, fill: +d.fill.toFixed(3), penN: d.penN, doneN: d.doneN, gm: d.growMin, top: d.lines.slice().sort((x, y) => Math.abs(y[2]) - Math.abs(x[2])).slice(0, 8) };
       // a day without any XP drain: a bonus that grows with each clean day in a row
       if (drained && drained[k] > 0) e.dr = 1;
       if (drained && drained[k] === 0) {
@@ -1372,11 +1434,11 @@ async function gameDetails() {
     ${t ? `<details open class="gd-day"><summary><b>Today</b> <span class="${t.net < 0 ? 'xp-p' : ''}">${t.net >= 0 ? '+' : ''}${t.net} XP</span></summary>${t.lines.map(([l, ty, x]) => `<div class="gd-line"><span>${esc(l)}</span><b class="xp-${ty === 'pen' ? 'p' : ty[0]}">${x > 0 ? '+' : ''}${x}</b></div>`).join('') || '<p class="muted small">Nothing yet today.</p>'}</details>` : ''}
     ${days.map(([k, d]) => `<details class="gd-day"><summary><b>${esc(T.format(T.dayStart(k, tz()), tz(), { weekday: 'short', day: 'numeric', month: 'short' }))}</b> <span class="${d.net < 0 ? 'xp-p' : ''}">${d.net >= 0 ? '+' : ''}${d.net} XP</span> <span class="muted small">${Math.round((d.fill || 0) * 100)}% planned</span></summary>${(d.top || []).map(([l, ty, x]) => `<div class="gd-line"><span>${esc(l)}</span><b class="xp-${ty === 'pen' ? 'p' : ty[0]}">${x > 0 ? '+' : ''}${x}</b></div>`).join('')}</details>`).join('')}
     <h3 class="gd-h">How XP works</h3>
-    <ul class="small gd-rules"><li><b class="xp-b">Busy</b>: events you attend (longer ones earn more; ticked off ×1.2), task sessions you complete (each later session of a task is worth 8% more), finished tasks and projects, a full day (at least half of 7:00–23:00 planned), keeping to the plan, and a weekly bonus for how much of the week was planned.</li>
+    <ul class="small gd-rules"><li><b class="xp-b">Busy</b>: events you attend (12 an hour; ticked off ×1.2), task sessions (15 an hour) you complete (each later session of a task is worth 8% more), finished tasks and projects, a full day (at least half of 7:00–23:00 planned), keeping to the plan, and a weekly bonus for how much of the week was planned.</li>
       <li><b class="xp-l">Why life XP matters</b>: life XP is for what transforms you or moves your life goals forward — learning, training, creating, deep practice. Most weeks leave little room for it, so even short spells are valued highly (half an hour earns well over half of an hour's XP) and it never wears off. Everything else — busy time, leisure, sleep, using the app — counts in full for your first week, then less and less (about a third after a month, down to 15%). After a month, moving up on busy time alone is slow: a higher level means you've grown, not just kept busy.</li>
-      <li><b class="xp-l">Life</b>: time in your life-growth categories (set in Settings → General → Game mode), sleep, some leisure, habits ticked off (with small rewards for streaks that grow with your rank — a habit can be left out of the game in its settings) and goals reached. Going up levels needs a share of life XP — never more than a quarter.</li>
+      <li><b class="xp-l">Life</b>: time in your life-growth categories (set in Settings → General → Game mode) — with a <b>step bonus</b> each time your week's life growth passes another 5 hours (5 h: +25, 10 h: +50, 15 h: +75 …) — sleep, some leisure, habits ticked off (with small rewards for streaks that grow with your rank — a habit can be left out of the game in its settings) and goals reached. Going up levels needs a share of life XP — never more than a quarter.</li>
       <li><b class="xp-a">App</b>: opening Tempo each day (more for a streak), scheduling events and tasks (a fifth of what they're worth — the rest comes when you do them), starting projects, logging habits, achievements.</li>
-      <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — more each time the same task slips again within a week.</li>
+      <li><b class="xp-p">Penalties</b>: rescheduling a session (moving, deleting, marking undone, or a session pushed later) costs 8 XP — once a day for each task or event, however often it moves that day; more if it slips again on later days within a week.</li>
       <li><b class="xp-p">XP drains</b> (Settings → Game mode): time on activities you want to cut down on costs a share of your XP — more the higher your rank. <b class="xp-c">Clean bonus</b>: a day without any drain earns a share of that day's XP, a week without any earns a share of the week's — growing slowly with each one in a row, up to a cap that rises with your rank. Drains and bonus activities can be set for a while only (the next week, two weeks, month, 3 months or your own dates); bonus activities earn extra XP, and anything that counts as a drain never scores. 🚩 on the calendar marks the days you went up a level.</li></ul>
   </div></div>`, (dlg) => wireRoad(dlg), { cls: 'wide' });
 }
@@ -1406,7 +1468,7 @@ function fireworks(ms = 2200) {
 let sleepAt = 0, sleepBusy = false;
 async function addSleepBlocks({ force = false } = {}) {
   const s = set();
-  if (!s.sleepEvents || sleepBusy || (!force && Date.now() - sleepAt < 10 * T.MIN)) return;
+  if (!s.sleepEvents || sleepBusy || (!force && Date.now() - sleepAt < 2 * T.MIN)) return;
   sleepBusy = true; sleepAt = Date.now();
   try {
     const z = tz(), now = Date.now(), today = T.dayKey(now, z);
@@ -1416,7 +1478,7 @@ async function addSleepBlocks({ force = false } = {}) {
     const nights = [];
     for (let d = T.addDays(today, -3); d <= today; d = T.addDays(d, 1)) {
       const st0 = T.atTime(d, a, z), en = T.parseHHMM(b) > T.parseHHMM(a) ? T.atTime(d, b, z) : T.atTime(T.addDays(d, 1), b, z);
-      if (en <= now && d >= since && !done.has(d)) nights.push({ d, st: st0, en }); // `since` = the first night (the evening it starts)
+      if (en + (+s.sleepDelayMin || 0) * T.MIN <= now && d >= since && !done.has(d)) nights.push({ d, st: st0, en }); // `since` = the first night (the evening it starts); added once the night (plus the wait you chose) is over
     }
     if (!nights.length) return;
     const items = await collectItems([nights[0].d, T.addDays(nights[nights.length - 1].d, 1)]);
@@ -1441,6 +1503,73 @@ async function addSleepBlocks({ force = false } = {}) {
     if (made) { E.invalidate(); await render(); toast(`😴 Added ${made} sleep block${made > 1 ? 's' : ''} for last night`, { ms: 4000 }); }
   } catch (err) { handleError(err); }
   finally { sleepBusy = false; }
+}
+
+// Fill-in blocks: if a window (e.g. 18:00–20:00) has unplanned time left once it is over, fill each gap of 15 min or
+// more with an event of the chosen category ("Childcare" around a 19:00 shopping trip). Optionally only on days with
+// nothing at all planned in the window, and only some time after the window ends.
+// s.autoFills: [{ id, name, from, to, catId, days: [0–6], skipIfAny, delayMin, cal: 'default'|'local', since, on }]
+let fillAt = 0, fillBusy = false;
+export function fillWindows(r, z, now, fromDay, toDay) {
+  const out = [];
+  for (let d = fromDay; d <= toDay; d = T.addDays(d, 1)) {
+    if (r.since && d < r.since) continue;
+    const wd = new Date(T.dayStart(d, z) + 12 * T.HOUR).getUTCDay();
+    if (r.days?.length && !r.days.includes(wd)) continue;
+    const st0 = T.atTime(d, r.from, z), en = T.parseHHMM(r.to) > T.parseHHMM(r.from) ? T.atTime(d, r.to, z) : T.atTime(T.addDays(d, 1), r.to, z);
+    out.push({ d, st: st0, en, due: en + (+r.delayMin || 0) * T.MIN });
+  }
+  return out;
+}
+async function addFillBlocks({ force = false } = {}) {
+  const s = set(), rules = (s.autoFills || []).filter((r) => r.on !== false && r.from && r.to && r.catId);
+  if (!rules.length || fillBusy || (!force && Date.now() - fillAt < 2 * T.MIN)) return;
+  fillBusy = true; fillAt = Date.now();
+  try {
+    const z = tz(), now = Date.now(), today = T.dayKey(now, z);
+    const done = new Set(s.autoFillDone || []);
+    const jobs = [];
+    for (const r of rules) for (const w of fillWindows(r, z, now, T.addDays(today, -3), today)) if (w.due <= now && !done.has(`${r.id}:${w.d}`)) jobs.push({ r, ...w });
+    if (!jobs.length) return;
+    jobs.sort((a, b) => a.st - b.st);
+    const items = await collectItems([jobs[0].d, T.addDays(jobs[jobs.length - 1].d, 1)]);
+    let made = 0; const names = new Set();
+    for (const j of jobs) {
+      const key = `${j.r.id}:${j.d}`;
+      const inWin = items.filter((it) => !it.allDay && it.end > j.st && it.start < j.en && !it.declined && !(it.kind === 'chunk' && (it.sess?.kind === 'waived' || it.status === 'waived')));
+      if (inWin.some((it) => it.ev?.extendedProperties?.private?.tempoFill === key)) { done.add(key); continue; } // already there (another device)
+      const busy = S.merge(inWin.filter((it) => it.ev?.transparency !== 'transparent').map((it) => ({ start: Math.max(it.start, j.st), end: Math.min(it.end, j.en) })));
+      if (j.r.skipIfAny && busy.length) { done.add(key); continue; }
+      const cat = C.catById(s, j.r.catId);
+      const cal = j.r.cal === 'local' ? E.LOCAL_CAL : ctx.defaultCalendar();
+      const title = (j.r.name || '').trim() || cat?.name || 'Fill-in';
+      for (const g of S.subtract([{ start: j.st, end: j.en }], busy).filter((g) => g.end - g.start >= 15 * T.MIN)) {
+        const priv = { tempoFill: key, ...(cat ? { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color, tempoCatIcon: cat.icon || '' } : {}) };
+        await EV.createEvent(st(), cal, { ...(cat ? { colorId: G.nearestColorId(cat.color) } : {}), summary: `${cat?.icon ? cat.icon + ' ' : ''}${title}`, start: { dateTime: new Date(g.start).toISOString(), timeZone: z }, end: { dateTime: new Date(g.end).toISOString(), timeZone: z },
+          transparency: 'opaque', reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv } });
+        made++; names.add(title);
+      }
+      done.add(key);
+    }
+    s.autoFillDone = [...done].sort().slice(-200);
+    await E.persist(st(), ['settings', 'localEvents']); syncSharedSoon();
+    if (made) { E.invalidate(); await render(); toast(`Filled ${made} gap${made > 1 ? 's' : ''} with ${[...names].join(', ')}`, { ms: 4000 }); }
+  } catch (err) { handleError(err); }
+  finally { fillBusy = false; }
+}
+// Run sleep and fill-in blocks again right when the next one is due (they also run after every refresh)
+function scheduleAutoBlocks() {
+  clearTimeout(app.autoBlockT);
+  const s = set(), z = tz(), now = Date.now(), today = T.dayKey(now, z);
+  const dues = [];
+  for (const r of (s.autoFills || []).filter((r) => r.on !== false && r.from && r.to && r.catId)) for (const w of fillWindows(r, z, now, today, T.addDays(today, 1))) if (w.due > now && !(s.autoFillDone || []).includes(`${r.id}:${w.d}`)) dues.push(w.due);
+  if (s.sleepEvents) {
+    const a = s.sleepStart || '23:00', b = s.sleepEnd || '07:00';
+    for (const d of [T.addDays(today, -1), today]) { const en = T.parseHHMM(b) > T.parseHHMM(a) ? T.atTime(d, b, z) : T.atTime(T.addDays(d, 1), b, z), due = en + (+s.sleepDelayMin || 0) * T.MIN; if (due > now) dues.push(due); }
+  }
+  if (!dues.length) return;
+  const wait = Math.min(...dues) - now + 5000;
+  if (wait < 26 * T.HOUR) app.autoBlockT = setTimeout(() => addSleepBlocks({ force: true }).then(() => addFillBlocks({ force: true })).then(scheduleAutoBlocks), Math.min(wait, 2 ** 31 - 1));
 }
 
 // Automatic habits: look at the events and task sessions of the days since "from" (up to 60 days back each time)
@@ -1888,7 +2017,7 @@ async function askScope(verb) {
 
 async function commitMove(it, start, end) {
   try {
-    if (gameOn() && (it.kind === 'chunk' || it.end < start || it.start > end || Math.abs(start - it.start) >= 30 * T.MIN)) logHistory({ kind: 'resched', task: it.task, title: it.title, t: it.start });
+    if (gameOn() && (it.kind === 'chunk' || it.end < start || it.start > end || Math.abs(start - it.start) >= 30 * T.MIN)) logHistory({ kind: 'resched', task: it.task, title: it.title, evId: it.kind === 'chunk' ? undefined : (it.ev?.recurringEventId || it.ev?.id), t: it.start });
     if (it.kind === 'chunk') {
       replaceTask(S.pinSession(it.task, it.sess.id, start, end));
       await saveTasks(`move “${it.task.title}” session`);
@@ -2133,13 +2262,14 @@ function openItem(it, rect) {
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
-      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}${!it.allDay ? '<button class="btn small ghost add-during" title="Record something else you did during this event, e.g. an hour of chores during childcare">＋ Add during this</button>' : ''}${currentToNow()?.key === it.key ? '<button class="btn small to-now" title="You kept going: make it end now">⟶ Extend until now</button>' : ''}</div>
+      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay && it.start <= Date.now() && it.end > Date.now() - 12 * T.HOUR ? `<button class="btn small fin-early" title="${it.end > Date.now() ? 'You are done: end it now and keep the rest free or move tasks up' : 'You finished before its end: pick when, the rest is left unallocated'}">⏹ Finished early</button>` : ''}${it.editable && !it.allDay && !it.evDone ? '<button class="btn small ghost ev-done-at" title="You did it at a different time: move it there and mark it done">🕓 Done at another time…</button>' : ''}${!it.allDay ? '<button class="btn small ghost add-during" title="Record something else you did during this event, e.g. an hour of chores during childcare">＋ Add during this</button>' : ''}${currentToNow()?.key === it.key ? '<button class="btn small to-now" title="You kept going: make it end now">⟶ Extend until now</button>' : ''}</div>
       ${gameXPLine(it)}
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
     $('.x', p).onclick = close;
     $('.load-tasks', p)?.addEventListener('click', () => { close(); refreshFromServer(); });
     $('.fin-early', p)?.addEventListener('click', () => { close(); finishedEarly(it); });
+    $('.ev-done-at', p)?.addEventListener('click', () => { close(); eventDoneAtAnotherTime(it); });
     $('.add-during', p)?.addEventListener('click', () => { close(); addDuring(it); });
     $('.to-now', p)?.addEventListener('click', () => { close(); extendToNow(it); });
     const toggle = (done) => async () => { close(); try { await setEventDone(it, done); } catch (err) { handleError(err); } };
@@ -2191,7 +2321,7 @@ function openChunk(it, rect) {
         <button class="btn small partial">◐ Partly done…</button>
         <button class="btn small done-at" title="You did it at a different time (e.g. early this morning): move it there and mark it done">🕓 Done at another time…</button>
         ${p.pct < 100 || !isDone ? `<button class="btn small fin-task" title="${task.kind === 'reading' ? 'Count this session up to the last page and remove the sessions not done yet' : 'Count all remaining work as done in this session and remove the sessions not done yet'}">🏁 Task finished here</button>` : ''}
-        ${(!isDone || sess.auto) && sess.start <= now && sess.end > now ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}
+        ${(!isDone || sess.auto) && sess.start <= now && sess.end > now - 12 * T.HOUR ? '<button class="btn small fin-early">⏹ Finished early</button>' : ''}
         ${(!isDone || sess.auto) && sess.start < now && sess.end > now + T.MIN ? '<button class="btn small late">⏰ Started late…</button>' : ''}
         ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
@@ -2735,7 +2865,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     renderBanner();
   }
   markBaseline();
-  addSleepBlocks().then(() => autoHabits()).then(() => gameRefresh());
+  addSleepBlocks().then(() => addFillBlocks()).then(() => { scheduleAutoBlocks(); return autoHabits(); }).then(() => gameRefresh());
   await handleProblems(problems);
 }
 
@@ -2798,7 +2928,14 @@ async function finishedEarly(it0, choice = null) {
       if (!it) return;
     }
   }
-  const end = nowMin(), origEnd = it.end;
+  const origEnd = it.end;
+  let end = nowMin();
+  // already over (or you'd rather say when): ask when you finished
+  if (end >= origEnd || choice === 'ask') {
+    if (choice === 'ask') choice = null;
+    end = await askFinishedAt(it);
+    if (end == null) return;
+  }
   if (end <= it.start || end >= origEnd) { toast('That isn’t running right now.'); return; }
   try {
     if (it.kind === 'chunk') {
@@ -2814,18 +2951,43 @@ async function finishedEarly(it0, choice = null) {
   } catch (err) { handleError(err); return; }
   const freeMin = Math.round((origEnd - end) / T.MIN);
   const until = T.fmtTime(origEnd, tz(), set().h12);
+  if (origEnd <= Date.now()) {
+    // all of it is in the past: the rest simply stays unallocated
+    await cycle();
+    toast(`“${it.title}” now ends at ${T.fmtTime(end, tz(), set().h12)} — ${T.fmtDur(freeMin)} left unallocated`);
+    return { finished: it.title, endedAt: T.toDTInput(end, tz()).replace('T', ' '), freedMinutes: freeMin, then: 'free' };
+  }
+  const restFrom = Math.max(end, nowMin());
   const v = choice || await choose(`Finished ${T.fmtDur(freeMin)} early`, `“${it.title}” now ends at ${T.fmtTime(end, tz(), set().h12)}. What should happen until ${until}?`, [
     { value: 'fill', label: 'Move tasks up', desc: 'Pull your next task sessions into this time.' },
     { value: 'free', label: 'Leave it free', desc: `Nothing gets scheduled until ${until}.` },
   ], { cancel: 'Decide later' });
-  if (v === 'fill') await fillGap(end, origEnd);
+  if (v === 'fill') await fillGap(restFrom, origEnd);
   else if (v === 'free') {
-    set().holds = [...(set().holds || []).filter((h) => h.end > Date.now() - T.DAY), { id: S.newId('h'), start: end, end: origEnd }];
+    set().holds = [...(set().holds || []).filter((h) => h.end > Date.now() - T.DAY), { id: S.newId('h'), start: restFrom, end: origEnd }];
     await E.persist(st(), ['settings']);
     toast(`Kept free until ${until}`);
   }
   await cycle();
   return { finished: it.title, endedAt: T.toDTInput(end, tz()).replace('T', ' '), freedMinutes: freeMin, then: v || 'nothing' };
+}
+// When did you finish? (a time between the start and the planned end, at most now)
+function askFinishedAt(it) {
+  const z = tz(), now = nowMin(), max = Math.min(it.end - T.MIN, now), dt = (ms) => T.toDTInput(ms, z);
+  const def = Math.max(it.start + 5 * T.MIN, Math.min(max, Math.floor((it.start + (it.end - it.start) / 2) / (5 * T.MIN)) * 5 * T.MIN));
+  return modal(`<form class="choice fin-at-f"><h2>⏹ When did you finish?</h2>
+      <p class="muted small" style="margin:0">${esc(it.title)} — planned ${esc(T.fmtTime(it.start, z, set().h12))}–${esc(T.fmtTime(it.end, z, set().h12))}. It will end then; the rest is left unallocated.</p>
+      <label class="field"><span>Finished at</span><input type="time" name="t" value="${dt(def).slice(11, 16)}" step="300" required></label>
+      <p class="muted small fa-say" style="margin:0"></p>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn primary">⏹ Finish then</button></div></form>`,
+  (dlg, close) => {
+    const f = $('form', dlg);
+    const read = () => { let t = T.atTime(T.dayKey(it.start, z), f.t.value || '00:00', z); if (t <= it.start) t = T.atTime(T.addDays(T.dayKey(it.start, z), 1), f.t.value || '00:00', z); return t; };
+    const ok = (t) => t > it.start && t < it.end && t <= Date.now();
+    const say = () => { const t = read(); $('.fa-say', dlg).textContent = ok(t) ? `${T.fmtDur(Math.round((it.end - t) / T.MIN))} early` : `Pick a time between ${T.fmtTime(it.start, z, set().h12)} and ${T.fmtTime(Math.min(it.end, Date.now()), z, set().h12)}.`; };
+    f.addEventListener('input', say); say();
+    f.onsubmit = (e) => { e.preventDefault(); const t = read(); if (ok(t)) close(t); };
+  }, { cls: 'narrow' });
 }
 // Pull upcoming sessions (most important first) into [start, end).
 async function fillGap(start, end) {
@@ -3809,7 +3971,7 @@ function renderBanner() {
     if (hasTasks && !app.bannerDismissed) html = innerWidth < 600
       ? `<span>📍 Tasks are only saved on this device.</span><button class="btn small primary" data-b="connect">Connect Google</button><button class="icon-btn sm" data-b="x" title="Hide">✕</button>`
       : `<span>📍 Your task sessions are only saved in this browser — they won't appear in Google Calendar until you connect it.</span><button class="btn small primary" data-b="connect">Connect Google Calendar</button><button class="icon-btn sm" data-b="x" title="Hide">✕</button>`;
-  } else if (a.needsReconnect || info?.kind === 'auth') {
+  } else if (a.needsReconnect || (info?.kind === 'auth' && !isWeb)) {
     html = `<span>🔑 Google sign-in expired, so task sessions can't be synced.</span><button class="btn small primary" data-b="reconnect">Reconnect</button>`;
   } else if (info && !info.ok && ['permission', 'error', 'partial'].includes(info.kind)) {
     html = `<span>⚠ Task sessions aren't reaching Google Calendar: ${esc(info.error)}</span>${info.kind === 'permission' ? '<button class="btn small primary" data-b="reconnect">Reconnect</button>' : '<button class="btn small" data-b="retry">Retry</button>'}<button class="btn small ghost" data-b="details">Details</button>`;
@@ -3863,6 +4025,7 @@ function handleError(err) {
   // No connection: keep working quietly with saved data; it syncs again when you're back online.
   if (G.isOffline(err) || (navigator.onLine === false)) { offlineStatus(); return; }
   console.error(err);
+  if (err?.renewable && isWeb && !st().auth?.needsReconnect) { setStatus('Renewing Google sign-in…', 'busy'); renewSoon(true); return; }
   if (err instanceof G.AuthError || err instanceof G.PermissionError) {
     setStatus(err instanceof G.PermissionError ? 'Permission needed' : 'Google sign-in needed', 'bad');
     renderBanner();
@@ -4385,12 +4548,12 @@ async function init() {
   if (innerWidth < 760) app.view = 'day';
   { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis', 'review', 'goals'].includes(v)) app.view = v; }
   if (redirect?.ret?.view) { app.view = redirect.ret.view; app.cursor = app.miniCursor = redirect.ret.cursor || app.cursor; }
-  if (redirect?.ok) sessionStorage.removeItem('tempo:silentTried');
+  if (redirect?.ok) { sessionStorage.removeItem('tempo:silentTried'); sessionStorage.removeItem('tempo:silentAt'); }
   if (redirect && !redirect.ok && redirect.kind === 'silent' && redirect.ret?.autoInteractive && ['interaction_required', 'login_required', 'consent_required'].includes(redirect.code)) {
     return G.redirectToGoogle(G.clientFor(st().auth || {})?.id, st().auth || {}, 'interactive', { view: app.view, cursor: app.cursor });
   }
-  if (!redirect && await G.needsSilentRenew() && !sessionStorage.getItem('tempo:silentTried')) {
-    sessionStorage.setItem('tempo:silentTried', '1');
+  if (!redirect && await G.needsSilentRenew() && Date.now() - (+sessionStorage.getItem('tempo:silentAt') || 0) > RENEW_GAP) {
+    sessionStorage.setItem('tempo:silentAt', String(Date.now()));
     document.body.classList.add('signing-in');
     return G.silentRenew({ view: app.view, cursor: app.cursor });
   }
@@ -4398,6 +4561,8 @@ async function init() {
   bindToolbar();
   setStatus(E.connected(st()) ? 'Loading…' : 'Local mode');
   await render();
+  if (redirect?.ret?.scroll != null) { const sc = $('.tg-scroll'); if (sc) sc.scrollTop = redirect.ret.scroll; }
+  planRenew();
   if (redirect && !redirect.ok) {
     if (redirect.kind === 'silent') renderBanner();
     else toast(redirect.error, { ms: 10000 });

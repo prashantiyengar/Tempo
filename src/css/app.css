@@ -1443,3 +1443,6 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
   .tg[style*="--ncol:7"] .xp-chip { font-size: 11px !important; padding: 1px 3px !important; letter-spacing: -.02em; }
   .tg[style*="--ncol:7"] .xp-chip .xc-w { display: none; }
 }
+/* fill-in blocks in Settings: one card per rule */
+.fill-rule { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; margin: 8px 0; display: grid; gap: 6px; }
+.fill-rule .fr-name { flex: 1; min-width: 8em; }

@@ -53,7 +53,7 @@ async def main():
         led = await page.evaluate("window.__tempo.app.state.settings.game.ledger")
         check('3b. past days settled into the ledger', all(k in led for k in ['2026-10-19', '2026-10-20', '2026-10-22', '2026-10-23']), list(led.keys()))
         check('3c. study days earn life XP', led['2026-10-20']['l'] > 0, led['2026-10-20'])
-        check('3d. rescheduling twice costs XP, more the second time', led['2026-10-22']['p'] == 8 + 16, led['2026-10-22'])
+        check('3d. rescheduling the same task twice in a day costs XP once (round 53)', led['2026-10-22']['p'] == 8 and led['2026-10-22']['penN'] == 1, led['2026-10-22'])
         check('3e. the full workday counts as a full day', any('full day' in l[0] for l in led['2026-10-22']['top']), led['2026-10-22']['top'])
         chips = await page.eval_on_selector_all('.tg-dayhead .xp-chip', 'cs => cs.map(c => c.textContent.trim())')
         check('3f. XP next to each date (earned, today\'s to-go, possible)', len(chips) >= 6 and any('to go' in c for c in chips), chips)

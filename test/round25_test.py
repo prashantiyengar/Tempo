@@ -114,7 +114,7 @@ async def run(p, name, kw):
     await page.evaluate("document.querySelector('#btn-settings').click()"); await page.wait_for_selector('dialog[open] .settings-form'); await page.wait_for_timeout(300)
     gen = await page.eval_on_selector_all('dialog[open] section[data-pane="0"] details.sect', 'ds => ds.map(d => [d.dataset.sect, d.open, d.querySelector(".sect-s").textContent])')
     print(name, 'settings/general:', gen)
-    check(f'{name}: general settings grouped and collapsed', len(gen) == 5 and not any(o for _, o, _ in gen))
+    check(f'{name}: general settings grouped and collapsed', len(gen) == 6 and not any(o for _, o, _ in gen))
     check(f'{name}: time zone stays visible', await page.is_visible('dialog[open] [name=tz]'))
     await page.screenshot(path=f'{OUT}/z-{name}-settings.png')
     await tap('dialog[open] .tabs button[data-tab="1"]'); await page.wait_for_timeout(200)

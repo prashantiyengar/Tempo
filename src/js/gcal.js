@@ -51,8 +51,10 @@ export async function getToken(interactive = false) {
   if (!identityAvailable()) throw new AuthError('Signing in only works when Tempo is installed as an extension.');
   if (isWeb) {
     if (interactive) return redirectToGoogle(client.id, a, 'interactive');
-    await setAuth({ needsReconnect: true });
-    throw new AuthError('Google sign-in expired — tap Reconnect.');
+    // Google's browser sign-ins last an hour; the app renews it by itself at a quiet moment (no prompt), so this
+    // isn't a reason to ask you to reconnect — only a renewal Google refuses is.
+    const e = new AuthError('Google sign-in is being renewed…'); e.renewable = true;
+    throw e;
   }
   if (pendingToken) return pendingToken;
   pendingToken = (client.kind === 'chrome' ? chromeToken(interactive) : webToken(client.id, a, interactive));
@@ -87,8 +89,10 @@ async function webToken(clientId, a, interactive) {
   const details = { url: 'https://accounts.google.com/o/oauth2/v2/auth?' + params, interactive };
   if (!isFirefox && !interactive) { details.abortOnLoadForNonInteractive = false; details.timeoutMsForNonInteractive = 10000; }
   let resultUrl;
-  try { resultUrl = await ext.identity.launchWebAuthFlow(details); }
-  catch (e) {
+  try {
+    try { resultUrl = await ext.identity.launchWebAuthFlow(details); }
+    catch (e) { if (interactive) throw e; await sleep(2500); resultUrl = await ext.identity.launchWebAuthFlow(details); } // a silent renewal can fail once for no reason
+  } catch (e) {
     if (!interactive) await setAuth({ needsReconnect: true, lastAuthError: e.message || String(e) });
     throw new AuthError(interactive ? (e.message || String(e)) : 'Google sign-in expired — click Reconnect.');
   }
@@ -193,6 +197,7 @@ export async function disconnect() {
   await setAuth({ token: null, expires: 0, connected: false, email: null, needsReconnect: false });
 }
 
+export async function tokenExpiry() { const a = await getAuth(); return a.token ? +a.expires || 0 : 0; }
 export async function isConnected() { const a = await getAuth(); return !!(a.connected && hasClient(a)); }
 
 async function dropToken() {

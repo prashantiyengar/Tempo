@@ -1,5 +1,5 @@
 # Round 34: game — ranks page scrolls on phones, categories that never score, advanced settings, life items earn
-# little busy XP, a busy week lands between level 10 and 15.
+# little busy XP, a busy week lands between level 6 and 12 (busy XP halved in round 53).
 import asyncio, sys, subprocess, time, re, json
 sys.path.insert(0, 'test')
 from playwright.async_api import async_playwright
@@ -38,7 +38,7 @@ async def run_desktop(p):
     page = await ctx.new_page(); page.on('pageerror', lambda e: errs.append(str(e)))
     await page.goto('http://localhost:8828/app.html'); await page.wait_for_function('window.tempo'); await page.wait_for_selector('.tg-col'); await page.wait_for_timeout(4500)
     lvl = int(re.search(r'Level (\d+)', await page.text_content('#game-panel')).group(1))
-    check('5. a busy week (45 h of meetings, daily reading) lands between level 10 and 15', 10 <= lvl <= 15, lvl)
+    check('5. a busy week (45 h of meetings, daily reading) lands between level 6 and 12', 6 <= lvl <= 12, lvl)
     led = await page.evaluate("window.__tempo.app.state.settings.game.ledger")
     print('   week:', {k: v['net'] for k, v in led.items()})
     await page.click('#btn-prev'); await page.wait_for_timeout(1200)

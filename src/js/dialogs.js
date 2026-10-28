@@ -975,6 +975,7 @@ export function settingsDialog(ctx) {
   const agendaOn = !!agendaCal?.notificationSettings?.notifications?.some((n) => n.type === 'agenda' && n.method === 'email');
   let cats = C.ordered(s).map((c) => ({ ...c })); // alphabetical, sub-categories under their main one
   let periods = (s.periods || []).map((p) => ({ ...p, rules: p.rules.map((r) => ({ ...r, days: [...r.days] })) }));
+  const fills = (s.autoFills || []).map((r) => ({ ...r, days: [...(r.days || [0, 1, 2, 3, 4, 5, 6])] }));
   let projects = (s.projects || []).map((p) => ({ ...p }));
   let wx = { unit: W.defaultUnit(s.tz), ...(s.weather || {}) };
   let leave = { ...(s.leave || {}) };
@@ -1008,7 +1009,11 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Sleep blocks go on</span><select name="sleepCal"><option value="default">My main calendar</option><option value="local" ${s.sleepCal === 'local' ? 'selected' : ''}>Local (this browser only)</option></select></label>
           <label class="chk"><input type="checkbox" name="sleepAssume" ${s.sleepAssume !== false ? 'checked' : ''}> Count this time as sleep on nights with nothing else in it (Analysis covers the full 24 hours)</label>
           <div class="row"><input type="time" name="sleepStart" value="${esc(s.sleepStart || '23:00')}" step="900"> <span class="muted">to</span> <input type="time" name="sleepEnd" value="${esc(s.sleepEnd || '07:00')}" step="900"></div>
-          <label class="field"><span>Counts as category</span><select name="sleepCategory">${A.sleepCatOptions(s)}</select></label>`)}
+          <label class="field"><span>Counts as category</span><select name="sleepCategory">${A.sleepCatOptions(s)}</select></label>
+          <label class="field sl-delay"><span>Add each sleep block this many minutes after the night ends (0 = right away)</span><input type="number" name="sleepDelayMin" min="0" max="720" step="5" value="${+s.sleepDelayMin || 0}"></label>`)}
+        ${sect('s-fills', 'Fill-in blocks', `<p class="muted small" style="margin:0">Fill unplanned time automatically: once a window is over (e.g. 18:00–20:00), each gap of 15 minutes or more in it becomes an event of the category you choose — with a shopping trip 19:00–19:30 you get “Childcare” 18:00–19:00 and 19:30–20:00.</p>
+          <div class="fills-list"></div>
+          <button type="button" class="btn small add-fill">+ Add fill-in block</button>`)}
         ${sect('s-game', 'Game mode', (() => {
           const g = s.game || {};
           const guess = (c) => /read|book|study|learn|course|sport|exercise|fitness|gym|run|health|practi|music|language|meditat|yoga/i.test(c.name);
@@ -1176,6 +1181,7 @@ export function settingsDialog(ctx) {
       's-weather': () => (chk('wxOn') ? `${(val('wxPlace') || 'No place chosen').split(',')[0]} · °${val('wxUnit')}` : 'Off'),
       's-hours': () => `${val('bStart')}–${val('bEnd')}, ${days('bdays')}`,
       's-periods': () => periods.map((x) => x.name).filter(Boolean).join(', ') || 'None',
+      's-fills': () => fills.length ? fills.map((r) => `${r.name || C.catById(s, r.catId)?.name || 'Fill-in'} ${r.from}–${r.to}`).join(', ') : 'None',
       's-sessions': () => `${val('chunkMinutes')} min sessions · ${val('breakMinutes')} min breaks · wiggle ${val('wiggleMinutes')} min`,
       's-overflow': () => `${val('oStart')}–${val('oEnd')}, ${days('odays')}`,
       's-planning': () => [+val('dailyCapMinutes') ? `max ${T.fmtDur(+val('dailyCapMinutes'))}/day` : 'No daily cap', +val('marginDays') ? `margin ${val('marginDays')} d` : '', `travel ${val('travelMinutes') || 0} min`].filter(Boolean).join(' · '),
@@ -1235,6 +1241,32 @@ export function settingsDialog(ctx) {
       });
     };
     drawPeriods();
+    // fill-in blocks
+    const catOpts = (sel) => `<option value="">Choose a category…</option>${C.ordered(s).map((c) => `<option value="${esc(c.id)}" ${c.id === sel ? 'selected' : ''}>${esc((c.icon ? c.icon + ' ' : '') + c.name)}</option>`).join('')}`;
+    const drawFills = () => {
+      setHTML($('.fills-list', dlg), fills.map((r, i) => `<div class="fill-rule period" data-i="${i}">
+        <div class="row"><label class="chk small"><input type="checkbox" class="fr-on" ${r.on !== false ? 'checked' : ''} aria-label="On"></label><select class="fr-cat" aria-label="Category">${catOpts(r.catId)}</select><input class="fr-name" value="${esc(r.name || '')}" maxlength="40" placeholder="Title (default: the category)" aria-label="Title"><span class="grow"></span><button type="button" class="icon-btn fr-del" title="Remove" aria-label="Remove fill-in block">✕</button></div>
+        <div class="row"><input type="time" class="fr-from" value="${r.from}" step="900" aria-label="From"> <span class="muted">to</span> <input type="time" class="fr-to" value="${r.to}" step="900" aria-label="To">
+          <div class="wd-toggles">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label class="wd"><input type="checkbox" class="fr-day" value="${d}" ${r.days.includes(d) ? 'checked' : ''}><span>${DAYN[d].slice(0, 2)}</span></label>`).join('')}</div></div>
+        <label class="chk small"><input type="checkbox" class="fr-skip" ${r.skipIfAny ? 'checked' : ''}> Skip the day if anything at all is planned in this time, even something short</label>
+        <div class="row small"><label>Add it <input type="number" class="fr-delay" min="0" max="720" step="5" value="${+r.delayMin || 0}" style="width:5em"> min after the window ends <span class="muted">(0 = right away)</span></label><span class="grow"></span>
+          <label>on <select class="fr-cal"><option value="default">my main calendar</option><option value="local" ${r.cal === 'local' ? 'selected' : ''}>this browser only</option></select></label></div></div>`).join('') || '<p class="muted small">No fill-in blocks.</p>');
+      $$('.fill-rule', dlg).forEach((el2) => {
+        const r = fills[+el2.dataset.i];
+        $('.fr-on', el2).onchange = (e) => { r.on = e.target.checked; };
+        $('.fr-cat', el2).onchange = (e) => { r.catId = e.target.value; updSects(); };
+        $('.fr-name', el2).oninput = (e) => { r.name = e.target.value; };
+        $('.fr-from', el2).onchange = (e) => { r.from = e.target.value || r.from; updSects(); };
+        $('.fr-to', el2).onchange = (e) => { r.to = e.target.value || r.to; updSects(); };
+        $$('.fr-day', el2).forEach((c) => (c.onchange = () => { r.days = $$('.fr-day:checked', el2).map((x) => +x.value); }));
+        $('.fr-skip', el2).onchange = (e) => { r.skipIfAny = e.target.checked; };
+        $('.fr-delay', el2).oninput = (e) => { r.delayMin = Math.max(0, +e.target.value || 0); };
+        $('.fr-cal', el2).onchange = (e) => { r.cal = e.target.value; };
+        $('.fr-del', el2).onclick = () => { fills.splice(+el2.dataset.i, 1); drawFills(); updSects(); };
+      });
+    };
+    drawFills();
+    $('.add-fill', dlg).onclick = () => { fills.push({ id: 'f-' + Math.random().toString(36).slice(2, 8), name: '', from: '18:00', to: '20:00', catId: '', days: [0, 1, 2, 3, 4, 5, 6], skipIfAny: false, delayMin: 0, cal: 'default', since: T.dayKey(Date.now(), s.tz), on: true }); drawFills(); updSects(); };
     // Leave days: shown as ranges of consecutive days of the same kind
     const drawLeave = () => {
       const keys = Object.keys(leave).filter((k) => S.LEAVE_KINDS[leave[k]]).sort();
@@ -1565,6 +1597,8 @@ export function settingsDialog(ctx) {
         sleepEvents: f.sleepEvents.checked, sleepCal: f.sleepCal.value,
         sleepEventsFrom: f.sleepEvents.checked ? (s.sleepEvents && s.sleepEventsFrom ? s.sleepEventsFrom : T.addDays(T.dayKey(Date.now(), s.tz), -1)) : s.sleepEventsFrom || null,
         sleepAssume: f.sleepAssume.checked, sleepCategory: f.sleepCategory.value || null, sleepStart: f.sleepStart.value || '23:00', sleepEnd: f.sleepEnd.value || '07:00',
+        sleepDelayMin: Math.max(0, +f.sleepDelayMin.value || 0),
+        autoFills: fills.filter((r) => r.catId && r.from && r.to && r.days.length).map((r) => ({ ...r, name: (r.name || '').trim(), since: r.since || T.dayKey(Date.now(), s.tz) })),
         dailyCapMinutes: Math.max(0, +f.dailyCapMinutes.value || 0), marginDays: Math.max(0, +f.marginDays.value || 0),
         travelMinutes: Math.max(0, +f.travelMinutes.value || 0), repeatHorizonDays: Math.max(7, +f.repeatHorizonDays.value || 28),
         pomodoro: { work: Math.max(5, +f.pomoWork.value || 25), rest: Math.max(1, +f.pomoRest.value || 5) }, learnSpeed: f.learnSpeed.checked,
