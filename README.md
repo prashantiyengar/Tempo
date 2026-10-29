@@ -1,6 +1,20 @@
-# Tempo Calendar — Chrome & Firefox extension
+# Tempo Calendar — Chrome & Firefox Extension + PWA
 
-A full-page calendar that syncs with Google Calendar and auto-schedules long tasks into your free time.
+**Take control of the one resource truly yours — your labor time.**
+
+Tempo helps you *cultivate yourself*: it turns your Google Calendar into a system for smart scheduling, habit tracking, time awareness, and personal growth — so every hour you invest is an hour well spent. Free, full-featured, and coded by Claude AI.
+
+> *Why Tempo? — Five scenes from Greek tragedy:*
+>
+> **I. Sisyphus & the Eternal Reschedule** — He pushes the boulder of tasks uphill — thesis, grant report, 20 hours of reading. Every morning it rolls back.
+>
+> **II. Tantalus & the Vanishing Hours** — He reaches for his free hours — 40 in a week — but can grasp only 12 before they recede.
+>
+> **III. Prometheus Bound, Unread** — Chained to the rock while the eagle scatters his scrolls. Six acquired, zero read.
+>
+> **IV. Penelope & the Unraveled Plan** — She weaves her exercise plan each night. Each Monday she undoes it.
+>
+> **V. Odysseus Reaches Ithaca** — Tempo is the compass. He splits the work, tracks the habits, finds where the hours went — and sails home. *Your labor time, cultivated.*
 
 ## Features
 - **Google Calendar sync**: see, create, edit, drag, resize and delete events across all your calendars. Supports time zones (per event and display), recurring events (daily / weekly on chosen days / monthly by date or "2nd Tuesday" / "last Friday" / yearly, with an end date or count), and edits or deletes scoped to *this event*, *this and following*, or *all events*. Also notifications (popup and email, several per event), guests, Google Meet, location, color, busy/free and visibility.
