@@ -292,6 +292,103 @@ export function setupWizard(ctx) {
 
 
 // ======================================================================================
+// First-time onboarding wizard (shown once when no Google calendar is connected)
+// ======================================================================================
+export function onboardingWizard(ctx) {
+  const builtin = G.builtinAvailable();
+  const slides = [
+    { icon: '🚀', title: 'Welcome to Tempo',
+      body: `<p>Tempo turns Google Calendar into a productivity powerhouse.</p>
+        <ul class="ob-list">
+          <li><b>Auto-scheduler</b> — add a task, set a deadline, and Tempo splits it into sessions across your free time</li>
+          <li><b>Habit tracking</b> — set daily or weekly goals and watch your streaks grow</li>
+          <li><b>Time analysis</b> — see exactly where your time goes, by category</li>
+          <li><b>Game layer</b> — earn XP, level up and unlock achievements for staying on track</li>
+        </ul>
+        <p class="small muted">Coded entirely by Claude. Designed to be free and full-featured, always.</p>` },
+    { icon: '🔗', title: 'Connect Google Calendar',
+      body: builtin
+        ? `<p>One click to sync your events, tasks and settings across devices.</p>
+          <div class="ob-connect-box">
+            <button type="button" class="btn primary ob-go">Connect Google Calendar</button>
+            <div class="ob-result"></div>
+          </div>
+          <p class="small muted">Tempo only talks to Google's servers — no third-party analytics or tracking. Your data stays in your Google account.</p>`
+        : `<p>To sync your events you'll need to set up a free Google Cloud project (takes about 5 minutes, once).</p>
+          <div class="ob-connect-box">
+            <button type="button" class="btn primary ob-setup">Set up Google connection</button>
+            <div class="ob-result"></div>
+          </div>
+          <p class="small muted">Tempo only talks to Google's servers — no third-party analytics or tracking.</p>` },
+    { icon: '⚙️', title: 'Quick tips',
+      body: `<ul class="ob-list">
+          <li><b>Categories</b> — organise events into a tree (Work › Meetings, Life › Fitness) to see where time goes</li>
+          <li><b>Settings</b> — tap the ⚙️ gear icon to set your work hours, week start day, task calendar and more</li>
+          <li><b>Command bar</b> — press <kbd>Ctrl+K</kbd> (or <kbd>⌘K</kbd>) to search anything in the app instantly</li>
+          <li><b>Game</b> — enable the XP game in Settings → Game to gamify your productivity</li>
+        </ul>
+        <p>You can always access Settings from the gear icon in the toolbar.</p>` },
+  ];
+  return modal(`
+    <form class="ob-form">
+      <header class="dlg-head"><h2>${slides[0].title}</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
+      <div class="dlg-body">
+        ${slides.map((s, i) => `<section class="ob-slide" data-ob="${i}" ${i ? 'hidden' : ''}>
+          <div class="ob-icon">${s.icon}</div>
+          ${s.body}
+        </section>`).join('')}
+      </div>
+      <footer class="actions">
+        <button type="button" class="btn ghost ob-back" style="visibility:hidden">Back</button>
+        <span class="grow"></span>
+        <span class="muted small ob-pos">1 / ${slides.length}</span>
+        <button type="button" class="btn primary ob-next">Next</button>
+      </footer>
+    </form>`, (dlg, close) => {
+    let cur = 0, connected = false;
+    const show = (i) => {
+      cur = Math.max(0, Math.min(slides.length - 1, i));
+      $$('[data-ob]', dlg).forEach((x) => (x.hidden = +x.dataset.ob !== cur));
+      const h2 = $('h2', dlg); if (h2) h2.textContent = slides[cur].title;
+      $('.ob-back', dlg).style.visibility = cur ? '' : 'hidden';
+      $('.ob-next', dlg).textContent = cur === slides.length - 1 ? 'Get started' : 'Next';
+      $('.ob-pos', dlg).textContent = `${cur + 1} / ${slides.length}`;
+    };
+    $('.ob-back', dlg).onclick = () => show(cur - 1);
+    $('.ob-next', dlg).onclick = () => { if (cur === slides.length - 1) close({ connected }); else show(cur + 1); };
+    // Extension one-click connect
+    const goBtn = $('.ob-go', dlg);
+    if (goBtn) {
+      goBtn.onclick = async () => {
+        const res = $('.ob-result', dlg);
+        goBtn.disabled = true;
+        goBtn.textContent = 'Connecting…';
+        G.ensureHostPermission();
+        const r = await ctx.connect('builtin');
+        connected = r.ok;
+        goBtn.disabled = false;
+        goBtn.textContent = 'Connect Google Calendar';
+        setHTML(res, r.ok
+          ? `<div class="okbox">✓ Connected${r.email ? ' as <b>' + esc(r.email) + '</b>' : ''}!</div>`
+          : `<div class="warn">✕ ${esc(r.error)}</div>`);
+        if (r.ok) { goBtn.hidden = true; setTimeout(() => show(cur + 1), 1200); }
+      };
+    }
+    // Web: open the full setup wizard
+    const setupBtn = $('.ob-setup', dlg);
+    if (setupBtn) {
+      setupBtn.onclick = async () => {
+        close(); // close onboarding, open setup wizard
+        const r = await ctx._openWizard();
+        connected = r?.connected;
+      };
+    }
+    show(0);
+  }, { cls: 'wide' });
+}
+
+
+// ======================================================================================
 // Multi-page export
 // ======================================================================================
 export function exportDialog(ctx, { cursor, weekStart }) {

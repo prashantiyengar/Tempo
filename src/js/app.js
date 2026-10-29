@@ -61,6 +61,7 @@ export const ctx = {
     st().auth = { ...cur, ...patch }; await storeSet({ auth: st().auth });
   },
   connect: (mode) => connectGoogle(mode),
+  _openWizard: () => openWizard(),
   async saveSettings() { await E.persist(st(), ['settings']); },
   taskCalendars() { return E.connected(st()) ? (st().gmeta.calendars || []).filter((c) => ['owner', 'writer'].includes(c.accessRole)) : []; },
   defaultTaskCal() { return E.defaultTaskCal(st()); },
@@ -890,6 +891,17 @@ async function init() {
   loadTimer();
   await cycle({ pull: true });
   maybeOfferReview();
+  // First-time onboarding: show if not connected and user hasn't dismissed it before
+  if (!E.connected(st())) {
+    let seen = false;
+    try { seen = localStorage.getItem('tempo:onboardDone') === '1'; } catch { /* storage blocked */ }
+    if (!seen) {
+      D.onboardingWizard(ctx).then((r) => {
+        try { localStorage.setItem('tempo:onboardDone', '1'); } catch { /* storage blocked */ }
+        if (r?.connected) { renderBanner(); render(); }
+      });
+    }
+  }
   setTimeout(checkGoalNotice, 3000);
   setInterval(checkGoalNotice, 60000);
   // Calendars list in the sidebar: fold away / unfold (remembered on this device)

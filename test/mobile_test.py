@@ -10,7 +10,8 @@ PORT = 8790
 srv = subprocess.Popen(['python3','-m','http.server',str(PORT),'-d','dist/web'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL); time.sleep(0.8)
 BASE = f'http://localhost:{PORT}/'
 FREEZE = """const FIX = Date.parse('2026-10-19T07:00:00Z'); const _Date = Date; const off = FIX - _Date.now();
-class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+off);} else super(...a);} static now(){ return _Date.now()+off; } } globalThis.Date = D;"""
+class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+off);} else super(...a);} static now(){ return _Date.now()+off; } } globalThis.Date = D;
+localStorage.setItem('tempo:onboardDone', '1');"""
 
 async def touch(cdp, typ, x, y):
     pts = [] if typ == 'touchEnd' else [{'x': x, 'y': y}]

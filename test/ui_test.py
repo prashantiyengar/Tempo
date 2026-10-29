@@ -14,6 +14,7 @@ async def main():
           const FIX = Date.parse('2026-10-19T06:00:00Z'); const _Date = Date; const off = FIX - _Date.now();
           class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+off);} else super(...a);} static now(){ return _Date.now()+off; } }
           globalThis.Date = D;
+          localStorage.setItem('tempo:onboardDone', '1');
         """)
         page = await ctx.new_page()
         errs = []

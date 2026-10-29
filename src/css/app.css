@@ -321,6 +321,17 @@ ul.checks li.ok > b { background: var(--ok); } ul.checks li.bad > b { background
 .wizard-form .row { margin-bottom: 8px; }
 .okbox { background: color-mix(in srgb, var(--ok) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
 
+/* ---------- onboarding wizard ---------- */
+.ob-form .ob-icon { font-size: 40px; text-align: center; margin-bottom: 4px; }
+.ob-form h2 { text-align: center; }
+.ob-list { list-style: none; padding: 0; margin: 0 0 10px; display: flex; flex-direction: column; gap: 8px; }
+.ob-list li { padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--accent) 8%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); font-size: 14px; line-height: 1.45; }
+.ob-list li b { color: var(--accent); }
+.ob-list kbd { background: var(--bg); border: 1px solid var(--line2); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+.ob-connect-box { text-align: center; margin: 16px 0; }
+.ob-connect-box .btn { font-size: 15px; padding: 10px 24px; }
+.ob-connect-box .ob-result { margin-top: 10px; }
+
 .analysis-mode #btn-today, .analysis-mode .navs { visibility: hidden; }
 .analysis { overflow-y: auto; flex: 1; padding: 16px 20px 28px; display: flex; flex-direction: column; gap: 16px; }
 .an-head { display: flex; flex-direction: column; gap: 6px; }
