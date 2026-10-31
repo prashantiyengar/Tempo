@@ -63,18 +63,29 @@ export const autoBlocks = job(async () => {
   if (!jobs.length) return;
   jobs.sort((a, b) => a.st - b.st);
   const items = await collectItems([jobs[0].d, T.addDays(jobs[jobs.length - 1].d, 1)]);
-  const made = {};
+  const made = {}, madeItems = []; // madeItems: events created in this run, so later rules see them
   for (const j of jobs) {
     const key = j.r.key(j.d), mark = (x) => x.ev?.extendedProperties?.private?.[j.r.tag];
-    const inWin = items.filter((it) => !it.allDay && it.end > j.st && it.start < j.en && !it.declined && !I.isWaived(it));
+    const allItems = [...items, ...madeItems];
+    const inWin = allItems.filter((it) => !it.allDay && it.end > j.st && it.start < j.en && !it.declined && !I.isWaived(it));
     if (inWin.some((it) => mark(it) === key)) { done[j.r.doneKey].add(key); continue; } // already there (another device)
     const busy = S.merge(inWin.filter((it) => I.takesTime(it)).map((it) => ({ start: Math.max(it.start, j.st), end: Math.min(it.end, j.en) })));
     if (j.r.skipIfAny && busy.length) { done[j.r.doneKey].add(key); continue; }
     const cal = j.r.cal === 'local' ? E.LOCAL_CAL : ctx.defaultCalendar(), cat = j.r.cat;
-    for (const g of S.subtract([{ start: j.st, end: j.en }], busy).filter((g) => g.end - g.start >= 15 * T.MIN)) {
+    const gaps = S.subtract([{ start: j.st, end: j.en }], busy);
+    for (let gi = 0; gi < gaps.length; gi++) {
+      const g0 = gaps[gi];
+      // When the first gap doesn't start at the window start, an event from before the window
+      // (e.g. sleep ending at 06:30 in a 06:00–08:00 fill-in) bleeds in. Snap the gap start to
+      // the next 15-min boundary so the fill-in doesn't start the instant sleep ends.
+      const bleedIn = gi === 0 && g0.start > j.st && inWin.some((it) => it.start < j.st && it.end > j.st);
+      const snap15 = (ms) => { const q = 15 * T.MIN; const r = ms % q; return r === 0 ? ms + q : Math.ceil(ms / q) * q; };
+      const g = bleedIn ? { start: snap15(g0.start), end: g0.end } : g0;
+      if (g.end - g.start < 15 * T.MIN) continue;
       const priv = { [j.r.tag]: key, ...(cat ? { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color, tempoCatIcon: cat.icon || '' } : {}) };
-      await EV.createEvent(st(), cal, { ...(cat ? { colorId: G.nearestColorId(cat.color) } : {}), summary: j.r.title, start: { dateTime: new Date(g.start).toISOString(), timeZone: z }, end: { dateTime: new Date(g.end).toISOString(), timeZone: z },
+      const createdEv = await EV.createEvent(st(), cal, { ...(cat ? { colorId: G.nearestColorId(cat.color) } : {}), summary: j.r.title, start: { dateTime: new Date(g.start).toISOString(), timeZone: z }, end: { dateTime: new Date(g.end).toISOString(), timeZone: z },
         transparency: 'opaque', reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv } });
+      madeItems.push({ start: g.start, end: g.end, allDay: false, title: j.r.title, ev: createdEv || { extendedProperties: { private: priv } } });
       made[j.r.label] = (made[j.r.label] || 0) + 1;
     }
     done[j.r.doneKey].add(key);

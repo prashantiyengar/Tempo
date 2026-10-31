@@ -248,7 +248,7 @@ export function openItem(it, rect) {
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
-      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${itemActionsHTML(it)}</div>
+      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay ? '<button class="btn small ghost to-later">📋 Move to Later</button>' : ''}${itemActionsHTML(it)}</div>
       ${gameXPLine(it)}
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
@@ -258,6 +258,23 @@ export function openItem(it, rect) {
     const toggle = (done) => async () => { close(); try { await setEventDone(it, done); } catch (err) { handleError(err); } };
     $('.ev-done', p)?.addEventListener('click', toggle(true));
     $('.ev-undone', p)?.addEventListener('click', toggle(false));
+    $('.to-later', p)?.addEventListener('click', async () => {
+      close();
+      const title = it.title || ev.summary || 'Event';
+      const minutes = it.allDay ? 0 : Math.round((it.end - it.start) / T.MIN);
+      const item = { id: S.newId('l'), text: title, created: Date.now(), ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
+      set().later = [...(set().later || []), item];
+      try {
+        let scope = 'this';
+        if (ev.recurringEventId) { scope = await askScope('Delete'); if (!scope) { set().later = (set().later || []).filter((x) => x.id !== item.id); return; } }
+        setStatus('Moving to Later…');
+        await EV.deleteEvent(st(), ev, scope);
+        await E.persist(st(), ['settings', 'localEvents']);
+        undoableEventDelete(ev, scope);
+        await afterEventChange();
+        toast(`"${title}" moved to Later`);
+      } catch (err) { set().later = (set().later || []).filter((x) => x.id !== item.id); handleError(err); }
+    });
     $('.pop-evcat', p).onclick = () => { close(); pickEventCategory(it); };
     $('.edit', p)?.addEventListener('click', () => { close(); editEvent(it); });
     $('.del', p)?.addEventListener('click', async () => {
@@ -327,6 +344,7 @@ function openChunk(it, rect) {
         ${p.pct < 100 || !isDone ? `<button class="btn small fin-task" title="${task.kind === 'reading' ? 'Count this session up to the last page and remove the sessions not done yet' : 'Count all remaining work as done in this session and remove the sessions not done yet'}">🏁 Task finished here</button>` : ''}
         ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
+        ${task.kind !== 'reading' && !task.repeat ? '<button class="btn small ghost extend-time">＋ Extend time…</button>' : ''}
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
         ${itemActionsHTML(it)}
@@ -350,6 +368,31 @@ function openChunk(it, rect) {
       await saveTasks('task finished'); toast(`🏁 ${task.title} finished${left ? ` — ${left} remaining session${left > 1 ? 's' : ''} removed` : ''}`, { ms: 6000 }); cycle();
     });
     $('.edit', pop).onclick = () => { close(); editTask(task); };
+    $('.extend-time', pop)?.addEventListener('click', async () => {
+      close();
+      const cur = st().tasks.find((t) => t.id === task.id); if (!cur) return;
+      const v = await choose(`Extend "${task.title}"`, `Add more time to this task. Current: ${T.fmtDur(S.totalMinutes(cur))}.`, [
+        { value: '30', label: '+ 30 minutes' },
+        { value: '60', label: '+ 1 hour' },
+        { value: '120', label: '+ 2 hours' },
+        { value: 'custom', label: 'Custom…' },
+      ]);
+      if (!v) return;
+      let addMin;
+      if (v === 'custom') {
+        const h = await choose('How many hours to add?', '', [
+          { value: '0.5', label: '30 min' }, { value: '1', label: '1 hour' },
+          { value: '2', label: '2 hours' }, { value: '3', label: '3 hours' },
+          { value: '4', label: '4 hours' }, { value: '5', label: '5 hours' },
+        ]);
+        if (!h) return;
+        addMin = Math.round(+h * 60);
+      } else { addMin = +v; }
+      if (!(addMin > 0)) return;
+      const t2 = st().tasks.find((t) => t.id === task.id); if (!t2) return;
+      replaceTask({ ...t2, totalMinutes: (t2.totalMinutes || 0) + addMin });
+      await saveTasks('extend time'); toast(`Added ${T.fmtDur(addMin)} to "${task.title}" — sessions replanned`); cycle();
+    });
     $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
     $('.tm-start', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'stopwatch'); });
     $('.tm-pomo', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'pomodoro'); });

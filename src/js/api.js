@@ -257,6 +257,19 @@ export function createApi(h) {
       const x = list.find((n) => n.id === a.note) || list.find((n) => n.text.toLowerCase() === String(a.note || '').toLowerCase()) || err(`No note "${a.note}".`);
       h.set().later = list.filter((n) => n !== x); await E.persist(h.st(), ['settings']); h.render?.(); return { removed: x.text };
     } },
+    moveEventToLater: { params: 'event (title or id), from? (date), to? (date)', about: 'Move a calendar event to the Later list and delete it from the calendar.', write: true, run: async (a) => {
+      const { from, to } = range(a);
+      const items = await eventItems(from, to);
+      const it = items.find((x) => x.ev?.id === a.event) || items.find((x) => (x.title || '').toLowerCase().includes(String(a.event || '').toLowerCase())) || err(`No event "${a.event}".`);
+      const title = it.title || it.ev?.summary || 'Event';
+      const minutes = it.allDay ? 0 : Math.round((it.end - it.start) / T.MIN);
+      const item = { id: S.newId('l'), text: title, created: Date.now(), ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
+      h.set().later = [...(h.set().later || []), item];
+      await EV.deleteEvent(h.st(), it.ev, 'this');
+      await E.persist(h.st(), ['settings', 'localEvents']);
+      E.invalidate(); h.render?.(); if (h.afterEventChange) await h.afterEventChange();
+      return { moved: title, laterItem: item.id };
+    } },
     listProfiles: { about: 'Notification profiles (name and reminders) and which ones new events and task sessions use.', run: () => ({ profiles: N.profiles(h.set()).map((p) => ({ name: p.name, reminders: N.describeProfile(p) })), events: N.eventDefault(h.set())?.name, taskSessions: N.taskDefault(h.set())?.name }) },
     listCategories: { about: 'Categories (name, icon, preferred time of day).', run: () => (h.set().categories || []).map((c) => ({ name: c.name, icon: c.icon || '', prefer: c.prefer || null })) },
     addTask: { params: 'title, hours | pages (+ startPage, pagesPerHour) | repeat {every: "week"|"day", hours, until | weeks, days?}, deadline, rank?, category?, notify? (notification profile name, or "none"), notBefore?, marginDays?, after?, project?, period?, sessionMinutes? — or text: "Read Dune 200 pages by Friday, Study"', about: 'Create a task; Tempo splits it into sessions.', write: true, run: async (a) => {
@@ -264,6 +277,14 @@ export function createApi(h) {
       h.st().tasks.push({ ...t, rev: Date.now() });
       await h.saveTasks(`AI: add “${t.title}”`);
       await h.cycle();
+      return taskOut(h.st().tasks.find((x) => x.id === t.id));
+    } },
+    extendTask: { params: 'task, hours (to add)', about: 'Add more time to a task; new sessions are planned.', write: true, run: async (a) => {
+      const t = findTask(a.task);
+      if (t.kind === 'reading' || t.repeat) err('Extend is for one-off generic tasks (not reading or repeating).');
+      const addMin = Math.round((+a.hours || 0) * 60); if (!(addMin > 0)) err('Give positive "hours" to add.');
+      h.replaceTask({ ...t, totalMinutes: (t.totalMinutes || 0) + addMin });
+      await h.saveTasks(`extend "${t.title}"`); await h.cycle();
       return taskOut(h.st().tasks.find((x) => x.id === t.id));
     } },
     updateTask: { params: 'task, then any of: title, rank, deadline, hours, pages, pagesPerHour, category, notBefore, marginDays, after, notes, sessionMinutes, repeat {hours, until}', about: 'Change a task (it is re-planned).', write: true, run: async (a) => {
