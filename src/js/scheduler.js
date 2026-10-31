@@ -373,14 +373,20 @@ export function sortTasks(tasks) {
 }
 
 // Freeze sessions that have started (assumed done) before rescheduling.
-export function freezePast(task, now, settings) {
+export function freezePast(task, now, settings, busy = []) {
   const planned = task.planned || [];
   const past = planned.filter((c) => c.start < now);
   if (!past.length) return task;
-  const keep = planned.filter((c) => c.start >= now);
+  // Sessions that extend into the future and overlap with a busy interval shouldn't be
+  // frozen — they conflict with something the user just scheduled, so they need replanning.
+  const shouldReplan = (c) => c.end > now && busy.some((b) => b.start < c.end && b.end > c.start);
+  const toFreeze = past.filter((c) => !shouldReplan(c));
+  const toReplan = past.filter((c) => shouldReplan(c));
+  const keep = [...planned.filter((c) => c.start >= now), ...toReplan];
+  if (!toFreeze.length) return toReplan.length ? { ...task, planned: keep } : task;
   const frozen = [...(task.frozen || [])];
   const orphanGids = [...(task.orphanGids || [])];
-  for (const c of past) {
+  for (const c of toFreeze) {
     if (settings.assumePastDone) frozen.push({ ...c, status: 'done', auto: true, overdue: undefined });
     else if (c.gid) orphanGids.push(c.gid);
   }
@@ -407,7 +413,7 @@ export function prerequisites(task, tasks, s) {
 // tasks get pushed to later slots automatically. A task waits for its prerequisites, and a prerequisite inherits
 // the urgency (rank) of the tasks waiting for it. A daily total cap is shared by all tasks.
 export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
-  let list = tasks.map((t) => (t.archived ? t : freezePast(t, now, settings)));
+  let list = tasks.map((t) => (t.archived ? t : freezePast(t, now, settings, busy)));
   const fixed = [];
   const tz = settings.tz;
   // Task sessions keep the break before and after them for every other task too.
