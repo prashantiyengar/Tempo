@@ -18,6 +18,7 @@ import { handleError, logHistory, openSyncPanel, setStatus } from './status.js';
 import { askScope } from './interactions.js';
 import { deleteDoneSession, dropTimer, startTimer, timer, tmWork } from './timer.js';
 import { deleteTask, editTask, newTask, pushUndo, undoableEventChange, undoableEventDelete } from './undo.js';
+import { addToGraveyard } from './sidebar.js';
 
 // ======================================================================================
 // Quick create & item popovers
@@ -248,7 +249,7 @@ export function openItem(it, rect) {
       ${ev.attendees?.length ? `<div class="pop-row small">👥 ${ev.attendees.length} guest${ev.attendees.length > 1 ? 's' : ''}: ${esc(ev.attendees.slice(0, 4).map((a) => a.displayName || a.email).join(', '))}${ev.attendees.length > 4 ? '…' : ''}</div>` : ''}
       ${rems ? `<div class="pop-row small">🔔 ${rems.length ? esc(rems.map((r) => `${T.fmtDur(r.minutes)} before${r.method === 'email' ? ' (email)' : ''}`).join(', ')) : 'No notifications'}</div>` : ''}
       ${desc ? `<div class="pop-row desc">${esc(desc.slice(0, 400))}${desc.length > 400 ? '…' : ''}</div>` : ''}
-      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay ? '<button class="btn small ghost to-later">📋 Move to Later</button>' : ''}${itemActionsHTML(it)}</div>
+      <div class="pop-row pop-actions">${it.evDone ? '<button class="btn small ev-undone">↺ Mark undone</button>' : '<button class="btn small ev-done">✓ Mark done</button>'}${it.editable && !it.allDay ? '<button class="btn small ghost to-later">📋 Move to Later</button>' : ''}${it.editable ? '<button class="btn small ghost to-grave">⚰ Graveyard</button>' : ''}${itemActionsHTML(it)}</div>
       ${gameXPLine(it)}
       <div class="pop-row muted small">📅 ${esc(cal?.summary || ev._calId)}${ev.transparency === 'transparent' ? ' · free' : ''}${!it.editable ? ' · read-only' : ''}</div>
     </div>`, (p, close) => {
@@ -274,6 +275,23 @@ export function openItem(it, rect) {
         await afterEventChange();
         toast(`"${title}" moved to Later`);
       } catch (err) { set().later = (set().later || []).filter((x) => x.id !== item.id); handleError(err); }
+    });
+    $('.to-grave', p)?.addEventListener('click', async () => {
+      close();
+      const title = it.title || ev.summary || 'Event';
+      const minutes = it.allDay ? 0 : Math.round((it.end - it.start) / T.MIN);
+      const item = { id: S.newId('g'), text: title, kind: 'event', addedAt: Date.now(), created: it.start, ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
+      try {
+        let scope = 'this';
+        if (ev.recurringEventId) { scope = await askScope('Delete'); if (!scope) return; }
+        setStatus('Moving to Graveyard…');
+        await EV.deleteEvent(st(), ev, scope);
+        await addToGraveyard(item);
+        await E.persist(st(), ['localEvents']);
+        undoableEventDelete(ev, scope);
+        await afterEventChange();
+        toast(`"${title}" moved to Graveyard`);
+      } catch (err) { handleError(err); }
     });
     $('.pop-evcat', p).onclick = () => { close(); pickEventCategory(it); };
     $('.edit', p)?.addEventListener('click', () => { close(); editEvent(it); });
@@ -345,6 +363,7 @@ function openChunk(it, rect) {
         ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         ${task.kind !== 'reading' && !task.repeat ? '<button class="btn small ghost extend-time">＋ Extend time…</button>' : ''}
+        <button class="btn small ghost to-grave-task">⚰ Graveyard</button>
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
         ${itemActionsHTML(it)}
@@ -392,6 +411,24 @@ function openChunk(it, rect) {
       const t2 = st().tasks.find((t) => t.id === task.id); if (!t2) return;
       replaceTask({ ...t2, totalMinutes: (t2.totalMinutes || 0) + addMin });
       await saveTasks('extend time'); toast(`Added ${T.fmtDur(addMin)} to "${task.title}" — sessions replanned`); cycle();
+    });
+    $('.to-grave-task', pop)?.addEventListener('click', async () => {
+      close();
+      const cur = st().tasks.find((t) => t.id === task.id); if (!cur) return;
+      const v = await choose(`Move "${task.title}" to Graveyard?`, 'The task and all its sessions will be removed. You can reschedule it from the Graveyard tab later.', [
+        { value: 'yes', label: 'Yes, move to Graveyard' },
+      ]);
+      if (v !== 'yes') return;
+      const item = { id: S.newId('g'), text: task.title, kind: 'task', addedAt: Date.now(), created: task.created || Date.now(), ...(S.totalMinutes(cur) > 0 ? { minutes: S.totalMinutes(cur) } : {}), ...(task.categoryId ? { catId: task.categoryId } : {}) };
+      await addToGraveyard(item);
+      // delete the task (same as undo.js deleteTask but without toast — we have our own)
+      st().orphanGids.push(...[...(cur.planned || []), ...(cur.frozen || [])].map((c) => c.gid).filter(Boolean), ...(cur.orphanGids || []));
+      st().tasks = st().tasks.filter((x) => x.id !== task.id);
+      st().tombstones = [...(st().tombstones || []), task.id].slice(-300);
+      delete st().acks[task.id];
+      await saveTasks(`graveyard "${task.title}"`);
+      toast(`"${task.title}" moved to Graveyard`);
+      cycle();
     });
     $('.partial', pop).onclick = () => { close(); partialSession(task, sess); };
     $('.tm-start', pop)?.addEventListener('click', () => { close(); startTimer(task, sess, 'stopwatch'); });

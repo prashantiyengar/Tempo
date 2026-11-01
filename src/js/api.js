@@ -270,6 +270,52 @@ export function createApi(h) {
       E.invalidate(); h.render?.(); if (h.afterEventChange) await h.afterEventChange();
       return { moved: title, laterItem: item.id };
     } },
+    moveTaskToGraveyard: { params: 'task (title or id)', about: 'Move a task to the Graveyard (undone list). The task and all its sessions are removed; it can be rescheduled from the Graveyard later.', write: true, run: async (a) => {
+      const t = findTask(a.task);
+      const item = { id: S.newId('g'), text: t.title, kind: 'task', addedAt: Date.now(), created: t.created || Date.now(), ...(S.totalMinutes(t) > 0 ? { minutes: S.totalMinutes(t) } : {}), ...(t.categoryId ? { catId: t.categoryId } : {}) };
+      h.set().graveyard = [...(h.set().graveyard || []), item];
+      h.st().orphanGids.push(...[...(t.planned || []), ...(t.frozen || [])].map((c) => c.gid).filter(Boolean), ...(t.orphanGids || []));
+      h.st().tasks = h.st().tasks.filter((x) => x.id !== t.id);
+      h.st().tombstones = [...(h.st().tombstones || []), t.id].slice(-300);
+      delete h.st().acks[t.id];
+      await h.saveTasks(`graveyard "${t.title}"`);
+      await E.persist(h.st(), ['settings']); h.render?.(); await h.cycle();
+      return { moved: t.title, graveyardItem: item.id };
+    } },
+    moveEventToGraveyard: { params: 'event (title or id), from? (date), to? (date)', about: 'Move a calendar event to the Graveyard (undone list) and delete it from the calendar.', write: true, run: async (a) => {
+      const { from, to } = range(a);
+      const items = await eventItems(from, to);
+      const it = items.find((x) => x.ev?.id === a.event) || items.find((x) => (x.title || '').toLowerCase().includes(String(a.event || '').toLowerCase())) || err(`No event "${a.event}".`);
+      const title = it.title || it.ev?.summary || 'Event';
+      const minutes = it.allDay ? 0 : Math.round((it.end - it.start) / T.MIN);
+      const item = { id: S.newId('g'), text: title, kind: 'event', addedAt: Date.now(), created: it.start, ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
+      h.set().graveyard = [...(h.set().graveyard || []), item];
+      await EV.deleteEvent(h.st(), it.ev, 'this');
+      await E.persist(h.st(), ['settings', 'localEvents']);
+      E.invalidate(); h.render?.(); if (h.afterEventChange) await h.afterEventChange();
+      return { moved: title, graveyardItem: item.id };
+    } },
+    listGraveyard: { about: 'Items in the Graveyard — undone tasks and events, kept for a month then archived.', run: () => {
+      const list = h.set().graveyard || [], now = Date.now();
+      const active = list.filter((x) => now - x.addedAt < 30 * 864e5);
+      const archived = list.filter((x) => now - x.addedAt >= 30 * 864e5);
+      return { active: active.map((x) => ({ id: x.id, text: x.text, kind: x.kind, added: fmt(x.addedAt), minutes: x.minutes || undefined })), archived: archived.length };
+    } },
+    rescheduleFromGraveyard: { params: 'item (id or text), as ("task" or "event")', about: 'Reschedule an item from the Graveyard as a new task or event.', write: true, run: async (a) => {
+      const list = h.set().graveyard || [];
+      const x = list.find((n) => n.id === a.item) || list.find((n) => n.text.toLowerCase().includes(String(a.item || '').toLowerCase())) || err(`No graveyard item "${a.item}".`);
+      h.set().graveyard = list.filter((n) => n !== x);
+      await E.persist(h.st(), ['settings']);
+      if (a.as === 'event') {
+        const start = Math.ceil((Date.now() + 15 * 6e4) / (15 * 6e4)) * 15 * 6e4;
+        const ev = await EV.createEvent(h.st(), h.ctx?.defaultCalendar(), { summary: x.text, start: { dateTime: new Date(start).toISOString() }, end: { dateTime: new Date(start + (x.minutes || 60) * 6e4).toISOString() } });
+        E.invalidate(); h.render?.(); if (h.afterEventChange) await h.afterEventChange();
+        return { rescheduled: x.text, as: 'event' };
+      }
+      h.st().tasks.push({ id: S.newId('t'), title: x.text, kind: 'generic', totalMinutes: x.minutes || 60, deadline: Date.now() + 7 * 864e5, rank: 5, created: Date.now(), rev: Date.now(), ...(x.catId ? { categoryId: x.catId } : {}) });
+      await h.saveTasks(`reschedule "${x.text}"`); await h.cycle();
+      return { rescheduled: x.text, as: 'task' };
+    } },
     listProfiles: { about: 'Notification profiles (name and reminders) and which ones new events and task sessions use.', run: () => ({ profiles: N.profiles(h.set()).map((p) => ({ name: p.name, reminders: N.describeProfile(p) })), events: N.eventDefault(h.set())?.name, taskSessions: N.taskDefault(h.set())?.name }) },
     listCategories: { about: 'Categories (name, icon, preferred time of day).', run: () => (h.set().categories || []).map((c) => ({ name: c.name, icon: c.icon || '', prefer: c.prefer || null })) },
     addTask: { params: 'title, hours | pages (+ startPage, pagesPerHour) | repeat {every: "week"|"day", hours, until | weeks, days?}, deadline, rank?, category?, notify? (notification profile name, or "none"), notBefore?, marginDays?, after?, project?, period?, sessionMinutes? — or text: "Read Dune 200 pages by Friday, Study"', about: 'Create a task; Tempo splits it into sessions.', write: true, run: async (a) => {

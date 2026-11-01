@@ -370,6 +370,8 @@ export function renderLater() {
   const hl = $('#habit-list'); if (hl) { hl.hidden = tab !== 'habits'; if (tab === 'habits') renderHabits(hl, { days: 4 }); }
   const nl = $('#note-list'); if (nl) { nl.hidden = tab !== 'notes'; if (tab === 'notes') renderNotes(nl); }
   const nn = $('#notes-n'); if (nn) nn.textContent = notesList().length ? String(notesList().length) : '';
+  const gl = $('#grave-list'); if (gl) { gl.hidden = tab !== 'graveyard'; if (tab === 'graveyard') renderGraveyard(); }
+  const gn = $('#grave-n'); if (gn) { const gc = graveyardActive().length; gn.textContent = gc ? String(gc) : ''; }
   $('#btn-resched').hidden = tab !== 'tasks';
   const list = laterList();
   const n = $('#later-n'); if (n) n.textContent = list.length ? String(list.length) : '';
@@ -422,6 +424,74 @@ export function renderLater() {
       if (!v.text) return drop();
       const upd = { text: v.text.slice(0, 300), minutes: v.h > 0 ? Math.round(v.h * 60) : undefined, deadline: v.d ? T.atTime(v.d, set().bounds?.end || '17:00', z) : undefined, catId: v.c || undefined };
       await saveLater(laterList().map((x) => (x.id === item.id ? { ...x, ...upd } : x)), 'edit note');
+    };
+  });
+}
+
+// ---------- "Graveyard of Time": tasks and events that were not done — kept for 30 days, then archived ----------
+const graveyardList = () => set().graveyard || [];
+export const graveyardActive = () => graveyardList().filter((x) => Date.now() - x.addedAt < 30 * T.DAY);
+const graveyardArchived = () => graveyardList().filter((x) => Date.now() - x.addedAt >= 30 * T.DAY);
+export async function addToGraveyard(item) {
+  set().graveyard = [...graveyardList(), item];
+  await E.persist(st(), ['settings']);
+  syncSharedSoon();
+  renderLater();
+}
+async function saveGraveyard(list, label) {
+  const before = graveyardList();
+  set().graveyard = list;
+  await E.persist(st(), ['settings']);
+  syncSharedSoon();
+  if (label) pushUndo(label, async () => { set().graveyard = before; await E.persist(st(), ['settings']); renderLater(); });
+  renderLater();
+}
+function renderGraveyard() {
+  const box = $('#grave-list'); if (!box) return;
+  const z = tz(), now = Date.now();
+  const active = graveyardActive(), archived = graveyardArchived();
+  const ago = (ms) => { const d = Math.floor((now - ms) / T.DAY); return d < 1 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
+  setHTML(box, active.length || archived.length ? `
+    ${active.length ? active.map((x) => `<div class="grave-row" data-id="${esc(x.id)}">
+      <span class="grave-icon">${x.kind === 'task' ? '⧉' : '📅'}</span>
+      <span class="grave-t">${esc(x.text)}${x.minutes ? ` <span class="muted small">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}</span>
+      <span class="muted small">${esc(ago(x.addedAt))}</span>
+      <span class="grave-acts">
+        <button type="button" class="btn small ghost g-task" title="Reschedule as a task">⧉ Task</button>
+        <button type="button" class="btn small ghost g-event" title="Put on the calendar as an event">📅 Event</button>
+        <button type="button" class="icon-btn sm g-del" title="Remove permanently">✕</button>
+      </span>
+    </div>`).join('') : '<p class="muted small empty">Nothing undone recently.</p>'}
+    ${archived.length ? `<details class="tl-arch"><summary class="muted small">Archived — older than 30 days (${archived.length})</summary>
+      ${archived.slice(-30).map((x) => `<div class="grave-row archived" data-id="${esc(x.id)}">
+        <span class="grave-icon">${x.kind === 'task' ? '⧉' : '📅'}</span>
+        <span class="grave-t">${esc(x.text)}${x.minutes ? ` <span class="muted small">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}</span>
+        <span class="muted small">${esc(T.fmtDate(x.addedAt, z))}</span>
+        <span class="grave-acts">
+          <button type="button" class="btn small ghost g-task" title="Reschedule as a task">⧉ Task</button>
+          <button type="button" class="btn small ghost g-event" title="Put on the calendar as an event">📅 Event</button>
+          <button type="button" class="icon-btn sm g-del" title="Remove permanently">✕</button>
+        </span>
+      </div>`).join('')}
+    </details>` : ''}
+  ` : '<p class="muted small empty">Nothing here yet. When you abandon a task or event, it ends up here — you can reschedule it later.</p>');
+  $$('.grave-row', box).forEach((r) => {
+    const item = graveyardList().find((x) => x.id === r.dataset.id); if (!item) return;
+    $('.g-del', r).onclick = () => { saveGraveyard(graveyardList().filter((x) => x.id !== item.id), `remove "${item.text.slice(0, 30)}" from graveyard`); toast('Removed from Graveyard'); };
+    $('.g-task', r).onclick = async () => {
+      closeDrawer();
+      const ids = new Set(st().tasks.map((t) => t.id));
+      const lc = C.catById(set(), item.catId);
+      await newTask({ kind: 'generic', title: item.text, ...(item.minutes ? { totalMinutes: item.minutes } : {}), ...(lc ? { draft: C.applyCategory({}, lc) } : {}) });
+      const nt = st().tasks.find((t) => !ids.has(t.id));
+      if (nt) { saveGraveyard(graveyardList().filter((x) => x.id !== item.id), false); toast(`"${item.text}" is back as a task`); }
+    };
+    $('.g-event', r).onclick = async () => {
+      closeDrawer();
+      const start = Math.ceil((Date.now() + 15 * T.MIN) / (15 * T.MIN)) * 15 * T.MIN;
+      const n0 = createdEvents;
+      await newEvent({ start, end: start + Math.min(8 * 60, item.minutes || set().defaultEventMinutes || 60) * T.MIN, title: item.text, ...(C.catById(set(), item.catId) ? { categoryId: item.catId } : {}) });
+      if (createdEvents > n0) { saveGraveyard(graveyardList().filter((x) => x.id !== item.id), false); toast(`"${item.text}" is back on the calendar`); }
     };
   });
 }

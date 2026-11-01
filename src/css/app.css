@@ -712,7 +712,14 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
   .wx-m { top: 3px; right: 2px; font-size: 9px; flex-direction: column; }
   .wx-m .wx-i { font-size: 11px; }
 }
-.later-list[hidden], .task-list[hidden] { display: none !important; }
+.later-list[hidden], .task-list[hidden], .grave-list[hidden] { display: none !important; }
+.grave-list { display: flex; flex-direction: column; gap: 4px; }
+.grave-row { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 8px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); flex-wrap: wrap; }
+.grave-row.archived { opacity: .6; }
+.grave-icon { flex: none; font-size: 14px; }
+.grave-t { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.grave-acts { display: inline-flex; gap: 2px; flex: none; opacity: .75; }
+.grave-row:hover .grave-acts { opacity: 1; }
 #btn-resched[hidden] { display: none !important; }
 .sl-cat select { padding: 2px 6px; border: 1px solid var(--line2); border-radius: 6px; background: var(--panel); color: var(--ink); }
 /* icon picker grouped by theme */

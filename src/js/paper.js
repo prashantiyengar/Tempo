@@ -289,6 +289,19 @@ export function renderPaper({ r, s, use, now = Date.now(), signId = null, period
         <p class="np-small np-mute">Task time planned per day next week.</p>
         <p class="np-small">${aside()}</p>
       </section>
+      ${(() => {
+        const gy = (s.graveyard || []).filter((x) => x.addedAt >= r.from && x.addedAt < r.weekEnd);
+        if (!gy.length) return '';
+        const tasks = gy.filter((x) => x.kind === 'task'), events = gy.filter((x) => x.kind === 'event');
+        const totalMin = gy.reduce((a, x) => a + (x.minutes || 0), 0);
+        return `<section class="np-grave">
+          <span class="np-kicker">Graveyard</span>
+          <h3 class="np-h3">⚰ ${plural(gy.length, 'item')} laid to rest</h3>
+          <p class="np-small">${tasks.length ? `${plural(tasks.length, 'task')} abandoned` : ''}${tasks.length && events.length ? ', ' : ''}${events.length ? `${plural(events.length, 'event')} dropped` : ''}${totalMin > 0 ? ` — ${dur(totalMin)} of planned time let go` : ''}.</p>
+          <ul class="np-list">${gy.slice(0, 8).map((x) => `<li>${x.kind === 'task' ? '⧉' : '📅'} ${esc(x.text)}${x.minutes ? ` <span class="np-mute">(${dur(x.minutes)})</span>` : ''}</li>`).join('')}${gy.length > 8 ? `<li class="np-mute">…and ${gy.length - 8} more</li>` : ''}</ul>
+          <p class="np-small np-mute">These can be rescheduled from the ⚰ Graveyard tab in the sidebar.</p>
+        </section>`;
+      })()}
       <section class="np-corr">
         <span class="np-kicker">${esc(K('corr'))}</span>
         ${r.slips.length ? `<p class="np-small">${esc(say(PH.CORR_INTRO, { period: P.this === 'this week' ? 'the week' : P.this.replace('this ', 'the ').replace('these', 'the'), items: r.slips.length === 1 ? 'item' : 'items' }))} ${r.slips.slice(-6).map((x) => `“${esc(x.title || 'a session')}” ${kindTxt[x.kind]}${x.by ? ` by ${dur(x.by)}` : ''}`).join('; ')}. ${esc(say(PH.CORR_OUTRO))}</p>` : `<p class="np-small">${esc(say(PH.CORR_NONE))}</p>`}
@@ -312,7 +325,7 @@ export function pictureHTML(pic) {
 // ---- Layout: the sections below the fold (goals, projects, habits, game, quote, outlook, corrections) are
 // arranged by their heights — two sections of similar height side by side (wider for the longer one), and a long
 // section across the whole page in two or three columns of its own, so the page looks even.
-export const FLOW = ['np-goals', 'np-proj', 'np-habits', 'np-game', 'np-words', 'np-out', 'np-corr'];
+export const FLOW = ['np-goals', 'np-proj', 'np-habits', 'np-game', 'np-words', 'np-out', 'np-grave', 'np-corr'];
 export function layoutPaper(root) {
   const grid = root?.querySelector?.('.np-grid'); if (!grid) return;
   const secs = FLOW.map((c) => grid.querySelector(`:scope > section.${c}`)).filter(Boolean);
