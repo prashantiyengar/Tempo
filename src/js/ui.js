@@ -259,11 +259,51 @@ export function linkRange(a, b, { minGap = 0 } = {}) {
       else if (prev != null) nv = bv + (cur - prev);
       else nv = bv; // "from" was empty before: keep "to" unless it's now too early
       if (kind !== 'time' && nv < cur + gap) nv = cur + gap;
-      const out = fmt(nv);
-      if (out !== b.value) { b.value = out; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new Event('change', { bubbles: true })); }
+      const out = fmt(nv), before = b.value;
+      if (out !== b.value) {
+        b.value = out; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new Event('change', { bubbles: true }));
+        offerRevert(b, before, { get: () => b.value, set: (v) => { b.value = v; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new Event('change', { bubbles: true })); }, label: valueLabel,
+          valid: (v) => num(v) != null && num(a.value) != null && num(v) >= num(a.value) + (kind === 'time' ? 60000 : gap) });
+      }
     }
     prev = cur;
   });
+}
+// How an input's value reads on a revert button: 17:00 · Fri 6 Nov · Fri 6 Nov 17:00
+function valueLabel(v) {
+  if (!v) return '—';
+  if (/^\d\d:\d\d/.test(v)) return v.slice(0, 5);
+  const d = new Date(v.length <= 10 ? `${v}T00:00` : v);
+  if (Number.isNaN(+d)) return v;
+  const day = d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  return v.length <= 10 ? day : `${day} ${v.slice(11, 16)}`;
+}
+
+// After changing "From" moved "To" along with it: a tiny ↶ next to To that puts back the To you had before
+// (the original one, however often From moved since). It goes away once To is changed by hand or put back.
+//   anchor: the To input (state lives on it); after: element to put the button after (default: anchor)
+//   get/set: read and write To; label: how a value reads; watch: inputs whose manual edits drop the offer
+//   valid(v): whether the old To still makes sense (after the new From); the button only shows while it does
+export function offerRevert(anchor, oldValue, { get, set, label = (v) => String(v), after = anchor, watch = [anchor], valid = () => true } = {}) {
+  if (!anchor) return;
+  let r = anchor._revert;
+  if (!r) {
+    r = anchor._revert = { orig: null, btn: null };
+    r.clear = () => { r.btn?.remove(); r.btn = null; r.orig = null; };
+    for (const w of watch) w?.addEventListener('input', (e) => { if (e.isTrusted) r.clear(); });
+  }
+  if (r.orig == null) r.orig = oldValue;
+  if (r.orig == null || String(get()) === String(r.orig)) { r.clear(); return; }
+  if (!valid(r.orig)) { r.btn?.remove(); r.btn = null; return; } // keep the original: From may move back
+  if (!r.btn || !r.btn.isConnected) {
+    r.btn = document.createElement('button');
+    r.btn.type = 'button'; r.btn.className = 'revert-btn';
+    r.btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); const v = r.orig; r.clear(); set(v); });
+    after.insertAdjacentElement('afterend', r.btn);
+  }
+  r.btn.textContent = `↶ ${label(r.orig)}`;
+  r.btn.title = `Put the end back to ${label(r.orig)}`;
+  r.btn.setAttribute('aria-label', r.btn.title);
 }
 
 // ---------- −/+ time buttons: a small − and + next to a time; tapping one shows the steps (5, 10, 15, 30 min, 1 h —

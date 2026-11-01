@@ -5,6 +5,7 @@ import * as E from '../src/js/engine.js';
 import * as GM from '../src/js/game.js';
 import * as GL from '../src/js/goals.js';
 import * as RV from '../src/js/review.js';
+import * as S from '../src/js/scheduler.js';
 
 let fails = 0;
 const eq = (label, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) fails++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`); };
@@ -52,6 +53,11 @@ eq('penalties: once per task / event per day', GL && GM.penaltiesOn(hist, at('00
 const D = (d, h) => Date.parse(`2024-10-${d}T${h}:00:00Z`);
 const mv = [{ kind: 'resched', taskId: 't', at: D('01', '09') }, { kind: 'moved', taskId: 't', at: D('01', '15') }, { kind: 'movedQuiet', taskId: 't', at: D('03', '10') }, { kind: 'done', taskId: 't', at: D('04', '10') }, { kind: 'resched', evId: 'e', at: D('02', '10') }, { kind: 'resched', title: 'Call Bob', at: D('02', '11') }];
 eq('graveyard: reschedules counted once a day', [RV.rescheduleCount({ taskId: 't', text: 'x' }, mv, 'UTC'), RV.rescheduleCount({ evId: 'e', text: 'y' }, mv, 'UTC'), RV.rescheduleCount({ text: 'Call Bob' }, mv, 'UTC'), RV.rescheduleCount({ taskId: 'zz', text: 'none' }, mv, 'UTC')], [2, 1, 1, 0]);
+
+eq('months keep their day (31st → last day of shorter months)', [T.addMonthsKeep('2026-12-31', 1), T.addMonthsKeep('2026-12-31', 2), T.addMonthsKeep('2027-01-15', 1)], ['2027-01-31', '2027-02-28', '2027-02-15']);
+{ const wed = T.dayStart('2026-11-04', 'Europe/Berlin'), task = { repeat: { every: 'week', interval: 3, minutes: 60, on: 'day', count: 5 }, repeatStart: wed };
+  eq('anchored repeats: default 3 months = 5 times every 3 weeks; occurrences from the start day', [S.defaultRepeatCount(wed, 'week', 3, 'Europe/Berlin', true), S.periodsOf(task, { tz: 'Europe/Berlin', weekStart: 1 }, wed - 1, wed + 400 * T.DAY).map((p) => p.key)],
+    [5, ['2026-11-04', '2026-11-25', '2026-12-16', '2027-01-06', '2027-01-27']]); }
 
 console.log(fails ? `${fails} FAILED` : 'ALL PASS');
 process.exitCode = fails ? 1 : 0;

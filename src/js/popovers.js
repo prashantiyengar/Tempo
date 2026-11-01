@@ -7,7 +7,7 @@ import * as G from './gcal.js';
 import * as D from './dialogs.js';
 import { describe } from './rrule.js';
 import * as C from './categories.js';
-import { $, $$, esc, choose, popover, modal, setHTML } from './ui.js';
+import { $, $$, esc, choose, popover, modal, setHTML, offerRevert } from './ui.js';
 import * as UI from './ui.js';
 import * as N from './notify.js';
 import { app, set, st, tz } from './core.js';
@@ -106,7 +106,7 @@ export function quickCreate(rect, sel, onClose) {
       f.title.focus();
     };
     $$('.dur-add', p).forEach((b) => (b.onclick = () => { sel.end = Math.max(sel.start + 5 * T.MIN, sel.end + +b.dataset.add * T.MIN); redraw(); }));
-    $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start; sel.start = nowMin(); sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); });
+    $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start, before = sel.end; sel.start = nowMin(); sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); offerEnd(before); });
     $('.en-now', p)?.addEventListener('click', () => { sel.end = Math.max(sel.start + 5 * T.MIN, nowMin()); redraw(); });
     // From: move the whole slot (the length stays)
     // From −/+ moves only the start (the end stays, and is pushed on only if the start would pass it)
@@ -120,7 +120,9 @@ export function quickCreate(rect, sel, onClose) {
       sel.start = st0; sel.end = en; redraw();
     };
     // changing From moves To with it (the length stays)
-    const fromStart = () => { const len = sel.end - sel.start; const day = T.dayKey(sel.start, z); sel.start = T.atTime(day, f.qs.value || hhmm(sel.start), z); sel.end = sel.start + Math.max(5 * T.MIN, len); redraw(); };
+    // ↶ next to To puts back the end you had before From moved it
+    const offerEnd = (before) => f.qe && offerRevert(f.qe, before, { valid: (v) => v > sel.start, get: () => sel.end, set: (v) => { sel.end = Math.max(sel.start + 5 * T.MIN, v); redraw(); }, label: (ms) => T.fmtTime(ms, z, s.h12) });
+    const fromStart = () => { const len = sel.end - sel.start, before = sel.end; const day = T.dayKey(sel.start, z); sel.start = T.atTime(day, f.qs.value || hhmm(sel.start), z); sel.end = sel.start + Math.max(5 * T.MIN, len); redraw(); offerEnd(before); };
     if (f.qs) { f.qs.addEventListener('change', fromStart); f.qe.addEventListener('change', fromInputs); f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
     $('.since-last', p)?.addEventListener('click', async () => {
       const ref = sel.start, nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;

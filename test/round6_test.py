@@ -107,7 +107,7 @@ async def main():
         # 2. Repeating task (task dialog): Exercise 3h per week for 4 weeks, evenings via After hours
         await clear_toast(A)
         await A.click('#btn-new-task'); await A.wait_for_selector('dialog .task-form')
-        await A.fill('dialog [name=title]', 'Exercise'); await A.select_option('dialog [name=repEvery]', 'week'); await A.fill('dialog [name=repHours]', '3'); await A.fill('dialog [name=repCount]', '4')
+        await A.fill('dialog [name=title]', 'Exercise'); await A.check('dialog [name=repOn]'); await A.select_option('dialog [name=repEvery]', 'week'); await A.select_option('dialog [name=repWhere]', 'period'); await A.click('dialog [name=blockmode][value=split] + span'); await A.fill('dialog [name=repHours]', '3'); await A.fill('dialog [name=repCount]', '4')
         await A.check('dialog [name=bmode][value="period:after-hours"]'); await A.wait_for_timeout(300)
         print('2. calc:', await A.text_content('dialog .calc'))
         await A.screenshot(path=f'{OUT}/p2-repeat-dialog.png')
@@ -116,7 +116,7 @@ async def main():
         weeks = {}
         for e in ex: weeks.setdefault(e['summary'].split('·')[1].strip().split(' ')[2:4].__str__(), 0)
         per = {}
-        for e in ex: k = re.search(r'week of (\d+ \w+)', e['summary']).group(1); per[k] = per.get(k, 0) + (loc(e['end']['dateTime']) - loc(e['start']['dateTime'])).seconds // 60
+        for e in ex: k = re.search(r'week (?:of|from \w+) (\d+ \w+)', e['summary']).group(1); per[k] = per.get(k, 0) + (loc(e['end']['dateTime']) - loc(e['start']['dateTime'])).seconds // 60
         print('   Exercise per week (min):', per, '| e.g.', ex[0]['summary'])
 
         # 3. Daily cap across all tasks

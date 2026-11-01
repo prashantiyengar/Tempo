@@ -3,7 +3,7 @@ import * as T from './tz.js';
 import * as G from './gcal.js';
 import { parseRRule, buildRRule, describe, sameRule } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
-import { $, $$, esc, modal, setHTML, choose } from './ui.js';
+import { $, $$, esc, modal, setHTML, choose, offerRevert } from './ui.js';
 import * as C from './categories.js';
 import * as N from './notify.js';
 import { ORD, WDL, askCategoryPick, askTitle, checkCount, limitHint, nudgesHTML, recurrenceExtent, sect, tzDatalist, weekdayToggles, wireSects } from './dialogs.js';
@@ -253,10 +253,16 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     $('.st-now', dlg)?.addEventListener('click', () => {
       const d = endMs() - startMs(), n = Math.floor(Date.now() / T.MIN) * T.MIN;
       const a = T.toDTInput(n, zoneOf()); f.sDate.value = a.slice(0, 10); f.sTime.value = a.slice(11, 16);
-      setEnd(n + Math.max(5 * T.MIN, d)); f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur();
+      const before = endMs(); setEnd(n + Math.max(5 * T.MIN, d)); f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); offerEndRevert(before);
     });
     $('.en-now', dlg)?.addEventListener('click', () => { setEnd(Math.max(startMs() + 5 * T.MIN, Math.floor(Date.now() / T.MIN) * T.MIN)); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); });
     const setEnd = (ms) => { const dt = T.toDTInput(ms, zoneOf()); f.eDate.value = dt.slice(0, 10); f.eTime.value = dt.slice(11, 16); };
+    // From moved To along: a tiny ↶ next to To puts the earlier end back
+    const offerEndRevert = (before) => offerRevert(f.eDate, before, {
+      get: () => endMs(), after: f.allDay.checked ? f.eDate : f.eTime, watch: [f.eDate, f.eTime], valid: (ms) => ms > startMs() || (f.allDay.checked && ms >= startMs()),
+      set: (ms) => { setEnd(ms); showDur(); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); },
+      label: (ms) => (T.dayKey(ms, zoneOf()) === f.sDate.value ? T.fmtTime(ms, zoneOf(), s.h12) : `${T.fmtDate(ms, zoneOf())} ${f.allDay.checked ? '' : T.fmtTime(ms, zoneOf(), s.h12)}`.trim()),
+    });
     $('.since-last', dlg)?.addEventListener('click', async () => {
       // look back from the start shown in the dialog (or from now, if you're creating something happening now)
       const ref = startMs(), nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;
@@ -304,7 +310,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       const user = e.isTrusted || e.detail === 'user';
       if (user && (e.target.name === 'sDate' || e.target.name === 'sTime') && Number.isFinite(snap.s) && Number.isFinite(snap.e)) {
         const ns = startMs();
-        if (Number.isFinite(ns)) { setEnd(ns + Math.max(f.allDay.checked ? 0 : 5 * T.MIN, snap.e - snap.s)); showDur(); }
+        if (Number.isFinite(ns)) { const before = endMs(); setEnd(ns + Math.max(f.allDay.checked ? 0 : 5 * T.MIN, snap.e - snap.s)); showDur(); offerEndRevert(before); }
       } else {
         if (e.target.name === 'sDate' && f.eDate.value < f.sDate.value) f.eDate.value = f.sDate.value;
         if (e.target.name === 'sTime' && f.sDate.value === f.eDate.value && f.eTime.value <= f.sTime.value) {

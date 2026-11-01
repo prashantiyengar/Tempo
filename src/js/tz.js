@@ -78,6 +78,8 @@ export function keyOf(y, m, d) {
 export function parseKey(k) { const [y, m, d] = k.split('-').map(Number); return { y, m, d }; }
 export function addDays(k, n) { const { y, m, d } = parseKey(k); return keyOf(y, m, d + n); }
 export function addMonths(k, n) { const { y, m } = parseKey(k); return keyOf(y, m + n, 1); }
+// Same day of the month n months later (the 31st becomes the month's last day when it is shorter)
+export function addMonthsKeep(k, n) { const { y, m, d } = parseKey(k); const f = parseKey(keyOf(y, m + n, 1)); return keyOf(f.y, f.m, Math.min(d, daysInMonth(f.y, f.m))); }
 export function weekday(k) { const { y, m, d } = parseKey(k); return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); }
 export function daysInMonth(y, m) { return new Date(Date.UTC(y, m, 0)).getUTCDate(); }
 export function daysBetween(a, b) {
