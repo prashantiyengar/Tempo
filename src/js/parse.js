@@ -72,9 +72,11 @@ export function parseTask(text, s, tasks = [], now = Date.now()) {
   take(/\s(\d+(?:\.\d+)?)\s*days?\s+early\b/i, (m) => (d.marginDays = +m[1]));
   // repeat
   take(/\s(?:on\s+)?weekdays\b/i, () => { d.repeatEvery = 'day'; d.repeatDays = [1, 2, 3, 4, 5]; });
+  take(/\s(?:per|a|each|every)\s+(\d+)\s+(weeks?|days?|months?)\b/i, (m) => { d.repeatInterval = +m[1]; d.repeatEvery = /^w/i.test(m[2]) ? 'week' : /^m/i.test(m[2]) ? 'month' : 'day'; });
+  take(/\s(?:per|a|each|every)\s+month\b|\smonthly\b/i, () => (d.repeatEvery = 'month'));
   take(/\s(?:per|a|each|every)\s+week\b|\sweekly\b/i, () => (d.repeatEvery = 'week'));
   take(/\s(?:per|a|each|every)\s+day\b|\sdaily\b/i, () => (d.repeatEvery ||= 'day'));
-  take(/\sfor\s+(\d+)\s+(weeks?|days?)\b/i, (m) => { d.repeatCount = +m[1]; d.repeatCountUnit = /^w/i.test(m[2]) ? 'week' : 'day'; });
+  take(/\sfor\s+(\d+)\s+(weeks?|days?|months?)\b/i, (m) => { d.repeatCount = +m[1]; d.repeatCountUnit = /^w/i.test(m[2]) ? 'week' : /^m/i.test(m[2]) ? 'month' : 'day'; });
   take(new RegExp(String.raw`\s(?:until|till|through)\s+(${DATE})`, 'i'), (m) => { const k = resolveDate(m[1], s, now); if (k) d.repeatUntil = T.atTime(k, '23:59', s.tz); });
   // reading
   take(/\s(\d+)\s*(?:pages|pp|p)\b/i, (m) => (d.pages = +m[1]));
@@ -104,12 +106,15 @@ export function parseTask(text, s, tasks = [], now = Date.now()) {
   }
   if (d.repeatEvery && !reading) {
     const every = d.repeatEvery;
-    draft.repeat = { every, minutes: d.minutes || (every === 'week' ? 180 : 30) };
-    if (d.repeatDays) draft.repeat.days = d.repeatDays;
+    const interval = d.repeatInterval || 1;
+    draft.repeat = { every, minutes: d.minutes || (every === 'week' ? 180 : every === 'month' ? 600 : 30) };
+    if (interval > 1) draft.repeat.interval = interval;
+    if (d.repeatDays && every === 'day' && interval === 1) draft.repeat.days = d.repeatDays;
     if (d.repeatUntil) draft.repeat.until = d.repeatUntil;
-    else draft.repeat.count = d.repeatCount ? (d.repeatCountUnit === every ? d.repeatCount : every === 'week' ? Math.ceil(d.repeatCount / 7) : d.repeatCount * 7) : (every === 'week' ? 12 : 28);
+    else draft.repeat.count = d.repeatCount ? (d.repeatCountUnit === every ? d.repeatCount : every === 'week' ? Math.ceil(d.repeatCount / 7) : every === 'month' ? d.repeatCount : d.repeatCount * 7) : (every === 'week' ? 12 : every === 'month' ? 3 : 28);
     draft.repeatStart = d.earliestStart || now;
-    chips.push(`↻ ${T.fmtDur(draft.repeat.minutes)} ${every === 'week' ? 'per week' : d.repeatDays ? 'on weekdays' : 'daily'}${draft.repeat.until ? ` until ${T.format(draft.repeat.until, s.tz, { day: 'numeric', month: 'short' })}` : ` for ${draft.repeat.count} ${every}s`}`);
+    const unitL = interval > 1 ? `every ${interval} ${every}s` : every === 'week' ? 'per week' : every === 'month' ? 'per month' : d.repeatDays ? 'on weekdays' : 'daily';
+    chips.push(`↻ ${T.fmtDur(draft.repeat.minutes)} ${unitL}${draft.repeat.until ? ` until ${T.format(draft.repeat.until, s.tz, { day: 'numeric', month: 'short' })}` : ` for ${draft.repeat.count} periods`}`);
   } else if (!reading) {
     draft.totalMinutes = d.minutes || 60;
     chips.push(`⏱ ${T.fmtDur(draft.totalMinutes)}${d.minutes ? '' : ' (default)'}`);

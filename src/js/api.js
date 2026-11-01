@@ -91,7 +91,7 @@ export function createApi(h) {
       id: t.id, title: t.title, kind: t.repeat ? 'repeating' : t.kind, rank: t.rank,
       category: C.catById(h.set(), t.categoryId)?.name || null, deadline: t.repeat ? null : fmt(t.deadline),
       hours: t.kind === 'reading' || t.repeat ? null : +(S.totalMinutes(t) / 60).toFixed(2), reading: t.kind === 'reading' ? { ...t.reading } : undefined,
-      repeat: t.repeat ? { every: t.repeat.every, hours: +(t.repeat.minutes / 60).toFixed(2), until: fmt(S.repeatEnd(t, h.set()) - 1) } : undefined,
+      repeat: t.repeat ? { every: t.repeat.every, interval: t.repeat.interval || 1, hours: +(t.repeat.minutes / 60).toFixed(2), until: fmt(S.repeatEnd(t, h.set()) - 1) } : undefined,
       progress: `${Math.round(p.done)} of ${p.total} min (${p.pct}%)`, sessions: ss.length, next: fmt(ss.find((c) => c.kind !== 'done' && c.end > Date.now())?.start),
       warning: t.lastPlan?.shortfall > 0 ? `not enough time before the deadline (${Math.round(t.lastPlan.shortfall)} min short)` : t.lastPlan?.late > 0 ? 'runs into its safety margin' : null,
       project: t.projectName || null, after: (t.after || []).map((id) => h.st().tasks.find((x) => x.id === id)?.title).filter(Boolean),
@@ -142,11 +142,13 @@ export function createApi(h) {
       } else draft.kind = 'generic';
       if (a.hours != null || a.minutes != null) draft.totalMinutes = Math.round((+a.hours || 0) * 60 + (+a.minutes || 0));
       if (a.repeat) {
-        const every = a.repeat.every === 'day' || a.repeat.every === 'daily' ? 'day' : 'week';
-        draft.repeat = { every, minutes: Math.round((+a.repeat.hours || 0) * 60 + (+a.repeat.minutes || 0)) || (every === 'week' ? 180 : 30) };
-        if (a.repeat.days) draft.repeat.days = a.repeat.days.map((d) => (typeof d === 'number' ? d : ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(String(d).slice(0, 3).toLowerCase())));
+        const every = a.repeat.every === 'day' || a.repeat.every === 'daily' ? 'day' : a.repeat.every === 'month' || a.repeat.every === 'monthly' ? 'month' : 'week';
+        draft.repeat = { every, minutes: Math.round((+a.repeat.hours || 0) * 60 + (+a.repeat.minutes || 0)) || (every === 'week' ? 180 : every === 'month' ? 600 : 30) };
+        const interval = +(a.repeat.interval || 1);
+        if (interval > 1) draft.repeat.interval = interval;
+        if (a.repeat.days && every === 'day' && interval === 1) draft.repeat.days = a.repeat.days.map((d) => (typeof d === 'number' ? d : ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].indexOf(String(d).slice(0, 3).toLowerCase())));
         if (a.repeat.until) draft.repeat.until = when(a.repeat.until, { defaultTime: '23:59' });
-        else draft.repeat.count = +(a.repeat.count || a.repeat.weeks || a.repeat.days_count || 12);
+        else draft.repeat.count = +(a.repeat.count || a.repeat.weeks || a.repeat.days_count || S.defaultRepeatCount(when(a.start) || Date.now(), every, interval, tz()));
         draft.repeatStart = when(a.start) || Date.now();
       }
     }
@@ -182,7 +184,7 @@ export function createApi(h) {
     if (a.pagesPerHour != null && t.kind === 'reading') n = S.withReadingSpeed(n, { ...n.reading, speed: +a.pagesPerHour, unit: 'pph' });
     if (a.category !== undefined) n = C.applyCategory(n, a.category ? catByName(a.category) : null);
     if (a.after !== undefined) n.after = [].concat(a.after || []).map((x) => findTask(x).id);
-    if (a.repeat && t.repeat) { n.repeat = { ...t.repeat, ...(a.repeat.hours != null ? { minutes: Math.round(+a.repeat.hours * 60) } : {}), ...(a.repeat.until ? { until: when(a.repeat.until, { defaultTime: '23:59' }), count: undefined } : {}) }; n.deadline = S.repeatEnd(n, h.set()); }
+    if (a.repeat && t.repeat) { n.repeat = { ...t.repeat, ...(a.repeat.hours != null ? { minutes: Math.round(+a.repeat.hours * 60) } : {}), ...(a.repeat.interval != null ? { interval: Math.max(1, +a.repeat.interval) } : {}), ...(a.repeat.until ? { until: when(a.repeat.until, { defaultTime: '23:59' }), count: undefined } : {}), ...(a.repeat.count != null ? { count: +a.repeat.count, until: undefined } : {}) }; if (n.repeat.interval === 1) delete n.repeat.interval; n.deadline = S.repeatEnd(n, h.set()); }
     return n;
   }
   function eventBody(a, base = {}) {
@@ -331,6 +333,15 @@ export function createApi(h) {
       const addMin = Math.round((+a.hours || 0) * 60); if (!(addMin > 0)) err('Give positive "hours" to add.');
       h.replaceTask({ ...t, totalMinutes: (t.totalMinutes || 0) + addMin });
       await h.saveTasks(`extend "${t.title}"`); await h.cycle();
+      return taskOut(h.st().tasks.find((x) => x.id === t.id));
+    } },
+    extendRecurrences: { params: 'task, count (number of extra periods)', about: 'Add more recurrence periods to a repeating task.', write: true, run: async (a) => {
+      const t = findTask(a.task);
+      if (!t.repeat) err('Task does not repeat.');
+      const extra = Math.max(1, Math.round(+a.count || 5));
+      const extended = S.extendRecurrences(t, extra);
+      h.replaceTask({ ...extended, deadline: S.repeatEnd(extended, h.set()) });
+      await h.saveTasks(`extend recurrences "${t.title}"`); await h.cycle();
       return taskOut(h.st().tasks.find((x) => x.id === t.id));
     } },
     updateTask: { params: 'task, then any of: title, rank, deadline, hours, pages, pagesPerHour, category, notBefore, marginDays, after, notes, sessionMinutes, repeat {hours, until}', about: 'Change a task (it is re-planned).', write: true, run: async (a) => {

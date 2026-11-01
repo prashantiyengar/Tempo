@@ -336,33 +336,86 @@ function addDays(m, chunks, tz) {
   return o;
 }
 
-// ---------- Repeating tasks ("3 hours per week", "30 minutes daily") ----------
-// task.repeat = { every: 'day'|'week', minutes, days?: [weekdays] (daily only), until?: ms, count?: n }
-// Each period (day or week) is planned like a small task due at the period's end; missed time doesn't carry over.
+// ---------- Repeating tasks ("3 hours per week", "30 minutes daily", "2 hours every 3 weeks") ----------
+// task.repeat = { every: 'day'|'week'|'month', interval?: n (default 1), minutes, days?: [weekdays] (daily only), until?: ms, count?: n }
+// Each period is planned like a small task due at the period's end; missed time doesn't carry over.
+
+// Advance a day-key by N periods (months use calendar months via addMonths).
+function advancePeriod(k, every, n) {
+  return every === 'month' ? T.addMonths(k, n) : T.addDays(k, n * (every === 'week' ? 7 : 1));
+}
+// Length of one period in days (for months, from a specific key).
+function periodDays(every, interval, fromKey) {
+  if (every === 'month') return T.daysBetween(fromKey, T.addMonths(fromKey, interval));
+  return interval * (every === 'week' ? 7 : 1);
+}
+
 export function periodStart(ms, every, tz, weekStart = 1) {
   const k = T.dayKey(ms, tz);
-  return every === 'week' ? T.startOfWeek(k, weekStart) : k;
+  return every === 'week' ? T.startOfWeek(k, weekStart) : every === 'month' ? T.addMonths(k, 0) /* first of this month */ : k;
 }
 export function repeatEnd(task, s) {
   const r = task.repeat;
   if (!r) return null;
+  const interval = r.interval || 1;
   const first = periodStart(task.repeatStart || task.created || Date.now(), r.every, s.tz, s.weekStart);
   let end = r.until ? T.dayStart(T.addDays(T.dayKey(r.until, s.tz), 1), s.tz) : Infinity;
-  if (r.count) end = Math.min(end, T.dayStart(T.addDays(first, r.count * (r.every === 'week' ? 7 : 1)), s.tz));
+  if (r.count) {
+    const endKey = advancePeriod(first, r.every, r.count * interval);
+    end = Math.min(end, T.dayStart(endKey, s.tz));
+  }
   return end;
+}
+// Default end: 3 months or 10 occurrences, whichever is shorter.
+export function defaultRepeatEnd(repeatStart, every, interval, tz) {
+  const first = periodStart(repeatStart || Date.now(), every, tz);
+  const intv = interval || 1;
+  const threeMonths = T.dayStart(T.addMonths(first, 3), tz);
+  const tenSessions = T.dayStart(advancePeriod(first, every, 10 * intv), tz);
+  return Math.min(threeMonths, tenSessions);
+}
+// Convert a default-end ms to a count of periods.
+export function defaultRepeatCount(repeatStart, every, interval, tz) {
+  const first = periodStart(repeatStart || Date.now(), every, tz);
+  const intv = interval || 1;
+  const endMs = defaultRepeatEnd(repeatStart, every, interval, tz);
+  // Walk periods to count
+  let k = first, n = 0;
+  for (let i = 0; i < 800; i++) {
+    const nk = advancePeriod(k, every, intv);
+    if (T.dayStart(nk, tz) > endMs) break;
+    k = nk; n++;
+  }
+  return Math.max(1, n);
 }
 export function periodsOf(task, s, from, to) {
   const r = task.repeat;
-  const tz = s.tz, step = r.every === 'week' ? 7 : 1;
+  const tz = s.tz;
+  const interval = r.interval || 1;
   const firstKey = periodStart(task.repeatStart || task.created || from, r.every, tz, s.weekStart);
   const end = Math.min(repeatEnd(task, s), to);
   const out = [];
-  let k = periodStart(Math.max(from, T.dayStart(firstKey, tz)), r.every, tz, s.weekStart);
-  for (let i = 0; i < 800; i++, k = T.addDays(k, step)) {
+  // Find the first period start >= from
+  let k = firstKey;
+  const fromMs = from;
+  for (let i = 0; i < 800; i++) {
+    const next = advancePeriod(k, r.every, interval);
+    if (T.dayStart(next, tz) > fromMs) break;
+    k = next;
+  }
+  // k is now the last period start <= from; walk forward
+  for (let i = 0; i < 800; i++) {
     const a = T.dayStart(k, tz);
     if (a >= end) break;
-    if (step === 1 && r.days?.length && !r.days.includes(T.weekday(k))) continue;
-    out.push({ key: k, start: a, end: Math.min(T.dayStart(T.addDays(k, step), tz), repeatEnd(task, s)) });
+    const periodEnd = T.dayStart(advancePeriod(k, r.every, interval), tz);
+    if (periodEnd > from) {
+      if (r.every === 'day' && interval === 1 && r.days?.length && !r.days.includes(T.weekday(k))) {
+        // skip filtered weekdays (only for daily interval=1)
+      } else {
+        out.push({ key: k, start: a, end: Math.min(periodEnd, repeatEnd(task, s)) });
+      }
+    }
+    k = advancePeriod(k, r.every, interval);
   }
   return out;
 }
@@ -513,10 +566,13 @@ export function movesBetween(before, after, now = Date.now()) {
 // All sessions of a task, ordered, with labels like "Pride and Prejudice page 47-66, task 1/10".
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WDS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-export function periodLabel(key, every) {
+export function periodLabel(key, every, interval) {
   if (!key) return '';
   const { m, d } = T.parseKey(key);
-  return every === 'week' ? `week of ${d} ${MON[m - 1]}` : `${WDS[T.weekday(key)]} ${d} ${MON[m - 1]}`;
+  const intv = interval || 1;
+  if (every === 'month') return intv > 1 ? `${intv}-month period from ${MON[m - 1]}` : `${MON[m - 1]}`;
+  if (every === 'week') return intv > 1 ? `${intv}-week period from ${d} ${MON[m - 1]}` : `week of ${d} ${MON[m - 1]}`;
+  return intv > 1 ? `${intv}-day period from ${WDS[T.weekday(key)]} ${d} ${MON[m - 1]}` : `${WDS[T.weekday(key)]} ${d} ${MON[m - 1]}`;
 }
 
 export function sessions(task) {
@@ -578,7 +634,7 @@ function repeatSessions(task) {
     if (!takesTime(c)) continue;
     const k = c.pk || 'x', n = groups.get(k), i = (seen.get(k) || 0) + 1;
     seen.set(k, i);
-    const when = periodLabel(c.pk, task.repeat.every);
+    const when = periodLabel(c.pk, task.repeat.every, task.repeat.interval);
     const label = `${icon}${task.title}${when ? ` · ${when}` : ''}${n > 1 ? ` ${i}/${n}` : ''}${c.partial ? ` (${Math.round((work(c, task) / Math.max(1, +c.slotMin || dur(c))) * 100)}% done)` : ''}`;
     out.push({ ...c, index: i, count: n, minutes: dur(c), work: work(c, task), label, taskId: task.id });
   }
@@ -637,6 +693,30 @@ export function completeAt(task, chunkId, now = Date.now()) {
     return { ...c, credit: Math.ceil(need * 100) / 100, syncHash: null };
   });
   return { ...t, planned: [], frozen, orphanGids, completedAt: now };
+}
+
+// Extend a repeating task by adding more occurrences.
+export function extendRecurrences(task, extra) {
+  if (!task.repeat) return task;
+  const r = { ...task.repeat };
+  if (r.count) { r.count += extra; delete r.until; }
+  else if (r.until) {
+    // Convert until to count-based, then add
+    // Approximate: add extra * interval periods from the current until
+    const intv = r.interval || 1;
+    const endKey = T.dayKey(r.until, 'UTC');
+    const newEnd = advancePeriod(endKey, r.every, extra * intv);
+    r.until = T.atTime(newEnd, '23:59', 'UTC');
+  }
+  return { ...task, repeat: r };
+}
+
+// Label for repeat unit: "day", "week", "month", or "3 weeks", "2 months" etc.
+export function repeatUnitLabel(every, interval) {
+  const intv = interval || 1;
+  const unit = every === 'month' ? 'month' : every === 'week' ? 'week' : 'day';
+  if (intv === 1) return unit;
+  return `${intv} ${unit}s`;
 }
 
 export function skipSession(task, chunkId) {

@@ -108,12 +108,15 @@ export function taskDialog(ctx, task = null, preset = {}) {
           <label class="field google-only-t only-custom-notify"><span>Email reminder (min before)</span><input type="number" name="emailReminder" min="-1" placeholder="${s.taskEmailReminderMinutes != null ? s.taskEmailReminderMinutes + ' (default)' : 'off (default)'}" value="${t.emailReminderMinutes ?? ''}"></label>
         </div>
         <div class="grid3 only-generic">
-          <label class="field"><span>Repeats</span><select name="repEvery"><option value="">Doesn't repeat</option><option value="day" ${rep?.every === 'day' ? 'selected' : ''}>Every day</option><option value="week" ${rep?.every === 'week' ? 'selected' : ''}>Every week</option></select></label>
-          <label class="field only-rep"><span>Hours each <span class="rep-unit">${rep?.every === 'day' ? 'day' : 'week'}</span></span><input type="number" name="repHours" min="0.25" step="0.25" value="${rep ? +(rep.minutes / 60).toFixed(2) : 3}"></label>
+          <div class="field"><span>Repeats</span><div class="row nowrap rep-top">
+            <select name="repEvery"><option value="">Doesn't repeat</option><option value="day" ${rep?.every === 'day' ? 'selected' : ''}>Daily</option><option value="week" ${rep?.every === 'week' ? 'selected' : ''}>Weekly</option><option value="month" ${rep?.every === 'month' ? 'selected' : ''}>Monthly</option></select>
+            <span class="only-rep row nowrap" style="gap:4px">every <input type="number" name="repInterval" min="1" max="52" class="num" style="width:3.5em" value="${rep?.interval || 1}"> <span class="rep-interval-unit">${rep?.every === 'month' ? 'month(s)' : rep?.every === 'day' ? 'day(s)' : 'week(s)'}</span></span>
+          </div></div>
+          <label class="field only-rep"><span>Hours each <span class="rep-unit">${S.repeatUnitLabel(rep?.every || 'week', rep?.interval)}</span></span><input type="number" name="repHours" min="0.25" step="0.25" value="${rep ? +(rep.minutes / 60).toFixed(2) : 3}"></label>
           <div class="field only-rep"><span>Ends</span><div class="row nowrap">
             <select name="repEnd"><option value="count" ${!rep?.until ? 'selected' : ''}>After</option><option value="until" ${rep?.until ? 'selected' : ''}>On</option></select>
-            <input type="number" name="repCount" min="1" max="520" class="num rep-c" value="${rep?.count || 12}"><span class="rep-c rep-count-unit">${rep?.every === 'day' ? 'days' : 'weeks'}</span>
-            <input type="date" name="repUntil" class="rep-u" value="${rep?.until ? T.dayKey(rep.until, tz) : T.addDays(T.dayKey(now, tz), 84)}"></div></div>
+            <input type="number" name="repCount" min="1" max="520" class="num rep-c" value="${rep?.count || S.defaultRepeatCount(t.repeatStart || now, rep?.every || 'week', rep?.interval || 1, tz)}"><span class="rep-c rep-count-unit">${S.repeatUnitLabel(rep?.every || 'week', rep?.interval) + 's'}</span>
+            <input type="date" name="repUntil" class="rep-u" value="${rep?.until ? T.dayKey(rep.until, tz) : T.dayKey(S.defaultRepeatEnd(t.repeatStart || now, rep?.every || 'week', rep?.interval || 1, tz), tz)}"></div></div>
           <div class="field only-rep rep-days-f"><span>On these days</span>${weekdayToggles('repDays', rep?.days?.length ? rep.days : [0, 1, 2, 3, 4, 5, 6])}</div>
         </div>`, { open: !!rep })}
 
@@ -246,8 +249,10 @@ export function taskDialog(ctx, task = null, preset = {}) {
     const readRepeat = (kind) => {
       const every = kind === 'generic' ? f.repEvery.value : '';
       if (!every) return { repeat: null };
+      const interval = Math.max(1, Math.round(+f.repInterval.value || 1));
       const repeat = { every, minutes: Math.max(5, Math.round((+f.repHours.value || 0) * 60)) };
-      if (every === 'day') { const d = $$('input[name=repDays]:checked', dlg).map((c) => +c.value); if (d.length && d.length < 7) repeat.days = d; }
+      if (interval > 1) repeat.interval = interval;
+      if (every === 'day' && interval === 1) { const d = $$('input[name=repDays]:checked', dlg).map((c) => +c.value); if (d.length && d.length < 7) repeat.days = d; }
       if (f.repEnd.value === 'until') repeat.until = T.atTime(f.repUntil.value || T.dayKey(now, tz), '23:59', tz);
       else repeat.count = Math.max(1, Math.round(+f.repCount.value || 1));
       const repeatStart = t.repeatStart || now;
@@ -278,11 +283,15 @@ export function taskDialog(ctx, task = null, preset = {}) {
       const repOn = kind === 'generic' && !!f.repEvery.value;
       $$('.only-rep', dlg).forEach((e) => (e.style.display = repOn ? '' : 'none'));
       $$('.only-once', dlg).forEach((e) => (e.style.display = repOn || (kind !== 'generic' && e.classList.contains('only-generic')) ? 'none' : ''));
-      $('.rep-days-f', dlg).style.display = repOn && f.repEvery.value === 'day' ? '' : 'none';
+      const repEvery = f.repEvery.value;
+      const repInterval = Math.max(1, Math.round(+f.repInterval.value || 1));
+      $('.rep-days-f', dlg).style.display = repOn && repEvery === 'day' && repInterval === 1 ? '' : 'none';
       $$('.rep-c', dlg).forEach((e) => (e.style.display = f.repEnd.value === 'count' ? '' : 'none'));
       $$('.rep-u', dlg).forEach((e) => (e.style.display = f.repEnd.value === 'until' ? '' : 'none'));
-      $('.rep-unit', dlg).textContent = f.repEvery.value === 'day' ? 'day' : 'week';
-      $('.rep-count-unit', dlg).textContent = f.repEvery.value === 'day' ? 'days' : 'weeks';
+      const unitLabel = S.repeatUnitLabel(repEvery || 'week', repInterval);
+      $('.rep-unit', dlg).textContent = unitLabel;
+      $('.rep-interval-unit', dlg).textContent = (repEvery === 'month' ? 'month' : repEvery === 'day' ? 'day' : 'week') + '(s)';
+      $('.rep-count-unit', dlg).textContent = unitLabel + 's';
       f.deadline.required = !repOn;
       $$('.new-proj', dlg).forEach((e) => (e.style.display = f.projectId.value === '__new' ? '' : 'none'));
       const draft0 = read();
@@ -292,11 +301,12 @@ export function taskDialog(ctx, task = null, preset = {}) {
       const one = !!draft.single;
       $$('.t-sessions-only', dlg).forEach((x) => { x.disabled = one; });
       dlg.classList.toggle('single-block', one);
-      $('.calc', dlg).textContent = one ? (draft.repeat ? `One block of ${T.fmtDur(draft.repeat.minutes)} each ${draft.repeat.every}` : `One block of ${T.fmtDur(total)} — not split into sessions`) : kind === 'reading' && draft.reading?.format === 'audio'
+      const repUnitL = draft.repeat ? S.repeatUnitLabel(draft.repeat.every, draft.repeat.interval) : '';
+      $('.calc', dlg).textContent = one ? (draft.repeat ? `One block of ${T.fmtDur(draft.repeat.minutes)} each ${repUnitL}` : `One block of ${T.fmtDur(total)} — not split into sessions`) : kind === 'reading' && draft.reading?.format === 'audio'
         ? `≈ ${T.fmtDur(total)} of listening (${T.fmtDur(draft.reading.pages)} of audio at ×${+(draft.reading.speed / 60).toFixed(2)}) · ≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`
         : kind === 'reading'
         ? `≈ ${T.fmtDur(total)} of reading · ${+(S.pagesPerHour(draft.reading)).toFixed(1)} pages/hour · ≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`
-        : draft.repeat ? `≈ ${Math.ceil(draft.repeat.minutes / p.chunk)} session${Math.ceil(draft.repeat.minutes / p.chunk) > 1 ? 's' : ''} of up to ${p.chunk} min each ${draft.repeat.every}, until ${T.format(draft.deadline - 1, tz, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`
+        : draft.repeat ? `≈ ${Math.ceil(draft.repeat.minutes / p.chunk)} session${Math.ceil(draft.repeat.minutes / p.chunk) > 1 ? 's' : ''} of up to ${p.chunk} min each ${repUnitL}, until ${T.format(draft.deadline - 1, tz, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}`
           : `≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`;
       // Live preview using the last known busy time and the other tasks
       const others = st.tasks.filter((x) => x.id !== draft.id);

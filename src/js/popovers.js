@@ -363,6 +363,7 @@ function openChunk(it, rect) {
         ${!isDone ? `<button class="btn small ghost tm-start" title="Time this session">▶ Timer</button><button class="btn small ghost tm-pomo" title="Focus timer with breaks (${set().pomodoro?.work || 25}/${set().pomodoro?.rest || 5} min)">🍅 Focus</button>` : ''}
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         ${task.kind !== 'reading' && !task.repeat ? '<button class="btn small ghost extend-time">＋ Extend time…</button>' : ''}
+        ${task.repeat ? '<button class="btn small ghost extend-recur">＋ Extend recurrences…</button>' : ''}
         <button class="btn small ghost to-grave-task">⚰ Graveyard</button>
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
@@ -411,6 +412,24 @@ function openChunk(it, rect) {
       const t2 = st().tasks.find((t) => t.id === task.id); if (!t2) return;
       replaceTask({ ...t2, totalMinutes: (t2.totalMinutes || 0) + addMin });
       await saveTasks('extend time'); toast(`Added ${T.fmtDur(addMin)} to "${task.title}" — sessions replanned`); cycle();
+    });
+    $('.extend-recur', pop)?.addEventListener('click', async () => {
+      close();
+      const cur = st().tasks.find((t) => t.id === task.id); if (!cur?.repeat) return;
+      const unitL = S.repeatUnitLabel(cur.repeat.every, cur.repeat.interval);
+      const v = await choose(`Extend "${task.title}" recurrences`, `Add more ${unitL} periods to this repeating task.`, [
+        { value: '5', label: `+ 5 ${unitL}s` },
+        { value: '10', label: `+ 10 ${unitL}s` },
+        { value: '20', label: `+ 20 ${unitL}s` },
+        { value: '52', label: `+ 52 ${unitL}s` },
+      ]);
+      if (!v) return;
+      const extra = +v;
+      if (!(extra > 0)) return;
+      const t2 = st().tasks.find((t) => t.id === task.id); if (!t2) return;
+      const extended = S.extendRecurrences(t2, extra);
+      replaceTask({ ...extended, deadline: S.repeatEnd(extended, set()) });
+      await saveTasks('extend recurrences'); toast(`Added ${extra} ${unitL} periods to "${task.title}"`); cycle();
     });
     $('.to-grave-task', pop)?.addEventListener('click', async () => {
       close();
