@@ -162,6 +162,17 @@ export function periodRange(period, s, now, custom) {
   switch (period) {
     case 'next7': return { from: now, to: T.dayStart(T.addDays(today, 7), tz), label: 'Next 7 days' };
     case 'next30': return { from: now, to: T.dayStart(T.addDays(today, 30), tz), label: 'Next 30 days' };
+    case 'last7': return { from: T.dayStart(T.addDays(today, -6), tz), to: T.dayStart(T.addDays(today, 1), tz), label: 'Last 7 days' };
+    case 'last30': return { from: T.dayStart(T.addDays(today, -29), tz), to: T.dayStart(T.addDays(today, 1), tz), label: 'Last 30 days' };
+    case 'lastworkweek': {
+      const ws = s.weekStart ?? 1;
+      const thisWeekStart = T.startOfWeek(today, ws);
+      const prevWeekStart = T.addDays(thisWeekStart, -7);
+      const workDays = s.bounds?.days?.length ? s.bounds.days : [1, 2, 3, 4, 5];
+      const firstWork = Math.min(...workDays.map((d) => (d - ws + 7) % 7));
+      const lastWork = Math.max(...workDays.map((d) => (d - ws + 7) % 7));
+      return { from: T.dayStart(T.addDays(prevWeekStart, firstWork), tz), to: T.dayStart(T.addDays(prevWeekStart, lastWork + 1), tz), label: 'Last work week' };
+    }
     case 'week': { const a = T.startOfWeek(today, s.weekStart); return { from: T.dayStart(a, tz), to: T.dayStart(T.addDays(a, 7), tz), label: 'This week' }; }
     case 'nextweek': { const a = T.addDays(T.startOfWeek(today, s.weekStart), 7); return { from: T.dayStart(a, tz), to: T.dayStart(T.addDays(a, 7), tz), label: 'Next week' }; }
     case 'month': { const a = T.addMonths(today, 0); return { from: T.dayStart(a, tz), to: T.dayStart(T.addMonths(a, 1), tz), label: 'This month' }; }
@@ -283,7 +294,7 @@ export function renderAnalysis({ data, groups, opts, settings, rangeInfo, sleep 
     <div class="an-head">
       <div class="an-ctrls">
         <label class="field"><span>Period</span><select data-o="period">
-          ${[['next7', 'Next 7 days'], ['next30', 'Next 30 days'], ['week', 'This week'], ['nextweek', 'Next week'], ['month', 'This month'], ['nextmonth', 'Next month'], ['custom', 'Custom…']].map(([v, l]) => `<option value="${v}" ${opts.period === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          ${[['next7', 'Next 7 days'], ['next30', 'Next 30 days'], ['last7', 'Last 7 days'], ['lastworkweek', 'Last work week'], ['last30', 'Last 30 days'], ['week', 'This week'], ['nextweek', 'Next week'], ['month', 'This month'], ['nextmonth', 'Next month'], ['custom', 'Custom…']].map(([v, l]) => `<option value="${v}" ${opts.period === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
         ${opts.period === 'custom' ? `<label class="field"><span>From</span><input type="date" data-o="from" value="${opts.from || ''}"></label><label class="field"><span>To</span><input type="date" data-o="to" value="${opts.to || ''}"></label>` : ''}
         <label class="field"><span>Hours</span><select data-o="scope">${[...Object.entries(SCOPES), ...(settings.periods || []).map((p) => ['period:' + p.id, p.name])].map(([v, l]) => `<option value="${esc(v)}" ${opts.scope === v ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
         <label class="field"><span>Group by</span><select data-o="by">${[['category', 'Category'], ['maincat', 'Main categories'], ['color', 'Color'], ['source', 'Task or calendar'], ['type', 'Events vs tasks'], ['project', 'Projects']].map(([v, l]) => `<option value="${v}" ${opts.by === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>

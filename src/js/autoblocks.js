@@ -6,6 +6,7 @@ import * as EV from './events.js';
 import * as G from './gcal.js';
 import * as C from './categories.js';
 import * as I from './items.js';
+import * as GL from './goals.js';
 import { app, set, st, tz } from './core.js';
 import { collectItems, ctx, render, syncSharedSoon, toast } from './app.js';
 import { handleError } from './status.js';
@@ -110,3 +111,68 @@ export function scheduleAutoBlocks() {
   const wait = Math.min(...dues) - now + 5000;
   if (wait < 26 * T.HOUR) app.autoBlockT = setTimeout(() => autoBlocks({ force: true }).then(scheduleAutoBlocks), Math.min(wait, 2 ** 31 - 1));
 }
+
+// ======================================================================================
+// Goal-setting slot: if goals for the next week or month are not set 3 days before the
+// period starts, auto-create a 15-minute "Set goals" event between 9 am and 11 pm with
+// a 1-hour popup reminder.  Controlled by settings.goalSlot (default off).
+// ======================================================================================
+export const goalSlotCheck = job(async () => {
+  const s = set();
+  if (!s.goalSlot) return;
+  const z = tz(), now = Date.now(), today = T.dayKey(now, z);
+  const ws = s.weekStart ?? 1;
+  const done = new Set(s.goalSlotDone || []);
+
+  // Periods to check: next week and next month
+  const thisWeek = T.startOfWeek(today, ws);
+  const nextWeek = T.addDays(thisWeek, 7);
+  const { y, m } = T.parseKey(today);
+  const thisMonth = T.keyOf(y, m, 1);
+  const nextMonth = T.addMonths(thisMonth, 1);
+
+  const checks = [];
+  // 3 days before next week starts
+  const daysToWeek = T.daysBetween(today, nextWeek);
+  if (daysToWeek <= 3 && daysToWeek >= 0) {
+    const key = GL.weekKey(nextWeek);
+    if (!done.has(key) && GL.list(s, key).length === 0) checks.push({ key, label: 'next week' });
+  }
+  // 3 days before next month starts
+  const daysToMonth = T.daysBetween(today, nextMonth);
+  if (daysToMonth <= 3 && daysToMonth >= 0) {
+    const key = GL.monthKey(nextMonth);
+    if (!done.has(key) && GL.list(s, key).length === 0) checks.push({ key, label: 'next month' });
+  }
+  if (!checks.length) return;
+
+  // Find a free 15-minute slot today between 9 am and 11 pm
+  const winStart = Math.ceil(Math.max(T.atTime(today, '09:00', z), now + 60 * T.MIN) / (5 * T.MIN)) * 5 * T.MIN; // leave room for the 1-hour reminder
+  const winEnd = T.atTime(today, '23:00', z);
+  if (winEnd - winStart < 15 * T.MIN) return; // too late in the day
+
+  const items = await collectItems([today, today]);
+  const busy = S.merge(items.filter((it) => !it.allDay && I.takesTime(it) && it.end > winStart && it.start < winEnd)
+    .map((it) => ({ start: Math.max(it.start, winStart), end: Math.min(it.end, winEnd) })));
+  const gaps = S.subtract([{ start: winStart, end: winEnd }], busy);
+  const slot = gaps.find((g) => g.end - g.start >= 15 * T.MIN);
+  if (!slot) return; // no room today — will retry next render
+
+  const slotStart = slot.start, slotEnd = slotStart + 15 * T.MIN;
+  const labels = checks.map((c) => c.label).join(' & ');
+  const summary = `🎯 Set goals for ${labels}`;
+  const priv = { tempoGoalSlot: checks.map((c) => c.key).join(',') };
+
+  await EV.createEvent(st(), E.LOCAL_CAL, {
+    summary, start: { dateTime: new Date(slotStart).toISOString(), timeZone: z },
+    end: { dateTime: new Date(slotEnd).toISOString(), timeZone: z },
+    reminders: { useDefault: false, overrides: [{ method: 'popup', minutes: 60 }] },
+    extendedProperties: { private: priv },
+  });
+
+  for (const c of checks) done.add(c.key);
+  s.goalSlotDone = [...done].slice(-20);
+  await E.persist(st(), ['settings', 'localEvents']); syncSharedSoon();
+  E.invalidate(); await render();
+  toast(`🎯 Added a 15-min goal-setting slot for ${labels}`, { ms: 4000 });
+}, { every: 5 * T.MIN, quiet: true });

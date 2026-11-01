@@ -6,6 +6,7 @@
 // Anyone else can open the AI console (⋯ → AI & automation, or add ?ai=1 to the address), paste the same JSON
 // and press Run. Every command returns plain JSON; a batch is one step for Undo.
 import * as T from './tz.js';
+import * as RV from './review.js';
 import * as S from './scheduler.js';
 import * as E from './engine.js';
 import * as EV from './events.js';
@@ -274,7 +275,8 @@ export function createApi(h) {
     } },
     moveTaskToGraveyard: { params: 'task (title or id)', about: 'Move a task to the Graveyard (undone list). The task and all its sessions are removed; it can be rescheduled from the Graveyard later.', write: true, run: async (a) => {
       const t = findTask(a.task);
-      const item = { id: S.newId('g'), text: t.title, kind: 'task', addedAt: Date.now(), created: t.created || Date.now(), ...(S.totalMinutes(t) > 0 ? { minutes: S.totalMinutes(t) } : {}), ...(t.categoryId ? { catId: t.categoryId } : {}) };
+      const item = { id: S.newId('g'), text: t.title, kind: 'task', taskId: t.id, addedAt: Date.now(), created: t.created || Date.now(), ...(S.totalMinutes(t) > 0 ? { minutes: S.totalMinutes(t) } : {}), ...(t.categoryId ? { catId: t.categoryId } : {}) };
+      item.rescheduled = RV.rescheduleCount(item, h.set().history || [], tz()) + (h.set().graveRescues?.[item.text] || 0);
       h.set().graveyard = [...(h.set().graveyard || []), item];
       h.st().orphanGids.push(...[...(t.planned || []), ...(t.frozen || [])].map((c) => c.gid).filter(Boolean), ...(t.orphanGids || []));
       h.st().tasks = h.st().tasks.filter((x) => x.id !== t.id);
@@ -290,7 +292,8 @@ export function createApi(h) {
       const it = items.find((x) => x.ev?.id === a.event) || items.find((x) => (x.title || '').toLowerCase().includes(String(a.event || '').toLowerCase())) || err(`No event "${a.event}".`);
       const title = it.title || it.ev?.summary || 'Event';
       const minutes = it.allDay ? 0 : Math.round((it.end - it.start) / T.MIN);
-      const item = { id: S.newId('g'), text: title, kind: 'event', addedAt: Date.now(), created: it.start, ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
+      const item = { id: S.newId('g'), text: title, kind: 'event', evId: it.ev?.recurringEventId || it.ev?.id, addedAt: Date.now(), created: Date.parse(it.ev?.created || '') || it.start, ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
+      item.rescheduled = RV.rescheduleCount(item, h.set().history || [], tz()) + (h.set().graveRescues?.[item.text] || 0);
       h.set().graveyard = [...(h.set().graveyard || []), item];
       await EV.deleteEvent(h.st(), it.ev, 'this');
       await E.persist(h.st(), ['settings', 'localEvents']);
@@ -301,12 +304,13 @@ export function createApi(h) {
       const list = h.set().graveyard || [], now = Date.now();
       const active = list.filter((x) => now - x.addedAt < 30 * 864e5);
       const archived = list.filter((x) => now - x.addedAt >= 30 * 864e5);
-      return { active: active.map((x) => ({ id: x.id, text: x.text, kind: x.kind, added: fmt(x.addedAt), minutes: x.minutes || undefined })), archived: archived.length };
+      return { active: active.map((x) => ({ id: x.id, text: x.text, kind: x.kind, created: x.created ? fmt(x.created) : undefined, added: fmt(x.addedAt), rescheduled: x.rescheduled || 0, minutes: x.minutes || undefined })), archived: archived.length };
     } },
     rescheduleFromGraveyard: { params: 'item (id or text), as ("task" or "event")', about: 'Reschedule an item from the Graveyard as a new task or event.', write: true, run: async (a) => {
       const list = h.set().graveyard || [];
       const x = list.find((n) => n.id === a.item) || list.find((n) => n.text.toLowerCase().includes(String(a.item || '').toLowerCase())) || err(`No graveyard item "${a.item}".`);
       h.set().graveyard = list.filter((n) => n !== x);
+      h.set().graveRescues = { ...(h.set().graveRescues || {}), [x.text]: (x.rescheduled || 0) + 1 };
       await E.persist(h.st(), ['settings']);
       if (a.as === 'event') {
         const start = Math.ceil((Date.now() + 15 * 6e4) / (15 * 6e4)) * 15 * 6e4;
@@ -461,6 +465,28 @@ export function createApi(h) {
       return { workHours: s.bounds, dailyCapMinutes: s.dailyCapMinutes, marginDays: s.marginDays, breakMinutes: s.breakMinutes, sessionMinutes: s.chunkMinutes, travelMinutes: s.travelMinutes };
     } },
     undo: { about: 'Undo the last change (a whole batch counts as one).', write: true, run: async () => { await h.undo(); return { ok: true }; } },
+    addFlag: { params: 'text, date (YYYY-MM-DD or "today"/"tomorrow"/etc), time? (HH:MM, default end of work hours), color? (hex)', about: 'Add a custom flag to the calendar.', write: true, run: async (a) => {
+      if (!a.text) err('Missing "text".');
+      const key = a.date ? resolveDate(a.date, h.set(), Date.now()) || err('Bad date.') : err('Missing "date".');
+      const s = h.set();
+      const flag = { id: S.newId('f'), text: a.text, date: key, ...(a.time ? { time: a.time } : {}), ...(a.color ? { color: a.color } : {}) };
+      s.flags = [...(s.flags || []), flag];
+      const before = [...(s.flags || [])];
+      h.pushUndo(`AI: add flag "${a.text}"`, async () => { h.set().flags = before.filter((f) => f.id !== flag.id); await E.persist(h.st(), ['settings']); h.render?.(); });
+      await E.persist(h.st(), ['settings']); h.render?.();
+      return { created: a.text, id: flag.id, date: key };
+    } },
+    deleteFlag: { params: 'flag (id or text)', about: 'Remove a custom flag.', write: true, run: async (a) => {
+      const s = h.set(), flags = s.flags || [];
+      const f = flags.find((x) => x.id === a.flag) || flags.find((x) => x.text.toLowerCase() === String(a.flag).toLowerCase());
+      if (!f) err(`Flag "${a.flag}" not found.`);
+      const before = [...flags];
+      s.flags = flags.filter((x) => x.id !== f.id);
+      h.pushUndo(`AI: delete flag "${f.text}"`, async () => { h.set().flags = before; await E.persist(h.st(), ['settings']); h.render?.(); });
+      await E.persist(h.st(), ['settings']); h.render?.();
+      return { deleted: f.text };
+    } },
+    listFlags: { about: 'List all custom flags.', run: () => ({ result: (h.set().flags || []).map((f) => ({ id: f.id, text: f.text, date: f.date, time: f.time || null, color: f.color || null })) }) },
   };
 
   function helpText() {

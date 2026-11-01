@@ -11,6 +11,7 @@ import { $, $$, esc, modal, setHTML } from './ui.js';
 import * as P from './projects.js';
 import * as GM from './game.js';
 import { LOCAL_COLOR, app, set, st, tz } from './core.js';
+import * as RV from './review.js';
 import { closeDrawer, ctx, cycle, newEvent, openConnect, range, render, replaceTask, saveTasks, syncSharedSoon, toast } from './app.js';
 import { gameOn, gameRefresh, renderGamePanel } from './game-ui.js';
 import { renderHabits } from './habits-ui.js';
@@ -433,10 +434,18 @@ const graveyardList = () => set().graveyard || [];
 export const graveyardActive = () => graveyardList().filter((x) => Date.now() - x.addedAt < 30 * T.DAY);
 const graveyardArchived = () => graveyardList().filter((x) => Date.now() - x.addedAt >= 30 * T.DAY);
 export async function addToGraveyard(item) {
+  // Rescued from the Graveyard before (same text)? Keep counting from there
+  const rescues = set().graveRescues?.[item.text] || 0;
+  item.rescheduled = RV.rescheduleCount(item, set().history || [], tz()) + rescues;
   set().graveyard = [...graveyardList(), item];
   await E.persist(st(), ['settings']);
   syncSharedSoon();
   renderLater();
+}
+function noteRescue(item) {
+  const m = set().graveRescues = { ...(set().graveRescues || {}) };
+  m[item.text] = (item.rescheduled || 0) + 1;
+  const keys = Object.keys(m); if (keys.length > 100) delete m[keys[0]];
 }
 async function saveGraveyard(list, label) {
   const before = graveyardList();
@@ -446,35 +455,37 @@ async function saveGraveyard(list, label) {
   if (label) pushUndo(label, async () => { set().graveyard = before; await E.persist(st(), ['settings']); renderLater(); });
   renderLater();
 }
+function graveRow(x, z, now) {
+  const ago = (ms) => { const d = Math.floor((now - ms) / T.DAY); return d < 1 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
+  const born = x.created ? T.fmtDate(x.created, z) : '?';
+  const died = T.fmtDate(x.addedAt, z);
+  const resch = x.rescheduled || 0;
+  return `<div class="grave-row${Date.now() - x.addedAt >= 30 * T.DAY ? ' archived' : ''}" data-id="${esc(x.id)}">
+    <div class="grave-stone">
+      <span class="grave-icon">🪦</span>
+      <div class="grave-info">
+        <span class="grave-t">${esc(x.text)}${x.minutes ? ` <span class="muted small">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}</span>
+        <span class="muted small grave-life">🗓 ${esc(born)} – ⚰ ${esc(died)}· rescheduled ${resch}×</span>
+      </div>
+    </div>
+    <span class="grave-acts">
+      <button type="button" class="btn small ghost g-task" title="Reschedule as a task">⧉ Task</button>
+      <button type="button" class="btn small ghost g-event" title="Put on the calendar as an event">📅 Event</button>
+      <button type="button" class="icon-btn sm g-del" title="Remove permanently">✕</button>
+    </span>
+  </div>`;
+}
 function renderGraveyard() {
   const box = $('#grave-list'); if (!box) return;
   const z = tz(), now = Date.now();
   const active = graveyardActive(), archived = graveyardArchived();
-  const ago = (ms) => { const d = Math.floor((now - ms) / T.DAY); return d < 1 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
-  setHTML(box, active.length || archived.length ? `
-    ${active.length ? active.map((x) => `<div class="grave-row" data-id="${esc(x.id)}">
-      <span class="grave-icon">${x.kind === 'task' ? '⧉' : '📅'}</span>
-      <span class="grave-t">${esc(x.text)}${x.minutes ? ` <span class="muted small">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}</span>
-      <span class="muted small">${esc(ago(x.addedAt))}</span>
-      <span class="grave-acts">
-        <button type="button" class="btn small ghost g-task" title="Reschedule as a task">⧉ Task</button>
-        <button type="button" class="btn small ghost g-event" title="Put on the calendar as an event">📅 Event</button>
-        <button type="button" class="icon-btn sm g-del" title="Remove permanently">✕</button>
-      </span>
-    </div>`).join('') : '<p class="muted small empty">Nothing undone recently.</p>'}
+  const desc = '<p class="muted small" style="margin:0 0 8px">This is where tasks and events you couldn\'t complete go. You can reschedule them or let them rest.</p>';
+  setHTML(box, active.length || archived.length ? `${desc}
+    ${active.length ? active.map((x) => graveRow(x, z, now)).join('') : '<p class="muted small empty">Nothing undone recently.</p>'}
     ${archived.length ? `<details class="tl-arch"><summary class="muted small">Archived — older than 30 days (${archived.length})</summary>
-      ${archived.slice(-30).map((x) => `<div class="grave-row archived" data-id="${esc(x.id)}">
-        <span class="grave-icon">${x.kind === 'task' ? '⧉' : '📅'}</span>
-        <span class="grave-t">${esc(x.text)}${x.minutes ? ` <span class="muted small">⏱ ${T.fmtDur(x.minutes)}</span>` : ''}</span>
-        <span class="muted small">${esc(T.fmtDate(x.addedAt, z))}</span>
-        <span class="grave-acts">
-          <button type="button" class="btn small ghost g-task" title="Reschedule as a task">⧉ Task</button>
-          <button type="button" class="btn small ghost g-event" title="Put on the calendar as an event">📅 Event</button>
-          <button type="button" class="icon-btn sm g-del" title="Remove permanently">✕</button>
-        </span>
-      </div>`).join('')}
+      ${archived.slice(-30).map((x) => graveRow(x, z, now)).join('')}
     </details>` : ''}
-  ` : '<p class="muted small empty">Nothing here yet. When you abandon a task or event, it ends up here — you can reschedule it later.</p>');
+  ` : `${desc}<p class="muted small empty">Nothing here yet. When you abandon a task or event, it ends up here — you can reschedule it later.</p>`);
   $$('.grave-row', box).forEach((r) => {
     const item = graveyardList().find((x) => x.id === r.dataset.id); if (!item) return;
     $('.g-del', r).onclick = () => { saveGraveyard(graveyardList().filter((x) => x.id !== item.id), `remove "${item.text.slice(0, 30)}" from graveyard`); toast('Removed from Graveyard'); };
@@ -484,14 +495,14 @@ function renderGraveyard() {
       const lc = C.catById(set(), item.catId);
       await newTask({ kind: 'generic', title: item.text, ...(item.minutes ? { totalMinutes: item.minutes } : {}), ...(lc ? { draft: C.applyCategory({}, lc) } : {}) });
       const nt = st().tasks.find((t) => !ids.has(t.id));
-      if (nt) { saveGraveyard(graveyardList().filter((x) => x.id !== item.id), false); toast(`"${item.text}" is back as a task`); }
+      if (nt) { noteRescue(item); saveGraveyard(graveyardList().filter((x) => x.id !== item.id), false); toast(`"${item.text}" is back as a task`); }
     };
     $('.g-event', r).onclick = async () => {
       closeDrawer();
       const start = Math.ceil((Date.now() + 15 * T.MIN) / (15 * T.MIN)) * 15 * T.MIN;
       const n0 = createdEvents;
       await newEvent({ start, end: start + Math.min(8 * 60, item.minutes || set().defaultEventMinutes || 60) * T.MIN, title: item.text, ...(C.catById(set(), item.catId) ? { categoryId: item.catId } : {}) });
-      if (createdEvents > n0) { saveGraveyard(graveyardList().filter((x) => x.id !== item.id), false); toast(`"${item.text}" is back on the calendar`); }
+      if (createdEvents > n0) { noteRescue(item); saveGraveyard(graveyardList().filter((x) => x.id !== item.id), false); toast(`"${item.text}" is back on the calendar`); }
     };
   });
 }

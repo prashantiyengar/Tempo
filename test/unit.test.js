@@ -4,6 +4,7 @@ import * as T from '../src/js/tz.js';
 import * as E from '../src/js/engine.js';
 import * as GM from '../src/js/game.js';
 import * as GL from '../src/js/goals.js';
+import * as RV from '../src/js/review.js';
 
 let fails = 0;
 const eq = (label, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) fails++; console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${ok ? '' : ` — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`}`); };
@@ -47,6 +48,10 @@ eq('settings parts: an incomplete newer version is skipped', E.decodeParts([...a
 const at = (h) => Date.parse(`2026-10-26T${h}:00+01:00`);
 const hist = [{ kind: 'resched', taskId: 'a', at: at('09') }, { kind: 'moved', taskId: 'a', at: at('10') }, { kind: 'resched', evId: 'e', title: 'Dentist', at: at('11') }];
 eq('penalties: once per task / event per day', GL && GM.penaltiesOn(hist, at('00'), at('23'), 'Europe/Berlin').map((h) => [h.taskId || h.evId, h.times]), [['a', 2], ['e', 1]]);
+
+const D = (d, h) => Date.parse(`2024-10-${d}T${h}:00:00Z`);
+const mv = [{ kind: 'resched', taskId: 't', at: D('01', '09') }, { kind: 'moved', taskId: 't', at: D('01', '15') }, { kind: 'movedQuiet', taskId: 't', at: D('03', '10') }, { kind: 'done', taskId: 't', at: D('04', '10') }, { kind: 'resched', evId: 'e', at: D('02', '10') }, { kind: 'resched', title: 'Call Bob', at: D('02', '11') }];
+eq('graveyard: reschedules counted once a day', [RV.rescheduleCount({ taskId: 't', text: 'x' }, mv, 'UTC'), RV.rescheduleCount({ evId: 'e', text: 'y' }, mv, 'UTC'), RV.rescheduleCount({ text: 'Call Bob' }, mv, 'UTC'), RV.rescheduleCount({ taskId: 'zz', text: 'none' }, mv, 'UTC')], [2, 1, 1, 0]);
 
 console.log(fails ? `${fails} FAILED` : 'ALL PASS');
 process.exitCode = fails ? 1 : 0;

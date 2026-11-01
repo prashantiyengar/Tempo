@@ -41,15 +41,15 @@ export function taskDialog(ctx, task = null, preset = {}) {
       <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
     </header>
     <div class="dlg-body">
-      <input name="title" class="title-input" placeholder="${t.kind === 'reading' ? 'Book title' : 'Task name'}" value="${esc(t.title)}" autofocus>
-      <div class="row blockmode-row"><div class="seg blockmode" role="radiogroup" aria-label="How to schedule the hours">
-        <label title="Tempo splits the hours into sessions around your calendar"><input type="radio" name="blockmode" value="split" ${!t.single ? 'checked' : ''}><span>✂ Split into sessions</span></label>
-        <label title="All the hours in one uninterrupted block"><input type="radio" name="blockmode" value="single" ${t.single ? 'checked' : ''}><span>▭ One block</span></label>
-      </div></div>
+      <input name="title" class="title-input" placeholder="${t.kind === 'reading' ? 'Book title' : 'Add Title (defaults to category name if no title specified)'}" value="${esc(t.title)}" autofocus>
       <div class="row catcol">
         <div class="field grow"><span>Category</span><div class="cat-host"></div></div>
         <div class="field color-field"><span>Color</span><div class="swatches small">${TASK_COLORS.map((c) => `<label class="sw"><input type="radio" name="color" value="${c}" ${t.color === c ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}</div></div>
       </div>
+      <div class="row blockmode-row"><div class="seg blockmode" role="radiogroup" aria-label="How to schedule the hours">
+        <label title="Tempo splits the hours into sessions around your calendar"><input type="radio" name="blockmode" value="split" ${!t.single ? 'checked' : ''}><span>✂ Split into sessions</span></label>
+        <label title="All the hours in one uninterrupted block"><input type="radio" name="blockmode" value="single" ${t.single ? 'checked' : ''}><span>▭ One block</span></label>
+      </div></div>
       ${prog ? `<div class="progress-line"><div class="bar"><i style="width:${prog.pct}%;background:${t.color}"></i></div><span class="muted small">${T.fmtDur(prog.done)} of ${T.fmtDur(prog.total)} done</span></div>` : ''}
 
       <div class="row only-reading"><div class="seg rformat"><label><input type="radio" name="rformat" value="book" ${r.format !== 'audio' ? 'checked' : ''}><span>📖 Book (pages)</span></label><label><input type="radio" name="rformat" value="audio" ${r.format === 'audio' ? 'checked' : ''}><span>🎧 Audiobook (hours)</span></label></div></div>
@@ -278,7 +278,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
       const audio = kind === 'reading' && f.rformat?.value === 'audio';
       $$('.only-audio', dlg).forEach((e) => (e.style.display = audio ? '' : 'none'));
       $$('.only-book', dlg).forEach((e) => (e.style.display = kind === 'reading' && !audio ? '' : 'none'));
-      f.title.placeholder = kind === 'reading' ? 'Book title, e.g. Pride and Prejudice' : 'Task name';
+      f.title.placeholder = kind === 'reading' ? 'Book title, e.g. Pride and Prejudice' : 'Add Title (defaults to category name if no title specified)';
       $('.custom-bounds', dlg).style.display = f.bmode.value === 'custom' ? '' : 'none';
       const repOn = kind === 'generic' && !!f.repEvery.value;
       $$('.only-rep', dlg).forEach((e) => (e.style.display = repOn ? '' : 'none'));

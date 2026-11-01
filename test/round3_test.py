@@ -97,7 +97,9 @@ async def main():
         await page.click('dialog button[type=submit] >> nth=-1'); await page.wait_for_selector('dialog.narrow h2')
         print('   until 2028:', await page.text_content('dialog.narrow h2')); await page.click('dialog.narrow [data-close]')
         await page.select_option('dialog [name=ends]', 'after'); await page.fill('dialog [name=count]', '10')
-        await page.click('dialog button[type=submit] >> nth=-1'); await page.wait_for_timeout(2000)
+        await page.click('dialog button[type=submit] >> nth=-1'); await page.wait_for_selector('dialog .ask-cat')
+        print('   asks for a category first:', await page.text_content('dialog .ask-cat h2'))
+        await page.click('dialog .ask-cat [data-close]'); await page.wait_for_timeout(2000)  # Skip
         su = [e for evs in g.events.values() for e in evs.values() if e.get('summary') == 'Standup']
         print('   10 times saved:', bool(su), su[0].get('recurrence') if su else None)
 

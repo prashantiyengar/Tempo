@@ -28,7 +28,7 @@ const FIELDS = [
   ['chunkMinutes', 'chunkMinutes', 'num', { min: 5, def: 60 }], ['minChunkMinutes', 'minChunkMinutes', 'num', { min: 5, empty: null }],
   ['breakMinutes', 'breakMinutes', 'num', { min: 0, def: 0 }], ['wiggleMinutes', 'wiggleMinutes', 'num', { min: 0, empty: 15, zero: true }],
   ['sinceLastBuffer', 'sinceLastBuffer', 'num', { min: 0, max: 15, def: 0, round: true }], ['tillNextBuffer', 'tillNextBuffer', 'num', { min: 0, max: 15, def: 0, round: true }],
-  ['paperScope', 'paperScope', 'str'], ['goalNotice', 'goalNotice', 'chk'], ['goalNoticeAt', 'goalNoticeAt', 'str', { def: '09:00' }],
+  ['paperScope', 'paperScope', 'str'], ['goalNotice', 'goalNotice', 'chk'], ['goalNoticeAt', 'goalNoticeAt', 'str', { def: '09:00' }], ['goalSlot', 'goalSlot', 'chk'],
   ['sleepEvents', 'sleepEvents', 'chk'], ['sleepCal', 'sleepCal', 'str'], ['sleepAssume', 'sleepAssume', 'chk'], ['sleepCategory', 'sleepCategory', 'str', { empty: null }],
   ['sleepStart', 'sleepStart', 'str', { def: '23:00' }], ['sleepEnd', 'sleepEnd', 'str', { def: '07:00' }], ['sleepDelayMin', 'sleepDelayMin', 'num', { min: 0, def: 0 }],
   ['dailyCapMinutes', 'dailyCapMinutes', 'num', { min: 0, def: 0 }], ['marginDays', 'marginDays', 'num', { min: 0, def: 0 }], ['travelMinutes', 'travelMinutes', 'num', { min: 0, def: 0 }],
@@ -217,7 +217,7 @@ export function settingsDialog(ctx) {
       </section>
       <section data-pane="5" hidden>
         <p class="muted small">Give tasks a category to color-code them and to group time in Analysis. A category's icon is added to its sessions' titles (also in Google Calendar). You can also add categories directly in the task dialog.</p>
-        <label class="chk"><input type="checkbox" name="askCategory" ${s.askCategory !== false ? 'checked' : ''}> When I create a task without a category, ask me for one</label>
+        <label class="chk"><input type="checkbox" name="askCategory" ${s.askCategory !== false ? 'checked' : ''}> When I create a task or event without a category, ask whether I want to pick one</label>
         <div class="cats-list"></div>
         <button type="button" class="btn small add-cat">+ Add category</button>
         ${sect('s-projects', 'Projects', `
@@ -242,7 +242,8 @@ export function settingsDialog(ctx) {
         ${sect('s-pics', 'Newspaper pictures', `<div class="field"><span>Picture sources (one is picked at random each time)</span><div class="pic-src-list"></div><button type="button" class="btn small add-pic-src">+ Add a source</button></div>
           <p class="muted small" style="margin:0">Wikimedia Commons: any search words (e.g. <i>Art Nouveau poster</i>) or a category name (e.g. <i>Photographs by Julia Margaret Cameron</i>). Art Institute of Chicago: search words (e.g. <i>Monet</i>). Image links: https addresses of pictures, one per line.</p>`)}
         ${sect('s-goalrem', 'Goal reminder', `<label class="chk"><input type="checkbox" name="goalNotice" ${s.goalNotice !== false ? 'checked' : ''}> On the first day of a new week or month, show my goals</label>
-          <label class="field"><span>From (time of day)</span><input type="time" name="goalNoticeAt" value="${esc(s.goalNoticeAt || '09:00')}" step="900"></label>`)}
+          <label class="field"><span>From (time of day)</span><input type="time" name="goalNoticeAt" value="${esc(s.goalNoticeAt || '09:00')}" step="900"></label>
+          <label class="chk"><input type="checkbox" name="goalSlot" ${s.goalSlot ? 'checked' : ''}> If goals for next week or month aren't set 3 days before, auto-create a 15-min goal-setting slot (9 am – 11 pm) with a 1-hour reminder</label>`)}
       </section>
       <section data-pane="4" hidden>
         <p class="muted small">Tasks, settings and local events live in this browser's extension storage. Back them up or move them to another browser:</p>
@@ -285,7 +286,7 @@ export function settingsDialog(ctx) {
       's-paper': () => val('paperName'),
       's-papercats': () => { const n = $$('.pc', dlg).filter((c) => !c.checked).length; return n ? `${n} left out` : 'All included'; },
       's-pics': () => `${picSrc.length} source${picSrc.length === 1 ? '' : 's'}`,
-      's-goalrem': () => (chk('goalNotice') ? `From ${val('goalNoticeAt')}` : 'Off'),
+      's-goalrem': () => [chk('goalNotice') ? `From ${val('goalNoticeAt')}` : '', chk('goalSlot') ? 'auto-slot on' : ''].filter(Boolean).join(' · ') || 'Off',
     });
     $$('.tabs button', dlg).forEach((b) => b.addEventListener('click', () => {
       $$('.tabs button', dlg).forEach((x) => x.classList.toggle('on', x === b));

@@ -276,7 +276,7 @@ export async function askScope(verb) {
 
 async function commitMove(it, start, end) {
   try {
-    if (gameOn() && (it.kind === 'chunk' || it.end < start || it.start > end || Math.abs(start - it.start) >= 30 * T.MIN)) logHistory({ kind: 'resched', task: it.task, title: it.title, evId: it.kind === 'chunk' ? undefined : (it.ev?.recurringEventId || it.ev?.id), t: it.start });
+    if (it.kind === 'chunk' || it.end < start || it.start > end || Math.abs(start - it.start) >= 30 * T.MIN) logHistory({ kind: gameOn() ? 'resched' : 'movedQuiet', /* movedQuiet: no XP penalty, still counted on gravestones */ task: it.task, title: it.title, evId: it.kind === 'chunk' ? undefined : (it.ev?.recurringEventId || it.ev?.id), t: it.start });
     if (it.kind === 'chunk') {
       replaceTask(S.pinSession(it.task, it.sess.id, start, end));
       await saveTasks(`move “${it.task.title}” session`);

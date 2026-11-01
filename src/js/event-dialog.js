@@ -6,7 +6,7 @@ import { LOCAL_CAL, interval } from './engine.js';
 import { $, $$, esc, modal, setHTML, choose } from './ui.js';
 import * as C from './categories.js';
 import * as N from './notify.js';
-import { ORD, WDL, askTitle, checkCount, limitHint, nudgesHTML, recurrenceExtent, sect, tzDatalist, weekdayToggles, wireSects } from './dialogs.js';
+import { ORD, WDL, askCategoryPick, askTitle, checkCount, limitHint, nudgesHTML, recurrenceExtent, sect, tzDatalist, weekdayToggles, wireSects } from './dialogs.js';
 
 export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   const st = ctx.state, s = st.settings;
@@ -45,10 +45,19 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
   const html = `
   <form class="event-form" autocomplete="off">
     <header class="dlg-head">
-      <input name="summary" class="title-input" placeholder="Add title" value="${esc(ev?.summary || init.title || '')}" autofocus autocomplete="off">
+      <input name="summary" class="title-input" placeholder="Add Title (defaults to category name if no title specified)" value="${esc(ev?.summary || init.title || '')}" autofocus autocomplete="off">
       <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
     </header>
     <div class="dlg-body">
+      <div class="row catcol">
+        <div class="field grow"><span>Category</span><div class="ev-cat-host"></div></div>
+        <div class="field"><span>Color</span>
+          <div class="swatches small">
+            <label class="sw"><input type="radio" name="colorId" value="" ${!colorId ? 'checked' : ''}><i class="sw-cal" title="Calendar color"></i></label>
+            ${Object.entries(G.EVENT_COLORS).map(([id, c]) => `<label class="sw"><input type="radio" name="colorId" value="${id}" ${colorId === id ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}
+          </div>
+        </div>
+      </div>
       <div class="row when">
         <label class="chk"><input type="checkbox" name="allDay" ${allDay ? 'checked' : ''}> All day</label>
       </div>
@@ -72,15 +81,6 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       <div class="row timed t-adj dur-row">
         ${nudgesHTML('dur-add')}
         ${ctx.nextEventStart ? '<button type="button" class="chip-btn till-next" title="End when the next event starts (looks ahead up to 12 hours)">⤓ Till next event</button>' : ''}
-      </div>
-      <div class="row catcol">
-        <div class="field grow"><span>Category</span><div class="ev-cat-host"></div></div>
-        <div class="field"><span>Color</span>
-          <div class="swatches small">
-            <label class="sw"><input type="radio" name="colorId" value="" ${!colorId ? 'checked' : ''}><i class="sw-cal" title="Calendar color"></i></label>
-            ${Object.entries(G.EVENT_COLORS).map(([id, c]) => `<label class="sw"><input type="radio" name="colorId" value="${id}" ${colorId === id ? 'checked' : ''}><i style="background:${c}"></i></label>`).join('')}
-          </div>
-        </div>
       </div>
 
       ${sect('ev-notify', 'Notifications &amp; repeat', `
@@ -337,10 +337,11 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       e.preventDefault();
       const ad = f.allDay.checked;
       const zone = T.isValidTz(f.tz.value.trim()) ? f.tz.value.trim() : s.tz;
-      let title = f.summary.value.trim();
+      let title = f.summary.value.trim(), askedTitle = false;
       if (!title && (isNew || ev?.summary)) {
         if (evCat) title = evCat.name;
         else {
+          askedTitle = true;
           const a = await askTitle(s, { what: 'event', onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; } });
           if (!a) { f.summary.focus(); return; }
           title = a.title; if (a.cat) evCat = a.cat;
@@ -408,6 +409,16 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         const known = new Set(keep.map((a) => a.email));
         const attendees = [...keep, ...emails.filter((x) => !known.has(x)).map((email) => ({ email }))];
         if (attendees.length || ev?.attendees?.length) body.attendees = attendees;
+      }
+      // No category picked on a new event: offer to pick one before it's scheduled (Settings → Categories turns this off)
+      if (isNew && !evCat && !askedTitle && s.askCategory !== false) {
+        const r = await askCategoryPick(s, title, { what: 'event', onCreate: async (name, color, icon, parent) => { const c = C.newCategory(s, name, color, icon, parent); await ctx.saveSettings(); return c; } });
+        if (r === 'never') { s.askCategory = false; await ctx.saveSettings(); }
+        else if (r) {
+          evCat = r;
+          const ch = C.eventCategoryChanges({}, evCat), base = body.extendedProperties || {};
+          body.extendedProperties = { ...base, private: { ...(base.private || {}), ...(ch.extendedProperties?.private || {}) }, ...(ch.extendedProperties?.shared ? { shared: { ...(base.shared || {}), ...ch.extendedProperties.shared } } : {}) };
+        }
       }
       close({ action: 'save', body, calId: targetCal, conference: g && f.meet.checked && !ev?.conferenceData, recurrenceChanged: recChanged });
     });

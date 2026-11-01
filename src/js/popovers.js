@@ -69,7 +69,8 @@ export function quickCreate(rect, sel, onClose) {
   const durMin = Math.round((sel.end - sel.start) / T.MIN);
   popover(rect, `
     <form class="qc" novalidate>
-      <input name="title" placeholder="Add title" autofocus autocomplete="off">
+      <input name="title" placeholder="Add Title (defaults to category name if no title specified)" autofocus autocomplete="off">
+      <div class="qc-cat"></div>
       <div class="qc-when">${esc(when)}${sel.allDay ? ' · all day' : ''}</div>
       ${sel.note ? `<div class="qc-note muted small">⇕ ${esc(sel.note)}</div>` : ''}
       ${sel.allDay ? '' : (() => {
@@ -81,7 +82,6 @@ export function quickCreate(rect, sel, onClose) {
       })()}
       <div class="qc-sels"><select name="cal" aria-label="Calendar">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
       <select name="np" class="qc-np" aria-label="Notifications" title="Notification profile">${N.profiles(s).map((pr) => `<option value="${esc(pr.id)}" ${pr.id === N.eventDefault(s)?.id ? 'selected' : ''} title="${esc(N.describeProfile(pr))}">🔔 ${esc(pr.name)}</option>`).join('')}</select></div>
-      <div class="qc-cat"></div>
       <div class="qc-actions">
         <button type="button" class="btn small ghost more">More options</button>
         <span class="grow"></span>
@@ -148,17 +148,18 @@ export function quickCreate(rect, sel, onClose) {
       e.preventDefault();
       if (saving) return;
       // No title: use the category's name, or ask (picking a category in the prompt uses its name)
-      let title = f.title.value.trim(), cat = qcCat;
+      let title = f.title.value.trim(), cat = qcCat, askedTitle = false;
       if (!title) {
         if (cat) title = cat.name;
         else {
-          saving = true;
+          saving = true; askedTitle = true;
           const a = await D.askTitle(set(), { what: 'event', onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; } });
           saving = false;
           if (!a) { f.title.focus(); return; }
           title = a.title; cat = a.cat || cat;
         }
       }
+      if (!cat && !askedTitle) { saving = true; cat = await askNewCategory(title, 'event'); saving = false; }
       const g = f.cal.value !== E.LOCAL_CAL, prof = N.profileById(set(), f.np.value);
       const body = { ...selBody(sel, title, f.cal.value), ...(cat ? C.eventCategoryChanges({}, cat) : {}) };
       if (prof) {
@@ -280,7 +281,7 @@ export function openItem(it, rect) {
       close();
       const title = it.title || ev.summary || 'Event';
       const minutes = it.allDay ? 0 : Math.round((it.end - it.start) / T.MIN);
-      const item = { id: S.newId('g'), text: title, kind: 'event', addedAt: Date.now(), created: it.start, ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
+      const item = { id: S.newId('g'), text: title, kind: 'event', addedAt: Date.now(), created: Date.parse(ev.created || '') || it.start, evId: ev.recurringEventId || ev.id, ...(minutes > 0 ? { minutes } : {}), ...(it.catId ? { catId: it.catId } : {}) };
       try {
         let scope = 'this';
         if (ev.recurringEventId) { scope = await askScope('Delete'); if (!scope) return; }
@@ -438,7 +439,7 @@ function openChunk(it, rect) {
         { value: 'yes', label: 'Yes, move to Graveyard' },
       ]);
       if (v !== 'yes') return;
-      const item = { id: S.newId('g'), text: task.title, kind: 'task', addedAt: Date.now(), created: task.created || Date.now(), ...(S.totalMinutes(cur) > 0 ? { minutes: S.totalMinutes(cur) } : {}), ...(task.categoryId ? { catId: task.categoryId } : {}) };
+      const item = { id: S.newId('g'), text: task.title, kind: 'task', taskId: task.id, addedAt: Date.now(), created: task.created || Date.now(), ...(S.totalMinutes(cur) > 0 ? { minutes: S.totalMinutes(cur) } : {}), ...(task.categoryId ? { catId: task.categoryId } : {}) };
       await addToGraveyard(item);
       // delete the task (same as undo.js deleteTask but without toast — we have our own)
       st().orphanGids.push(...[...(cur.planned || []), ...(cur.frozen || [])].map((c) => c.gid).filter(Boolean), ...(cur.orphanGids || []));
@@ -479,26 +480,21 @@ export function adoptPeriodsFromTasks() {
   return changed;
 }
 
-// A new task has no category: ask once, quickly (Skip keeps it uncategorised; "Don't ask again" turns this off).
-export async function askCategoryOnce(task) {
-  let picked = null;
-  const r = await modal(`<div class="choice ask-cat"><h2>Which category is “${esc(task.title)}”?</h2>
-    <p class="muted small">Tap one, or add a new one. Categories color-code tasks and group your time in Analysis.</p>
-    <div class="cat-host" style="margin:10px 0 4px"></div>
-    <div class="actions"><button type="button" class="btn ghost link never">Don't ask again</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Skip</button></div></div>`, (dlg, close) => {
-    C.categoryPicker($('.cat-host', dlg), {
-      settings: set(), selected: null, allowNone: false,
-      onChange: (c) => { picked = c; close('ok'); },
-      onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; },
-    });
-    $('.never', dlg).onclick = () => close('never');
-  }, { cls: 'narrow' });
+// Something new has no category: ask once, quickly (Skip keeps it uncategorised; "Don't ask again" turns this off).
+export async function askNewCategory(title, what = 'task') {
+  if (set().askCategory === false) return null;
+  const r = await D.askCategoryPick(set(), title, { what, onCreate: async (name, color, icon, parent) => { const c = C.newCategory(set(), name, color, icon, parent); await E.persist(st(), ['settings']); return c; } });
   if (r === 'never') {
     set().askCategory = false;
     await E.persist(st(), ['settings']);
     toast('Won’t ask again. Turn it back on in Settings → Categories.');
+    return null;
   }
-  return r === 'ok' && picked ? C.applyCategory(task, picked) : task;
+  return r;
+}
+export async function askCategoryOnce(task) {
+  const c = await askNewCategory(task.title, 'task');
+  return c ? C.applyCategory(task, c) : task;
 }
 
 // Quick classify: pick (or create) a category for a task.

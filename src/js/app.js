@@ -16,7 +16,7 @@ import { LOCAL_COLOR, app, set, st, tz } from './core.js';
 import { currentToNow, extendToNow, lastEventEnd, nextEventStart, toNowItem, wireToNow } from './actions.js';
 import { renderAnalysisView } from './analysis-ui.js';
 import { setupApi, setupQuickAdd } from './assistant.js';
-import { autoBlocks, scheduleAutoBlocks } from './autoblocks.js';
+import { autoBlocks, goalSlotCheck, scheduleAutoBlocks } from './autoblocks.js';
 import { exportCustom, exportMulti, exportView } from './export-ui.js';
 import { gameActive, gameDayChip, gameRefresh, levelFlag, renderGamePanel, xpBreakdown } from './game-ui.js';
 import { autoHabits } from './habits-ui.js';
@@ -30,7 +30,7 @@ import { coverFor, openProject, projectEventDone, renderLater, renderSidebar } f
 import { loadTimer } from './timer.js';
 import { markBaseline, newTask, pushUndo, recordTaskUndo, undo, undoStack, undoableEventChange, undoableEventDelete } from './undo.js';
 import { afterDriveGrant, applyBackup, backupData, backupNow, dailyBackup, ensureDrive, restoreFromDrive } from './backup.js';
-import { commandForKey, menuItems, openCommandBar } from './commands.js';
+import { commandForKey, menuItems, newFlag, openCommandBar } from './commands.js';
 
 
 // Context handed to dialogs
@@ -408,6 +408,14 @@ function renderTimeGrid(days, items) {
         col.appendChild(el(`<div class="deadline" style="top:${(m / 60) * hh}px;--c:${t.color}" title="Deadline: ${esc(t.title)}"><span>⚑ ${esc(t.title)}</span></div>`));
       } catch (err) { drawErrors.push(['deadline of ' + t.title, err]); }
     }
+    // custom flags
+    for (const f of set().flags || []) {
+      try {
+        if (f.date !== k) continue;
+        const m = f.time ? T.parseHHMM(f.time) : (T.parseHHMM(set().bounds?.end || '17:00'));
+        col.appendChild(el(`<div class="deadline custom-flag" style="top:${(m / 60) * hh}px;--c:${f.color || 'var(--accent)'}" title="${esc(f.text)}" data-flag="${esc(f.id)}"><span>🏴 ${esc(f.text)}</span></div>`));
+      } catch (err) { drawErrors.push(['flag ' + f.text, err]); }
+    }
     // on a computer, "extend until now" sits on the current-time line (on phones it's in the + menu)
     if (k === todayK) col.appendChild(el(`<div class="now" style="top:${(T.minutesOfDay(Date.now(), z) / 60) * hh}px">${toNow ? `<button type="button" class="tonow-btn" data-tonow="${esc(toNow.key)}" style="--c:${toNow.color}" title="Still going? Make “${esc(toNow.title)}” end now">⟶ Extend “${esc(toNow.title.length > 22 ? toNow.title.slice(0, 21) + '…' : toNow.title)}” until now</button>` : ''}</div>`));
     if (toNow && T.dayKey(toNow.end - 1, z) === k) {
@@ -425,6 +433,7 @@ function renderTimeGrid(days, items) {
   wireToNow(root);
   $$('[data-leave]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); leaveMenu(b.dataset.leave, b.getBoundingClientRect()); }));
   $$('[data-xpday]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); xpBreakdown(b.dataset.xpday, b.getBoundingClientRect()); }));
+  $$('[data-flag]', root).forEach((b) => b.addEventListener('click', (e) => { e.stopPropagation(); flagMenu(b.dataset.flag, b.getBoundingClientRect()); }));
   colsEl.addEventListener('pointerdown', onGridPointerDown);
   $('.ad-area', root).addEventListener('pointerdown', onAllDayPointerDown);
   return root;
@@ -570,7 +579,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     renderBanner();
   }
   markBaseline();
-  autoBlocks().then(() => { scheduleAutoBlocks(); return autoHabits(); }).then(() => gameRefresh()).then(() => dailyBackup());
+  autoBlocks().then(() => { scheduleAutoBlocks(); return autoHabits(); }).then(() => goalSlotCheck()).then(() => gameRefresh()).then(() => dailyBackup());
   await handleProblems(problems);
 }
 
@@ -605,6 +614,23 @@ async function connectGoogle(mode = 'custom') {
 export function closeDrawer() { $('#side')?.classList.remove('open'); const sc = $('#scrim'); if (sc) sc.hidden = true; }
 
 // A simple bottom-sheet menu (used by the phone layout).
+async function flagMenu(flagId, rect) {
+  const s = set(), flag = (s.flags || []).find((f) => f.id === flagId);
+  if (!flag) return;
+  await modal(`<div class="choice"><h3>🏴 ${esc(flag.text)}</h3>
+      <p class="muted small">${esc(flag.date)}${flag.time ? ' at ' + esc(flag.time) : ''}</p>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Close</button><button type="button" class="btn danger del-flag">Delete flag</button></div></div>`,
+  (dlg, close) => {
+    $('.del-flag', dlg).onclick = async () => {
+      s.flags = (s.flags || []).filter((f) => f.id !== flagId);
+      await E.persist(st(), ['settings']); syncSharedSoon();
+      E.invalidate(); await render();
+      toast(`🏴 Flag "${flag.text}" removed`);
+      close();
+    };
+  }, { cls: 'narrow' });
+}
+
 function sheetMenu(items) {
   return modal(`<div class="choice"><div class="sheet-menu">${items.map((it, i) => it === '-' ? '<div class="sep"></div>'
     : typeof it === 'string' ? `<div class="lbl">${esc(it)}</div>`
@@ -690,6 +716,7 @@ export async function openSettings() {
       || JSON.stringify(r.settings.notifyProfiles) !== JSON.stringify(before.notifyProfiles)) st().tasks = st().tasks.map((t) => ({ ...t, rev: Date.now() }));
     await hoursChanged(before, r.settings);
     if (r.settings.sleepEvents && !before.sleepEvents) autoBlocks({ force: true });
+    if (r.settings.goalSlot && !before.goalSlot) goalSlotCheck({ force: true });
     if (r.settings.game?.on && r.settings.game.started !== before.game?.started && before.game?.on) { app.gameToday = null; toast(`🎮 Counting XP from ${T.format(T.dayStart(r.settings.game.started, tz()), tz(), { day: 'numeric', month: 'long' })} — adding it up…`, { ms: 4000 }); gameRefresh(); }
     if (r.settings.game?.on && before.game?.on && GM.cfgHash(r.settings) !== GM.cfgHash(before) && r.settings.game.started === before.game?.started) { app.gameToday = null; toast('🎮 Recounting your XP from the start with the new settings…', { ms: 4000, noUndo: true }); gameRefresh(); }
     if (r.settings.game?.on !== before.game?.on) { app.gameToday = null; if (r.settings.game?.on) { toast('🎮 Game mode on — earn XP and level up!', { ms: 5000 }); gameRefresh(); } renderGamePanel(); render(); }

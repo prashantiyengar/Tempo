@@ -155,6 +155,7 @@ body.is-dragging { cursor: grabbing; user-select: none; }
 .warnbox { background: color-mix(in srgb, var(--warn) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent); border-radius: 8px; padding: 6px 9px; margin-left: 0; }
 .deadline { position: absolute; left: 0; right: 0; border-top: 2px dashed var(--c); z-index: 4; pointer-events: auto; }
 .deadline span { position: absolute; right: 2px; top: -17px; font-size: 10px; font-weight: 700; color: var(--c); background: var(--panel); padding: 0 4px; border-radius: 4px; white-space: nowrap; max-width: 95%; overflow: hidden; text-overflow: ellipsis; }
+.custom-flag { cursor: pointer; }
 
 .ev { position: absolute; border-radius: 6px; background: var(--c); color: #fff; padding: 3px 7px; overflow: hidden; cursor: pointer; z-index: 3;
   box-shadow: 0 0 0 1px var(--panel); font-size: 12px; line-height: 1.25; user-select: none; touch-action: none; }
@@ -716,8 +717,11 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .grave-list { display: flex; flex-direction: column; gap: 4px; }
 .grave-row { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 8px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); flex-wrap: wrap; }
 .grave-row.archived { opacity: .6; }
-.grave-icon { flex: none; font-size: 14px; }
-.grave-t { flex: 1; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.grave-stone { display: flex; align-items: flex-start; gap: 6px; flex: 1; min-width: 0; }
+.grave-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.grave-icon { flex: none; font-size: 16px; }
+.grave-t { font-size: 13px; overflow-wrap: anywhere; }
+.grave-life { font-size: 11px; }
 .grave-acts { display: inline-flex; gap: 2px; flex: none; opacity: .75; }
 .grave-row:hover .grave-acts { opacity: 1; }
 #btn-resched[hidden] { display: none !important; }

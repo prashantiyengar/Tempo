@@ -3,10 +3,12 @@
 // Later notes, notes, habits and goals, and "share my free time".
 import * as T from './tz.js';
 import * as I from './items.js';
+import * as E from './engine.js';
+import * as S from './scheduler.js';
 import { app, st, set, tz } from './core.js';
 import { $, $$, esc, modal, setHTML } from './ui.js';
 import { dayNotes } from './notes.js';
-import { collectItems, openSettings, refreshFromServer, render, toast } from './app.js';
+import { collectItems, openSettings, refreshFromServer, render, syncSharedSoon, toast } from './app.js';
 import { freeSlots, openAiConsole } from './assistant.js';
 import { fillSinceLast } from './leave.js';
 import { editGoal, openReview } from './review-ui.js';
@@ -26,6 +28,7 @@ export const COMMANDS = [
   { id: 'new-task', ic: '⧉', label: 'New task (one block or split into sessions)', keys: ['a'], menus: ['fab'], run: () => newTask({ kind: 'generic' }) },
   { id: 'new-reading', ic: '📖', label: 'New reading plan', menus: ['fab'], run: () => newTask({ kind: 'reading' }) },
   { id: 'new-project', ic: '📁', label: 'New project (a chain of tasks and events)', menus: ['fab'], run: () => openProject(null) },
+  { id: 'new-flag', ic: '🏴', label: 'New flag on the calendar', menus: ['fab'], run: () => newFlag() },
   { id: 'habits', ic: '✓', label: 'Habits', menus: ['fab'], run: () => { app.view = 'goals'; render(); } },
   { id: 'late', ic: '⏰', label: 'Started late', menus: ['fab', 'more', 'now'], run: () => startedLate() },
   { id: 'early', ic: '⏹', label: 'Finished early', keys: ['f'], menus: ['fab', 'more', 'now'], run: () => finishedEarly() },
@@ -104,6 +107,7 @@ export function searchAll(q, items = pool || []) {
   for (const n of s.notes || []) if (hit(n.text, ws)) out.push({ kind: 'Note', ic: '🗒', label: n.text.split('\n')[0].slice(0, 80), sub: T.fmtDate(n.for ? T.dayStart(n.for, z) : n.at, z), rank: 43 + score(n.text, ws), run: () => dayNotes(n.for || T.dayKey(n.at, z)) });
   for (const h of s.habits || []) if (!h.archived && hit(h.name, ws)) out.push({ kind: 'Habit', ic: '✓', label: h.name, sub: 'habit', rank: 42 + score(h.name, ws), run: () => habitDetail(h.id) });
   for (const [key, list] of Object.entries(s.goals || {})) for (const g of list || []) if (hit(g.text || '', ws)) out.push({ kind: 'Goal', ic: '◎', label: g.text, sub: key.startsWith('w:') ? `week of ${T.fmtDate(T.dayStart(key.slice(2), z), z)}` : key.startsWith('m:') ? key.slice(2) : 'this year', rank: 41 + score(g.text, ws), run: () => editGoal(key, g.id) });
+  for (const f of s.flags || []) if (hit(f.text, ws)) out.push({ kind: 'Flag', ic: '🏴', label: f.text, sub: T.fmtDate(T.dayStart(f.date, z), z) + (f.time ? ' ' + f.time : ''), rank: 40 + score(f.text, ws), run: () => { app.cursor = app.miniCursor = f.date; if (!['day', '3day', 'week'].includes(app.view)) app.view = innerWidth < 760 ? 'day' : 'week'; render(); } });
   return out.sort((a, b) => b.rank - a.rank).slice(0, 60);
 }
 // Go to an event or session and open it
@@ -117,6 +121,35 @@ async function showItem(it) {
   const r = node?.getBoundingClientRect() || { left: innerWidth / 2 - 150, top: innerHeight / 3, right: innerWidth / 2 + 150, bottom: innerHeight / 3 + 40, width: 300, height: 40 };
   openItem(live, r);
 }
+
+// ---------- new flag ----------
+async function newFlag(prefillDate) {
+  const s = set(), z = tz();
+  const today = T.dayKey(Date.now(), z);
+  const dateVal = prefillDate || app.cursor || today;
+  await modal(`<form class="choice"><h2>🏴 New flag</h2>
+      <label class="field"><span>Text</span><input name="text" required placeholder="e.g. Project deadline" autocomplete="off"></label>
+      <div class="row"><label class="field"><span>Date</span><input type="date" name="date" value="${esc(dateVal)}" required></label>
+      <label class="field"><span>Time (optional)</span><input type="time" name="time"></label>
+      <label class="field"><span>Color</span><input type="color" name="color" value="#e74c3c"></label></div>
+      <div class="actions"><button type="button" class="btn ghost" data-close>Cancel</button><button type="submit" class="btn primary">Add flag</button></div></form>`,
+  (dlg, close) => {
+    $('form', dlg).onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target;
+      const text = f.text.value.trim();
+      if (!text) return;
+      const flag = { id: S.newId('f'), text, date: f.date.value, ...(f.time.value ? { time: f.time.value } : {}), color: f.color.value };
+      const flags = [...(s.flags || []), flag];
+      s.flags = flags;
+      await E.persist(st(), ['settings']); syncSharedSoon();
+      E.invalidate(); await render();
+      toast(`🏴 Flag "${text}" added`);
+      close();
+    };
+  }, { cls: 'narrow' });
+}
+export { newFlag };
 
 export async function openCommandBar(initial = '') {
   if (document.querySelector('dialog[open] .cmd-bar')) return;

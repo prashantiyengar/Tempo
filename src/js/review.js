@@ -9,6 +9,18 @@ import { esc } from './ui.js';
 const dur = (c) => Math.round((c.end - c.start) / T.MIN);
 const catOf = (settings, id) => (settings.categories || []).find((c) => c.id === id);
 
+// How often an item was moved before it was given up on: moves in the history (by hand or pushed later by the
+// planner; at most once a day so one long drag doesn't count many times), plus earlier rescues from the Graveyard.
+const MOVE_KINDS = new Set(['moved', 'resched', 'movedQuiet', 'skipped']);
+export function rescheduleCount(item, history, z) {
+  const days = new Set();
+  for (const h of history) {
+    if (!MOVE_KINDS.has(h.kind)) continue;
+    const same = (item.taskId && h.taskId === item.taskId) || (item.evId && h.evId === item.evId) || (!h.taskId && !h.evId && h.title && h.title === item.text);
+    if (same) days.add(T.dayKey(h.at, z));
+  }
+  return days.size;
+}
 export function logEntry(settings, e) {
   const h = { id: S.newId('h'), at: Date.now(), ...e };
   settings.history = [...(settings.history || []), h].slice(-250);

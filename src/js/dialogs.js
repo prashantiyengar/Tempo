@@ -933,3 +933,16 @@ export const TASK_COLORS_PUBLIC = TASK_COLORS;
 export { eventDialog } from './event-dialog.js';
 export { taskDialog } from './task-dialog.js';
 export { settingsDialog } from './settings-dialog.js';
+
+// Something new has no category: ask once, quickly. Resolves to the picked category, null (Skip), or 'never'
+// ("Don't ask again" - the caller turns the setting off).
+export function askCategoryPick(settings, title, { what = 'task', onCreate } = {}) {
+  let picked = null;
+  return modal(`<div class="choice ask-cat"><h2>No category selected</h2>
+    <p class="muted small">Would you like to pick one for “${esc(title)}” before it's scheduled? Tap one, or add a new one. Categories color-code your ${what}s and group your time in Analysis.</p>
+    <div class="cat-host" style="margin:10px 0 4px"></div>
+    <div class="actions"><button type="button" class="btn ghost link never">Don't ask again</button><span class="grow"></span><button type="button" class="btn ghost" data-close>Skip</button></div></div>`, (dlg, close) => {
+    C.categoryPicker($('.cat-host', dlg), { settings, selected: null, allowNone: false, onChange: (c) => { picked = c; close('ok'); }, onCreate });
+    $('.never', dlg).onclick = () => close('never');
+  }, { cls: 'narrow' }).then((r) => (r === 'never' ? 'never' : r === 'ok' ? picked : null));
+}
