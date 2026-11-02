@@ -369,11 +369,16 @@ function renderTimeGrid(days, items) {
     }
     // events
     const segs = timed.map((it) => ({ it, seg: segMinutes(it, k) })).filter((x) => x.seg)
-      .map(({ it, seg }) => ({ it, ...seg, s: seg.s, e: Math.max(seg.e, seg.s + 15) }));
+      .map(({ it, seg }) => ({ it, ...seg, s: seg.s, e: Math.max(seg.e, seg.s + 1) }));
+    // Columns come from the real times, so back-to-back events (one ending at 14:21, the next starting at 14:21 or
+    // 14:25) stay full width. Short events are drawn at least 15 minutes tall — but never into the next event.
     for (const g of X.layoutColumns(segs)) {
       const it = g.it;
       try {
-      const top = (g.s / 60) * hh, h = Math.max(16, ((g.e - g.s) / 60) * hh - 2);
+      let vis = Math.max(g.e, g.s + 15);
+      const nextS = Math.min(...segs.filter((x) => x !== g && x.s >= g.e && x.s < vis).map((x) => x.s));
+      if (Number.isFinite(nextS)) vis = Math.max(g.e, nextS);
+      const top = (g.s / 60) * hh, h = Math.max(Number.isFinite(nextS) ? 6 : 16, ((vis - g.s) / 60) * hh - 2);
       const left = (g.col / g.cols) * 100, width = (1 / g.cols) * 100;
       const short = h < 36;
       const timeStr = `${T.fmtTime(it.start, z, s.h12)} – ${T.fmtTime(it.end, z, s.h12)}`;

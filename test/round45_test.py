@@ -39,7 +39,7 @@ async def main():
             note = await page.text_content('.popover .qc-note') if await page.query_selector('.popover .qc-note') else ''
             return r, note
         r1, n1 = await tap_at(15)
-        check('1. a tap in a gap of up to 4 h fills it: since the last event till the next', r1 == ['14:00', '16:00'] and 'Swim' in n1 and 'Lunch' in n1, (r1, n1))
+        check('1. a tap in a gap of up to 4 h fills it: since the last event till the next', r1 == ['14:01', '16:00'] and 'Swim' in n1 and 'Lunch' in n1, (r1, n1))
         # nudges: just − and +, the steps show for a moment
         ts = await page.eval_on_selector_all('.popover .qc-t', 'rs => rs.map(r => [...r.querySelectorAll(".ndg-t, .ndg-set button")].filter(b => b.offsetParent).map(b => b.textContent))')
         await page.click('.popover .qc-t:first-child .ndg-t[data-sign="1"]'); await page.wait_for_timeout(200)
@@ -51,11 +51,11 @@ async def main():
         await page.screenshot(path=f'{OUT}/r45-nudges.png')
         await page.wait_for_timeout(4000)
         gone = await page.eval_on_selector_all('.popover .ndg-set button', 'bs => bs.filter(b => b.offsetParent).length')
-        check('2. the −/+ buttons: only − and + show; tapping one shows the same steps both ways (5, 10, 15, 30 min, 1 h)', ts == [['−', '+'], ['−', '+']] and plus == ['+5m', '+10m', '+15m', '+30m', '+1h'] and minus == ['−5m', '−10m', '−15m', '−30m', '−1h'] and st == '13:50', (ts, plus, minus, st))
+        check('2. the −/+ buttons: only − and + show; tapping one shows the same steps both ways (5, 10, 15, 30 min, 1 h)', ts == [['−', '+'], ['−', '+']] and plus == ['+5m', '+10m', '+15m', '+30m', '+1h'] and minus == ['−5m', '−10m', '−15m', '−30m', '−1h'] and st == '13:51', (ts, plus, minus, st))
         check('3. they fold away a few seconds after the last use', gone == 0, gone)
         await page.click('.popover .qc-cancel')
         r2, n2 = await tap_at(19)
-        check('4. a longer gap: a tap near the earlier event starts when it ended', r2 == ['18:00', '19:00'] and 'Read' in n2, (r2, n2))
+        check('4. a longer gap: a tap near the earlier event starts when it ended', r2 == ['18:01', '19:01'] and 'Read' in n2, (r2, n2))
         await page.click('.popover .qc-cancel')
         r3, n3 = await tap_at(22.5)
         check('5. …and a tap near the later event ends when it starts', r3 == ['22:00', '23:00'] and 'Dinner' in n3, (r3, n3))

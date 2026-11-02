@@ -76,13 +76,12 @@ export const autoBlocks = job(async () => {
     const gaps = S.subtract([{ start: j.st, end: j.en }], busy);
     for (let gi = 0; gi < gaps.length; gi++) {
       const g0 = gaps[gi];
-      // When the first gap doesn't start at the window start, an event from before the window
-      // (e.g. sleep ending at 06:30 in a 06:00–08:00 fill-in) bleeds in. Snap the gap start to
-      // the next 15-min boundary so the fill-in doesn't start the instant sleep ends.
-      const bleedIn = gi === 0 && g0.start > j.st && inWin.some((it) => it.start < j.st && it.end > j.st);
-      const snap15 = (ms) => { const q = 15 * T.MIN; const r = ms % q; return r === 0 ? ms + q : Math.ceil(ms / q) * q; };
-      const g = bleedIn ? { start: snap15(g0.start), end: g0.end } : g0;
-      if (g.end - g.start < 15 * T.MIN) continue;
+      // Fill-ins: a gap that starts where an event ends (inside the window, or one bleeding in from before it, such
+      // as sleep ending at 06:30 in a 06:00–08:00 fill-in) begins 2 minutes after that event; it still needs at
+      // least 15 minutes of free time. (Sleep blocks start right after.)
+      const afterEvent = j.r.doneKey === 'autoFillDone' && (g0.start > j.st || inWin.some((it) => it.start < j.st && it.end >= j.st && I.takesTime(it)));
+      const g = afterEvent ? { start: g0.start + 2 * T.MIN, end: g0.end } : g0;
+      if (g0.end - g0.start < 15 * T.MIN || g.end <= g.start) continue;
       const priv = { [j.r.tag]: key, ...(cat ? { tempoCategory: cat.id, tempoCatName: cat.name, tempoCatColor: cat.color, tempoCatIcon: cat.icon || '' } : {}) };
       const createdEv = await EV.createEvent(st(), cal, { ...(cat ? { colorId: G.nearestColorId(cat.color) } : {}), summary: j.r.title, start: { dateTime: new Date(g.start).toISOString(), timeZone: z }, end: { dateTime: new Date(g.end).toISOString(), timeZone: z },
         transparency: 'opaque', reminders: { useDefault: false, overrides: [] }, extendedProperties: { private: priv } });

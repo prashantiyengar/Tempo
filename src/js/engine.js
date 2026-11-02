@@ -30,6 +30,13 @@ export async function loadState() {
     o.settingsVersion = 3;
     await set({ settings: o });
   }
+  // Version 4: "since last event" starts 1 minute after the event by default (was 0)
+  if (raw.settings && raw.settings.settingsVersion < 4) {
+    const o = raw.settings;
+    if (!o.sinceLastBuffer) o.sinceLastBuffer = 1;
+    o.settingsVersion = 4;
+    await set({ settings: o });
+  }
   const settings = { ...S.DEFAULT_SETTINGS, ...(raw.settings || {}) };
   if (!Array.isArray(settings.categories)) settings.categories = S.DEFAULT_SETTINGS.categories;
   settings.bounds = { ...S.DEFAULT_SETTINGS.bounds, ...(settings.bounds || {}) };
@@ -601,10 +608,12 @@ export async function syncTasks(state, apply, onProgress) {
 // shows up in your week). Each setting merges on its own: what you changed here since the last sync wins, the rest
 // comes from Google. A device syncing for the first time keeps its own settings where Google only has defaults.
 const SHARED_PART = 450;
+// Not shared on purpose (each device keeps its own): tz (follows the device), hourHeight (zoom), keepOn (screen),
+// driveBackupAt, settingsVersion, and the bookkeeping of this sync (sharedBase, sharedHash, sharedRev …).
 export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bounds', 'overflowBounds', 'chunkMinutes', 'minChunkMinutes', 'breakMinutes',
   'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
-  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'goalRepeats', 'paperCats', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'goalSlot', 'goalSlotDone', 'flags', 'graveRescues', 'later', 'weather', 'leave', 'habits', 'sleepEvents', 'sleepCal', 'sleepDone', 'sleepEventsFrom', 'sleepDelayMin', 'autoFills', 'autoFillDone', 'game', 'notes', 'dayRatings'];
+  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'goalRepeats', 'paperCats', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'goalSlot', 'goalSlotDone', 'flags', 'graveRescues', 'graveyard', 'driveBackup', 'syncTasksToGoogle', 'taskCalendarId', 'hiddenCalendars', 'busyCalendars', 'later', 'weather', 'leave', 'habits', 'sleepEvents', 'sleepCal', 'sleepDone', 'sleepEventsFrom', 'sleepDelayMin', 'autoFills', 'autoFillDone', 'game', 'notes', 'dayRatings'];
 const normCat = ({ id, name, color, icon, prefer, parent }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}), ...(parent ? { parent } : {}) });
 // Game data each device works out for itself from your calendar (the day-by-day XP log and the rules it was counted
 // with) isn't shared: it grows every day and would soon pass Google's size limit; only the game's inputs are.
@@ -660,6 +669,39 @@ const mergeHistory = (a = [], b = []) => {
   for (const h of [...a, ...b]) if (h?.id) m.set(h.id, h);
   return [...m.values()].sort((x, y) => (x.at || 0) - (y.at || 0)).slice(-250);
 };
+// Three-way merge of one setting: l = this device, r = Google's copy, b = what both had at the last sync.
+// What changed on one side only wins; when both changed, objects (maps like a habit's day log, goals by period)
+// merge key by key and lists of things with ids (habits, projects, notes, goals …) item by item; anything else
+// (a number, a plain list) takes this device's value.
+const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
+const idList = (v) => Array.isArray(v) && v.length > 0 && v.every((x) => isObj(x) && x.id != null);
+export function merge3(l, r, b) {
+  const hl = hashOf(l), hr = hashOf(r), hb = hashOf(b);
+  if (hl === hr || hr === hb) return l;
+  if (hl === hb) return r;
+  if (isObj(l) && isObj(r)) {
+    const out = {}, bo = isObj(b) ? b : {};
+    for (const k of new Set([...Object.keys(l), ...Object.keys(r)])) {
+      const v = merge3(l[k], r[k], bo[k]);
+      if (v !== undefined) out[k] = v;
+    }
+    return out;
+  }
+  if ((idList(l) || !l?.length) && (idList(r) || !r?.length) && Array.isArray(l) && Array.isArray(r) && (idList(l) || idList(r))) {
+    const bl = Array.isArray(b) ? b : [], bm = new Map(bl.filter((x) => x?.id != null).map((x) => [x.id, x]));
+    const lm = new Map(l.map((x) => [x.id, x])), rm = new Map(r.map((x) => [x.id, x]));
+    const out = [];
+    const take = (id) => {
+      const x = merge3(lm.get(id), rm.get(id), bm.get(id));
+      if (x !== undefined) out.push(x);
+    };
+    // Google's order, then what was added here (in this device's order)
+    for (const x of r) take(x.id);
+    for (const x of l) if (!rm.has(x.id)) take(x.id);
+    return out;
+  }
+  return l;
+}
 // Merge Google's copy into this device's. `base` = what both had at the last sync (null if never synced).
 export function mergeShared(local, remote, base) {
   const out = {};
@@ -687,8 +729,20 @@ export function mergeShared(local, remote, base) {
       } else out[k] = r;
       continue;
     }
-    if (changedHere || (!base && isDefault(k, r) && !isDefault(k, l))) { out[k] = l; if (hashOf(l) !== hashOf(r)) keptLocal = true; }
-    else out[k] = r;
+    if (!base) {
+      // first sync of this device: lists of things with ids (habits, notes, Later, the Graveyard …) keep both sides;
+      // otherwise Google's value, unless only this device has changed it from the default
+      if (idList(l) && Array.isArray(r)) out[k] = merge3(l, r, []);
+      else if (!isDefault(k, l) && isDefault(k, r)) out[k] = l;
+      else out[k] = r;
+      if (hashOf(out[k]) !== hashOf(r)) keptLocal = true;
+      continue;
+    }
+    // Both devices may have changed the same setting (one edits a habit, the other ticks a day or its automatic
+    // ticks update): merge field by field against what both had at the last sync, so neither change is lost.
+    out[k] = changedHere ? merge3(l, r, base[k]) : r;
+    if (out[k] === undefined) delete out[k];
+    if (hashOf(out[k]) !== hashOf(r)) keptLocal = true;
   }
   return { merged: out, push: keptLocal };
 }

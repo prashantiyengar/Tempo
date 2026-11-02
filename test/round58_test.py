@@ -119,7 +119,7 @@ async def main(app):
     # ——————————————————————————————————————————————
     # We test the fillWindows and subtract logic.
     # Create a page with a sleep block ending at 6:30 and a fill-in block 6:00-8:00.
-    # The fill-in event should start at 6:45 (next 15-min boundary after 6:30), not 6:30.
+    # The fill-in event should start at 6:32 (2 minutes after sleep ends), not 6:30.
     page3 = await app.page(
         settings={
             'tz': 'UTC',
@@ -144,7 +144,7 @@ async def main(app):
     # Sleep block would be 23:00 on 10/27 to 06:30 on 10/28.
     # Fill-in window is 06:00-08:00 on 10/28.
     # The gap in the fill-in window after sleep is 06:30-08:00.
-    # With rounding, the fill-in should start at 06:45 (next 15-min boundary after 06:30).
+    # Since Round 63 the fill-in starts 2 minutes after the event: 06:32.
     evs3 = await page3.evaluate(
         "window.tempo.run([{cmd:'listEvents', from:'2024-10-28', to:'2024-10-29'}])"
     )
@@ -157,11 +157,11 @@ async def main(app):
     if fill_events:
         fill_start = fill_events[0].get('start', '')
         # Should be 06:45 not 06:30
-        app.check('11. fill-in starts at 06:45 (rounded up from 06:30)',
-                   '06:45' in fill_start,
+        app.check('11. fill-in starts at 06:32 (2 min after sleep ends at 06:30)',
+                   '06:32' in fill_start,
                    f'fill-in starts at {fill_start}')
     else:
-        app.check('11. fill-in starts at 06:45', False, 'no fill-in event')
+        app.check('11. fill-in starts at 06:32', False, 'no fill-in event')
 
     await page3.close()
 

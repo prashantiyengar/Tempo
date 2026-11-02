@@ -175,12 +175,15 @@ export function renderWeek({ days, items, settings, title, scale = 2, summary = 
     const ds = T.dayStart(k, tz), de = T.dayStart(T.addDays(k, 1), tz);
     const segs = timed.filter((it) => it.end > ds && it.start < de).map((it) => ({
       it, s: Math.max(it.start, ds), e: Math.min(it.end, de),
-    })).map((g) => ({ ...g, s: (g.s - ds) / T.MIN, e: Math.max((g.e - ds) / T.MIN, (g.s - ds) / T.MIN + 15) }));
-    for (const g of layoutColumns(segs)) {
+    })).map((g) => ({ ...g, s: (g.s - ds) / T.MIN, e: Math.max((g.e - ds) / T.MIN, (g.s - ds) / T.MIN + 1) }));
+    for (const g of layoutColumns(segs)) { // columns from the real times; short blocks drawn taller, but not into the next
       const x = gutter + i * colW + 2 + (g.col * (colW - 4)) / g.cols;
       const w = (colW - 4) / g.cols - 2;
       const y = top + (g.s / 60 - h0) * hourH + 1;
-      const h = Math.max(14, ((g.e - g.s) / 60) * hourH - 2);
+      let vis = Math.max(g.e, g.s + 15);
+      const nextS = Math.min(...segs.filter((o) => o !== g && o.s >= g.e && o.s < vis).map((o) => o.s));
+      if (Number.isFinite(nextS)) vis = Math.max(g.e, nextS);
+      const h = Math.max(Number.isFinite(nextS) ? 5 : 14, ((vis - g.s) / 60) * hourH - 2);
       if (y + h < top) continue;
       const col = g.it.color;
       const done = g.it.status === 'done';

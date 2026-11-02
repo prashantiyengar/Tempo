@@ -59,5 +59,13 @@ eq('months keep their day (31st → last day of shorter months)', [T.addMonthsKe
   eq('anchored repeats: default 3 months = 5 times every 3 weeks; occurrences from the start day', [S.defaultRepeatCount(wed, 'week', 3, 'Europe/Berlin', true), S.periodsOf(task, { tz: 'Europe/Berlin', weekStart: 1 }, wed - 1, wed + 400 * T.DAY).map((p) => p.key)],
     [5, ['2026-11-04', '2026-11-25', '2026-12-16', '2027-01-06', '2027-01-27']]); }
 
+{ // settings changed on two devices merge field by field
+  const b = [{ id: 'h1', name: 'Run', freq: { times: 3 }, log: { a: 1 } }, { id: 'h2', name: 'Read', log: {} }];
+  const l = [{ id: 'h1', name: 'Run', freq: { times: 5 }, log: { a: 1 } }, { id: 'h2', name: 'Read', log: {} }, { id: 'h3', name: 'New', log: {} }];
+  const r = [{ id: 'h1', name: 'Run', freq: { times: 3 }, log: { a: 1, b: 1 } }];
+  eq('3-way merge: both edits kept, deleted elsewhere stays deleted, new here kept', E.merge3(l, r, b), [{ id: 'h1', name: 'Run', freq: { times: 5 }, log: { a: 1, b: 1 } }, { id: 'h3', name: 'New', log: {} }]);
+  eq('3-way merge: unchanged here takes Google, plain values take this device when both changed', [E.merge3(1, 2, 1), E.merge3(3, 2, 1), E.merge3([1, 2], [2, 3], [1])], [2, 3, [1, 2]]);
+}
+
 console.log(fails ? `${fails} FAILED` : 'ALL PASS');
 process.exitCode = fails ? 1 : 0;

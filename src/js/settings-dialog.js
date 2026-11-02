@@ -27,7 +27,7 @@ const FIELDS = [
   ['hourHeight', 'hourHeight', 'num', { min: 28, max: 120, def: 48 }], ['snapMinutes', 'snapMinutes', 'int'], ['defaultEventMinutes', 'defaultEventMinutes', 'num', { def: 60 }],
   ['chunkMinutes', 'chunkMinutes', 'num', { min: 5, def: 60 }], ['minChunkMinutes', 'minChunkMinutes', 'num', { min: 5, empty: null }],
   ['breakMinutes', 'breakMinutes', 'num', { min: 0, def: 0 }], ['wiggleMinutes', 'wiggleMinutes', 'num', { min: 0, empty: 15, zero: true }],
-  ['sinceLastBuffer', 'sinceLastBuffer', 'num', { min: 0, max: 15, def: 0, round: true }], ['tillNextBuffer', 'tillNextBuffer', 'num', { min: 0, max: 15, def: 0, round: true }],
+  ['sinceLastBuffer', 'sinceLastBuffer', 'num', { min: 0, max: 15, def: 1, round: true }], ['tillNextBuffer', 'tillNextBuffer', 'num', { min: 0, max: 15, def: 0, round: true }],
   ['paperScope', 'paperScope', 'str'], ['goalNotice', 'goalNotice', 'chk'], ['goalNoticeAt', 'goalNoticeAt', 'str', { def: '09:00' }], ['goalSlot', 'goalSlot', 'chk'],
   ['sleepEvents', 'sleepEvents', 'chk'], ['sleepCal', 'sleepCal', 'str'], ['sleepAssume', 'sleepAssume', 'chk'], ['sleepCategory', 'sleepCategory', 'str', { empty: null }],
   ['sleepStart', 'sleepStart', 'str', { def: '23:00' }], ['sleepEnd', 'sleepEnd', 'str', { def: '07:00' }], ['sleepDelayMin', 'sleepDelayMin', 'num', { min: 0, def: 0 }],

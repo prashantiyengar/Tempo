@@ -40,6 +40,7 @@ export const DEFAULT_SETTINGS = {
   dailyCapMinutes: 0,      // most task time per day across all tasks (0 = no cap)
   marginDays: 0,           // default safety margin: aim to finish this many days before a deadline
   repeatHorizonDays: 28,   // repeating tasks are planned this far ahead
+  sinceLastBuffer: 1,      // "since last event" starts this many minutes after it ends
   travelMinutes: 15,       // buffer before and after events that have a (physical) location; 0 = off
   pomodoro: { work: 25, rest: 5 },
   learnSpeed: true,        // adjust reading speed from what you report

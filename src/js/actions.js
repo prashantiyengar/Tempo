@@ -275,12 +275,12 @@ async function fillGap(start, end) {
 // slept since 22:00 the evening before.
 const LOOKBACK = 12 * T.HOUR;
 // `ref` = the time to look back from (the start of the slot you're creating; default: now). The new start is that
-// event's end plus the buffer from Settings (0–15 min).
+// event's end plus the buffer from Settings (0–15 min, 1 by default).
 // Tapping an empty spot between two events: a gap of up to 4 hours is filled from the end of the one before
 // ("since last event") to the start of the next ("till next event"); a longer gap gets the side the tap is closer to.
 export function smartSlot(tapAt, sel) {
   const s = set(), z = tz(), len = Math.max(5, +s.defaultEventMinutes || 60) * T.MIN;
-  const bufA = Math.max(0, Math.min(15, +s.sinceLastBuffer || 0)) * T.MIN, bufB = Math.max(0, Math.min(15, +(s.tillNextBuffer ?? s.sinceLastBuffer) || 0)) * T.MIN;
+  const bufA = Math.max(0, Math.min(15, +(s.sinceLastBuffer ?? 1) || 0)) * T.MIN, bufB = Math.max(0, Math.min(15, +(s.tillNextBuffer ?? 0) || 0)) * T.MIN;
   const all = [...(app.items?.values?.() || [])].filter((x) => !x.allDay && !x.declined && x.end > x.start && A.isOccupying(x, s));
   if (all.some((x) => x.start <= tapAt && x.end > tapAt)) return sel; // (on an event: nothing to fill)
   const before = all.filter((x) => x.end <= tapAt && x.end > tapAt - LOOKBACK), after = all.filter((x) => x.start > tapAt && x.start < tapAt + LOOKBACK);
@@ -296,7 +296,7 @@ export function smartSlot(tapAt, sel) {
 export async function lastEventEnd({ ref = null, exclude = null } = {}) {
   const now = nowMin(), z = tz();
   const at = ref ?? now, day = T.dayKey(at, z);
-  const buf = Math.max(0, Math.min(15, +set().sinceLastBuffer || 0)) * T.MIN;
+  const buf = Math.max(0, Math.min(15, +(set().sinceLastBuffer ?? 1) || 0)) * T.MIN;
   const items = (await collectItems([T.addDays(day, -1), day])).filter((x) => !x.allDay && x.key !== exclude && x.end <= at && x.end > at - LOOKBACK && A.isOccupying(x, set()));
   if (!items.length) return { start: at - LOOKBACK, end: now, found: false, note: 'No event in the 12 hours before — starting 12 hours earlier; adjust the start as needed.' };
   const last = items.reduce((a, b) => (b.end > a.end ? b : a));
@@ -307,7 +307,7 @@ export async function lastEventEnd({ ref = null, exclude = null } = {}) {
 // "Till next event": the start of the next event after `ref` (looking ahead up to 12 hours), minus the buffer.
 export async function nextEventStart({ ref, exclude = null } = {}) {
   const z = tz(), at = ref ?? nowMin(), day = T.dayKey(at, z);
-  const buf = Math.max(0, Math.min(15, +(set().tillNextBuffer ?? set().sinceLastBuffer) || 0)) * T.MIN;
+  const buf = Math.max(0, Math.min(15, +(set().tillNextBuffer ?? 0) || 0)) * T.MIN;
   const items = (await collectItems([day, T.addDays(day, 1)])).filter((x) => !x.allDay && x.key !== exclude && x.start > at && x.start <= at + LOOKBACK && A.isOccupying(x, set()));
   if (!items.length) return { found: false, note: 'No event in the 12 hours after this — set the end yourself.' };
   const next = items.reduce((a, b) => (b.start < a.start ? b : a));

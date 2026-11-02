@@ -72,7 +72,7 @@ async def main():
         check('4. busy XP is lower: an hour of an event 14 (was 28), an hour of a task session 18 (was 36)', r['ev'] == 14 and r['se'] == 18 and r['rulesV'] == 7, (r['ev'], r['se']))
         # ---- 5. fill-in blocks
         f0 = fills()
-        check('5. the 18:00–20:00 window is filled with Childcare around the shopping trip', ('18:00', '19:00', '🧸 Childcare') in f0 and ('19:30', '20:00', '🧸 Childcare') in f0, f0)
+        check('5. the 18:00–20:00 window is filled with Childcare around the shopping trip', ('18:00', '19:00', '🧸 Childcare') in f0 and ('19:32', '20:00', '🧸 Childcare') in f0, f0)  # 2 min after the trip (Round 63)
         check('6. “skip if anything is planned”: a 10-minute call keeps 14:00–16:00 empty', not any(x[2].endswith('Quiet time') for x in f0) and 'fb:2026-10-27' in await page.evaluate("window.__tempo.app.state.settings.autoFillDone"), f0)
         check('7. a block with a 5-hour wait isn\'t added yet (its window ended 4 h ago)', not any(x[2].endswith('Play') for x in f0), f0)
         check('8. sleep with a 15-hour wait: last night\'s block isn\'t added yet (night ended 14 h ago)', not sleeps(), len(sleeps()))
