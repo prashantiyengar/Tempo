@@ -1162,7 +1162,7 @@ body.touch-lock, body.touch-lock * { touch-action: none !important; user-select:
 .hb-c:hover { background: var(--off); }
 .hb-c.on { color: var(--c); }
 .hb-c.skip { color: color-mix(in srgb, var(--c) 55%, var(--muted)); font-size: 17px; }
-.hb-c.num { font-size: 14px; }
+.hb-c.num { font-size: 14px; width: auto; min-width: 0; } /* not the 76px of number inputs (.num): that pushed the cells out of their day columns */
 .hb-c.num b { font-weight: 700; color: color-mix(in srgb, var(--ink) 30%, transparent); }
 .hb-c.num.on b { color: color-mix(in srgb, var(--c) 70%, var(--muted)); }
 .hb-c.num.full b { color: var(--c); }
@@ -1300,8 +1300,12 @@ button.xp-chip:hover { filter: brightness(.95); text-decoration: underline; }
 .g-xp { font-size: 11px; color: var(--xp-l); font-weight: 600; white-space: nowrap; }
 .g-xp-prev { margin: 0; background: var(--off); border-radius: 8px; padding: 6px 8px; }
 /* dialogs whose content is a div (ranks, habit page, AI console): the body scrolls, also on phones */
-dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console { display: flex; flex-direction: column; max-height: calc(100vh - 32px); }
-@media (max-width: 900px) { dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console { max-height: 100dvh; height: 100%; } }
+/* Dialogs built from a <div> with a header and a body (not a <form>): the body scrolls, not the dialog — on phones the
+   dialog itself doesn't scroll by touch (the Bookcase couldn't be scrolled past the first screen) */
+dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console, dialog.modal > .library, dialog.modal > .day-notes,
+dialog.modal > div:has(> .dlg-body) { display: flex; flex-direction: column; max-height: calc(100vh - 32px); }
+@media (max-width: 900px) { dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console, dialog.modal > .library, dialog.modal > .day-notes,
+  dialog.modal > div:has(> .dlg-body) { max-height: 100dvh; height: 100%; } }
 .game-cfg { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 12px; margin: 8px 0; }
 .game-cfg .field span { font-size: 12px; }
 .game-adv summary { cursor: pointer; }
@@ -1438,7 +1442,7 @@ dialog.modal > .g-details, dialog.modal > .hb-detail, dialog.modal > .ai-console
 .game-panel.min .gp-bar { height: 3px; margin-top: 3px; }
 .gp-body[hidden] { display: none; }
 /* Bookcase: covers all the same size */
-.bc-shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 14px 12px; padding: 10px 6px 14px; margin: 6px 0; background: linear-gradient(to bottom, transparent calc(100% - 8px), color-mix(in srgb, #8b5e34 40%, var(--line)) calc(100% - 8px)); border-radius: 6px; flex-shrink: 0; }
+.bc-shelf { flex-shrink: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 14px 12px; padding: 10px 6px 14px; margin: 6px 0; background: linear-gradient(to bottom, transparent calc(100% - 8px), color-mix(in srgb, #8b5e34 40%, var(--line)) calc(100% - 8px)); border-radius: 6px; flex-shrink: 0; }
 .bc-book { display: flex; flex-direction: column; align-items: center; gap: 4px; border: 0; background: none; cursor: pointer; padding: 0; color: var(--ink); min-width: 0; }
 .bc-cover { width: 88px; height: 132px; object-fit: cover; border-radius: 3px 6px 6px 3px; box-shadow: 0 3px 8px rgba(0,0,0,.25), inset 3px 0 0 rgba(0,0,0,.12); background: var(--off); display: block; }
 .bc-cover.none { display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; box-sizing: border-box; font-size: 11px; font-weight: 600; line-height: 1.2; color: #fff; background: linear-gradient(135deg, var(--c, #7c5cff), color-mix(in srgb, var(--c, #7c5cff) 55%, #000)); overflow: hidden; }
