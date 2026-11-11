@@ -1,7 +1,7 @@
 // The task dialog: create or edit a task or reading task (one block or split into sessions), with live preview.
 import * as T from './tz.js';
 import * as S from './scheduler.js';
-import { $, $$, esc, modal, TASK_COLORS, setHTML, linkRange } from './ui.js';
+import { $, $$, esc, modal, TASK_COLORS, setHTML, linkRange, toast } from './ui.js';
 import * as C from './categories.js';
 import * as N from './notify.js';
 import { NUDGE_DAY, askTitle, checkCount, checkSpan, deadlinePreset, describeDays, describeRules, nudgesHTML, sect, weekdayToggles, wireSects } from './dialogs.js';
@@ -328,7 +328,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
           : `≈ ${Math.ceil(total / p.chunk)} sessions of ${p.chunk} min`;
       // Live preview using the last known busy time and the other tasks
       const others = st.tasks.filter((x) => x.id !== draft.id);
-      const { tasks, problems } = S.rescheduleAll([...others, draft], ctx.lastBusy || [], s, Date.now());
+      const { tasks, problems } = S.rescheduleAll([...others, { ...draft, plan: null }], ctx.lastBusy || [], s, Date.now());
       const mine = tasks.find((x) => x.id === draft.id);
       const ss = S.sessions(mine).filter((c) => c.kind !== 'done');
       const prob = problems.find((x) => x.taskId === draft.id);
@@ -399,6 +399,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
       }
       let nt = readWithCat();
       if (!nt.deadline) return;
+      if (nt.earliestStart && nt.deadline <= nt.earliestStart) { toast('The deadline (To) must be after the earliest start (From).', { noUndo: true }); f.deadline.focus(); return; }
       if (!(await checkSpan(nt.repeat ? 'Repeating task' : 'Deadline', nt.deadline, s))) return;
       const others = st.tasks.filter((x) => x.id !== nt.id);
       if (nt.projectId === '__new') {
@@ -407,7 +408,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
         await ctx.saveSettings();
         nt = { ...nt, projectId: proj.id, projectStep: 1 };
       }
-      const mine = S.rescheduleAll([...others, nt], ctx.lastBusy || [], s, Date.now()).tasks.find((x) => x.id === nt.id);
+      const mine = S.rescheduleAll([...others, { ...nt, plan: null }], ctx.lastBusy || [], s, Date.now()).tasks.find((x) => x.id === nt.id);
       const ss = S.sessions(mine).filter((c) => c.kind !== 'done');
       // repeating tasks: the limit applies per day/week
       const n = nt.repeat ? Math.max(0, ...Object.values(ss.reduce((m, c) => ({ ...m, [c.pk]: (m[c.pk] || 0) + 1 }), {}))) : ss.length;

@@ -9,7 +9,7 @@ import * as X from './export.js';
 import * as C from './categories.js';
 import * as AC from './accounts.js';
 import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
-import { $, $$, esc, el, toast as uiToast, closePopover, download, modal, setQuickTz } from './ui.js';
+import { $, $$, esc, el, toast as uiToast, closePopover, download, modal, setLinkTimes, setQuickTz } from './ui.js';
 import * as W from './weather.js';
 import * as GM from './game.js';
 import { LOCAL_COLOR, app, set, st, tz } from './core.js';
@@ -546,14 +546,15 @@ async function runCycle({ sync = true, pull = false } = {}) {
         const rc = C.refreshTaskCategories(set(), st().tasks);
         if (rc.changed.length) { st().tasks = rc.tasks; await saveTasks(false); }
       }
-      if (r.imported.length || r.updated.length || r.removed.length) {
+      if (r.imported.length || r.updated.length || r.removed.length || r.followed?.length) {
         await E.persist(st(), ['tasks', 'orphanGids']);
+        if (r.followed?.length && !(r.imported.length || r.updated.length || r.removed.length)) { E.invalidate(); }
         const parts = [];
         if (r.imported.length) parts.push(`loaded ${r.imported.length} task${r.imported.length > 1 ? 's' : ''} from Google (${r.imported.map((t) => t.title).slice(0, 3).join(', ')}${r.imported.length > 3 ? '…' : ''})`);
         if (r.updated.length) parts.push(`updated ${r.updated.length} changed elsewhere`);
         if (r.removed.length) parts.push(`removed ${r.removed.length} deleted elsewhere`);
         const msg = parts.join('; ');
-        toast(msg[0].toUpperCase() + msg.slice(1), r.removed.length ? { action: 'Undo', ms: 9000, onAction: async () => { for (const t of r.removed) st().tasks.push({ ...t, rev: Date.now() }); await saveTasks(false); cycle(); } } : { ms: 5000 });
+        if (msg) toast(msg[0].toUpperCase() + msg.slice(1), r.removed.length ? { action: 'Undo', ms: 9000, onAction: async () => { for (const t of r.removed) st().tasks.push({ ...t, rev: Date.now() }); await saveTasks(false); cycle(); } } : { ms: 5000 });
       }
     } catch (err) { handleError(err); }
   }
@@ -703,7 +704,7 @@ export async function openSettings() {
     const prevSettings = JSON.parse(JSON.stringify(before));
     st().settings = r.settings;
     await E.persist(st(), ['settings']);
-    setQuickTz(r.settings.tz);
+    setQuickTz(r.settings.tz); setLinkTimes(r.settings.linkTimes);
     if (JSON.stringify(prevSettings) !== JSON.stringify(r.settings)) pushUndo('settings change', async () => { st().settings = { ...prevSettings, sharedHash: null }; await E.persist(st(), ['settings']); E.invalidate(); await render(); await cycle(); });
     const ref = C.refreshTaskCategories(st().settings, st().tasks);
     if (ref.changed.length) st().tasks = ref.tasks;
@@ -879,7 +880,7 @@ async function init() {
   // Web app: finish a Google sign-in that just came back in the URL, or renew an expired one silently.
   const redirect = await G.completeRedirect();
   app.state = await E.loadState();
-  setQuickTz(set().tz);
+  setQuickTz(set().tz); setLinkTimes(set().linkTimes);
   app.cursor = app.miniCursor = T.dayKey(Date.now(), tz());
   if (innerWidth < 760) app.view = 'day';
   { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis', 'review', 'goals'].includes(v)) app.view = v; }

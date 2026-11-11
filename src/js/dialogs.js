@@ -3,7 +3,7 @@ import * as T from './tz.js';
 import * as S from './scheduler.js';
 import * as G from './gcal.js';
 import { parseRRule, expand } from './rrule.js';
-import { $, $$, TASK_COLORS, choose, esc, linkRange, modal, nudgeHTML, setHTML } from './ui.js';
+import { $, $$, TASK_COLORS, choose, esc, linkRange, linkTimesOn, modal, nudgeHTML, setHTML } from './ui.js';
 import * as C from './categories.js';
 import * as P from './projects.js';
 import * as HB from './habits.js';
@@ -94,7 +94,7 @@ export async function checkTaskLimits(ctx, nt) {
   const s = ctx.state.settings;
   if (!(await checkSpan(nt.repeat ? 'Repeating task' : 'Deadline', nt.deadline, s))) return false;
   const others = ctx.state.tasks.filter((x) => x.id !== nt.id);
-  const mine = S.rescheduleAll([...others, nt], ctx.lastBusy || [], s, Date.now()).tasks.find((x) => x.id === nt.id);
+  const mine = S.rescheduleAll([...others, { ...nt, plan: null }], ctx.lastBusy || [], s, Date.now()).tasks.find((x) => x.id === nt.id);
   const ss = S.sessions(mine).filter((c) => c.kind !== 'done');
   const n = nt.repeat ? Math.max(0, ...Object.values(ss.reduce((m, c) => ({ ...m, [c.pk]: (m[c.pk] || 0) + 1 }), {}))) : ss.length;
   return checkCount('sessions', n, s);
@@ -787,7 +787,7 @@ export function projectDialog(ctx, project = null) {
         // changing a step's start moves its end with it (the length stays)
         // (the end fields are updated in place, so typing in the start field isn't interrupted)
         const moveEnd = (e) => {
-          if (!e.isTrusted) return;
+          if (!e.isTrusted || !linkTimesOn()) return;
           const old = { ...steps[i] }; read(); const x = steps[i];
           if (!(old.start && old.end && x.start && x.kind === old.kind)) return;
           x.end = x.start + (old.end - old.start);

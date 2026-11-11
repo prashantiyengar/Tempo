@@ -280,8 +280,16 @@ export function horizon(state, now) {
 export async function reschedule(state, now = Date.now()) {
   const to = horizon(state, now);
   const { busy, gEvents, local } = await busyIntervals(state, now - T.DAY, to);
-  const { tasks, problems, moves } = S.rescheduleAll(state.tasks, busy, state.settings, now);
-  state.tasks = tasks;
+  const { tasks, problems, moves } = S.rescheduleAll(state.tasks, busy, state.settings, now, { me: state.installId });
+  // Stamp the plans this device changed, so other devices follow them instead of planning the task themselves
+  const sig = (t) => JSON.stringify((t.planned || []).map((c) => [c.id, c.start, c.end, c.pk || '']));
+  const before = new Map(state.tasks.map((t) => [t.id, t]));
+  state.tasks = tasks.map((t) => {
+    const b = before.get(t.id);
+    if (t.archived || (b && sig(b) === sig(t) && b.plan && b.plan.rev === (t.rev || 0))) return t;
+    // (always newer than the plan it replaces, even if this device's clock is behind the other one's)
+    return { ...t, plan: { at: Math.max(now, (b?.plan?.at || 0) + 1), by: state.installId, rev: t.rev || 0 } };
+  });
   state.reminderQueue = buildReminderQueue(state, gEvents, local, now);
   return { problems, busy, moves };
 }
@@ -300,6 +308,8 @@ export function chunkBody(task, sess, state) {
     status: 'confirmed',
     reminders: { useDefault: false, overrides: done ? [] : rules },
     extendedProperties: { private: { tempoTask: '1', taskId: task.id, chunkId: sess.id, tSeq: String(sess.index), tStatus: sess.kind, tRev: String(task.rev || task.created || 0),
+      // which device last planned the task, and when: other devices follow that plan (pullTasks)
+      tPlanAt: String(task.plan?.at || ''), tPlanBy: task.plan?.by || '',
       // partly done: credited work (Google merges private properties on patch, so clear them explicitly otherwise)
       ...(sess.partial ? { tCredit: String(+(+sess.credit).toFixed(2)), tSlot: String(sess.slotMin || ''), tSq: sess.squeeze ? '1' : '' } : { tCredit: '', tSlot: '', tSq: '' }),
       // period of a repeating task, pages a reading session covered, minutes actually spent (timer)
@@ -392,7 +402,7 @@ export function taskFromEvents(taskId, events, calId, settings, now = Date.now()
 // Pull task state from Google: import tasks this browser doesn't have, apply newer edits made elsewhere, and drop
 // tasks that were deleted on another device (every one of their sessions is gone from Google).
 export async function pullTasks(state, now = Date.now()) {
-  const res = { imported: [], updated: [], removed: [], calendars: [] };
+  const res = { imported: [], updated: [], followed: [], removed: [], calendars: [] };
   if (!connected(state) || !state.settings.syncTasksToGoogle) return res;
   const from = now - 90 * T.DAY, to = now + 400 * T.DAY;
   const cals = [...new Set([...writableCals(state), defaultTaskCal(state), ...state.tasks.map((t) => taskCal(state, t))])];
@@ -415,17 +425,29 @@ export async function pullTasks(state, now = Date.now()) {
     byTask.get(id).push(ev);
   }
   const tomb = new Set(state.tombstones || []);
+  const fixedStatus = (e) => ['done', 'pinned'].includes(e.extendedProperties?.private?.tStatus);
   for (const [id, evs] of byTask) {
     if (tomb.has(id)) { for (const e of evs) { const g = `${e._cal}::${e.id}`; if (!state.orphanGids.includes(g)) state.orphanGids.push(g); } continue; }
     const local = state.tasks.find((t) => t.id === id);
     const remoteRev = Math.max(...evs.map((e) => +e.extendedProperties?.private?.tRev || 0));
+    // The newest plan on Google (stamped by the device that made it); sessions of older plans that are still being
+    // replaced or removed there are left out, so a half-written plan isn't taken on
+    const stampEv = evs.filter((e) => +e.extendedProperties?.private?.tPlanAt > 0).sort((a, b) => +b.extendedProperties.private.tPlanAt - +a.extendedProperties.private.tPlanAt)[0];
+    const stamp = stampEv ? { at: +stampEv.extendedProperties.private.tPlanAt, by: stampEv.extendedProperties.private.tPlanBy || '', rev: remoteRev } : null;
+    const latest = stamp ? evs.filter((e) => fixedStatus(e) || +e.extendedProperties?.private?.tPlanAt === stamp.at) : evs;
+    const build = () => { const t = taskFromEvents(id, latest, latest[0]._cal, state.settings, now); if (stamp) t.plan = stamp; return t; };
     if (!local) {
-      const t = taskFromEvents(id, evs, evs[0]._cal, state.settings, now);
+      const t = build();
       state.tasks.push(t); res.imported.push(t);
     } else if (remoteRev > (local.rev || 0)) {
-      const t = taskFromEvents(id, evs, evs[0]._cal, state.settings, now);
+      const t = build();
       state.tasks = state.tasks.map((x) => (x.id === id ? { ...t, orphanGids: x.orphanGids || [] } : x));
       res.updated.push(t);
+    } else if (remoteRev === (local.rev || 0) && stamp && stamp.by && stamp.by !== state.installId && stamp.at > (local.plan?.at || 0)) {
+      // the same task, planned more recently on another device: follow that plan (rescheduleAll keeps it while it works here)
+      const t = build();
+      state.tasks = state.tasks.map((x) => (x.id === id ? { ...t, orphanGids: x.orphanGids || [], lastPlan: x.lastPlan } : x));
+      res.followed.push(t);
     }
   }
   // A fresh browser adopts the calendar your tasks already live in as its default for new tasks.
@@ -543,6 +565,7 @@ export async function syncTasks(state, apply, onProgress) {
         // Missing on Google (deleted there, or a write that never arrived): create it again.
         if (j.sess.start > Date.now() - 30 * T.DAY) { if (j.syncHash) repaired++; setGid(j.task.id, j.sess.id, null, null); j.gid = null; j.syncHash = null; }
       } else if (j.syncHash === j.hash && !matches(ev, j.body)) { j.syncHash = null; repaired++; } // changed on Google: overwrite
+      else if (j.syncHash !== j.hash && matches(ev, j.body)) { j.syncHash = j.hash; setGid(j.task.id, j.sess.id, j.gid, j.hash); } // already there as it should be (e.g. a plan taken on from another device)
     }
     const localIds = new Set(state.tasks.map((t) => t.id));
     const tomb = new Set(state.tombstones || []);
@@ -613,7 +636,7 @@ const SHARED_PART = 450;
 export const SHARED_KEYS = ['categories', 'periods', 'projects', 'history', 'bounds', 'overflowBounds', 'chunkMinutes', 'minChunkMinutes', 'breakMinutes',
   'wiggleMinutes', 'sessionWarn', 'sessionMax', 'maxSpanDays', 'askCategory', 'taskReminderMinutes', 'taskEmailReminderMinutes', 'notifyTasks',
   'notifyLocal', 'notifyGoogle', 'defaultReminder', 'defaultEventMinutes', 'weekStart', 'h12', 'weekView', 'assumePastDone', 'allDayBlocks', 'timePrefs',
-  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'goalRepeats', 'paperCats', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'goalSlot', 'goalSlotDone', 'flags', 'graveRescues', 'graveyard', 'driveBackup', 'syncTasksToGoogle', 'taskCalendarId', 'hiddenCalendars', 'busyCalendars', 'later', 'weather', 'leave', 'habits', 'sleepEvents', 'sleepCal', 'sleepDone', 'sleepEventsFrom', 'sleepDelayMin', 'autoFills', 'autoFillDone', 'game', 'notes', 'dayRatings'];
+  'dailyCapMinutes', 'marginDays', 'repeatHorizonDays', 'travelMinutes', 'pomodoro', 'learnSpeed', 'snapMinutes', 'colorLabels', 'readingDefaults', 'outlookClientId', 'holds', 'sinceLastBuffer', 'tillNextBuffer', 'linkTimes', 'notifyProfiles', 'eventProfile', 'taskProfile', 'hoursChange', 'sleepAssume', 'sleepStart', 'sleepEnd', 'sleepCategory', 'reviewAllEvents', 'zodiac', 'paperPeriod', 'horoscopeSource', 'goals', 'goalsMonths', 'goalHeads', 'goalRepeats', 'paperCats', 'paperName', 'paperScope', 'picSources', 'goalNotice', 'goalNoticeAt', 'goalNoticeShown', 'goalSlot', 'goalSlotDone', 'flags', 'graveRescues', 'graveyard', 'driveBackup', 'syncTasksToGoogle', 'taskCalendarId', 'hiddenCalendars', 'busyCalendars', 'later', 'weather', 'leave', 'habits', 'sleepEvents', 'sleepCal', 'sleepDone', 'sleepEventsFrom', 'sleepDelayMin', 'autoFills', 'autoFillDone', 'game', 'notes', 'dayRatings'];
 const normCat = ({ id, name, color, icon, prefer, parent }) => ({ id, name, color, icon: icon || '', ...(prefer ? { prefer } : {}), ...(parent ? { parent } : {}) });
 // Game data each device works out for itself from your calendar (the day-by-day XP log and the rules it was counted
 // with) isn't shared: it grows every day and would soon pass Google's size limit; only the game's inputs are.

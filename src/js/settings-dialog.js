@@ -27,7 +27,7 @@ const FIELDS = [
   ['hourHeight', 'hourHeight', 'num', { min: 28, max: 120, def: 48 }], ['snapMinutes', 'snapMinutes', 'int'], ['defaultEventMinutes', 'defaultEventMinutes', 'num', { def: 60 }],
   ['chunkMinutes', 'chunkMinutes', 'num', { min: 5, def: 60 }], ['minChunkMinutes', 'minChunkMinutes', 'num', { min: 5, empty: null }],
   ['breakMinutes', 'breakMinutes', 'num', { min: 0, def: 0 }], ['wiggleMinutes', 'wiggleMinutes', 'num', { min: 0, empty: 15, zero: true }],
-  ['sinceLastBuffer', 'sinceLastBuffer', 'num', { min: 0, max: 15, def: 1, round: true }], ['tillNextBuffer', 'tillNextBuffer', 'num', { min: 0, max: 15, def: 0, round: true }],
+  ['sinceLastBuffer', 'sinceLastBuffer', 'num', { min: 0, max: 15, def: 1, round: true }], ['linkTimes', 'linkTimes', 'chk'], ['tillNextBuffer', 'tillNextBuffer', 'num', { min: 0, max: 15, def: 0, round: true }],
   ['paperScope', 'paperScope', 'str'], ['goalNotice', 'goalNotice', 'chk'], ['goalNoticeAt', 'goalNoticeAt', 'str', { def: '09:00' }], ['goalSlot', 'goalSlot', 'chk'],
   ['sleepEvents', 'sleepEvents', 'chk'], ['sleepCal', 'sleepCal', 'str'], ['sleepAssume', 'sleepAssume', 'chk'], ['sleepCategory', 'sleepCategory', 'str', { empty: null }],
   ['sleepStart', 'sleepStart', 'str', { def: '23:00' }], ['sleepEnd', 'sleepEnd', 'str', { def: '07:00' }], ['sleepDelayMin', 'sleepDelayMin', 'num', { min: 0, def: 0 }],
@@ -92,6 +92,9 @@ export function settingsDialog(ctx) {
           <label class="field"><span>Default event length (min)</span><input type="number" name="defaultEventMinutes" min="5" step="5" value="${s.defaultEventMinutes}"></label>
           <label class="field"><span>“Since last event” starts this many minutes after it (0–15)</span><input type="number" name="sinceLastBuffer" min="0" max="15" step="1" value="${s.sinceLastBuffer || 0}"></label>
           <label class="field"><span>“Till next event” ends this many minutes before it (0–15)</span><input type="number" name="tillNextBuffer" min="0" max="15" step="1" value="${s.tillNextBuffer ?? s.sinceLastBuffer ?? 0}"></label>
+        </div>
+        <label class="chk"><input type="checkbox" name="linkTimes" ${s.linkTimes ? 'checked' : ''}> When I change <b>From</b>, move <b>To</b> with it (keeps the length; a small ↶ next to To puts the old end back). Off: From and To never change each other</label>
+        <div class="grid3" hidden>
         </div>`)}
         ${sect('s-sleep', 'Sleep', `
           <label class="chk"><input type="checkbox" name="sleepEvents" ${s.sleepEvents ? 'checked' : ''}> Add a sleep block to my calendar for each night that has passed, in the hours below — around anything already there (an event from 2–3 am gives sleep before and after it)</label>

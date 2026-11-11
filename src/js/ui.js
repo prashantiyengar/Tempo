@@ -170,6 +170,11 @@ export const TASK_COLORS = ['#4f6bed', '#0f9d76', '#e2683c', '#c2459b', '#8a5cf6
 // start moves its end by the same amount, so the length stays the same.
 let quickTz = T.systemTz();
 export function setQuickTz(tz) { if (tz && T.isValidTz(tz)) quickTz = tz; }
+// Whether changing "From" moves "To" with it (Settings → New events; off by default: From and To are independent, and
+// a To before the From is reported when you save)
+let linkTimes = false;
+export function setLinkTimes(v) { linkTimes = !!v; }
+export const linkTimesOn = () => linkTimes;
 const QUICK = [['now', 'Now'], ['h', '+1 hour'], ['d', '+1 day'], ['w', '+1 week']];
 export function addDateShortcuts(root) {
   for (const inp of root.querySelectorAll('input[type=datetime-local], input[type=date]')) {
@@ -220,7 +225,7 @@ function applyQuick(inp, v) {
   }
   // keep an event's length: moving the start moves the end too
   const f = inp.form;
-  if (f && inp.name === 'sDate' && f.elements.eDate) {
+  if (linkTimes && f && inp.name === 'sDate' && f.elements.eDate) {
     const end = readMs(f.elements.eDate), start0 = base;
     writeMs(inp, ms);
     if (end != null && start0 != null) writeMs(f.elements.eDate, end + (ms - start0));
@@ -252,7 +257,7 @@ export function linkRange(a, b, { minGap = 0 } = {}) {
   a.addEventListener('change', (e) => {
     const cur = num(a.value);
     const user = e.isTrusted || e.detail === 'user';
-    if (user && cur != null) {
+    if (user && cur != null && linkTimes) {
       const bv = num(b.value), gap = minGap * 60000;
       let nv;
       if (bv == null) nv = cur + gap;

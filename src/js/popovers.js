@@ -7,7 +7,7 @@ import * as G from './gcal.js';
 import * as D from './dialogs.js';
 import { describe } from './rrule.js';
 import * as C from './categories.js';
-import { $, $$, esc, choose, popover, modal, setHTML, offerRevert } from './ui.js';
+import { $, $$, esc, choose, popover, modal, setHTML, linkTimesOn, offerRevert } from './ui.js';
 import * as UI from './ui.js';
 import * as N from './notify.js';
 import { app, set, st, tz } from './core.js';
@@ -99,30 +99,38 @@ export function quickCreate(rect, sel, onClose) {
     setTimeout(() => f.title.focus(), 0);
     // length shortcuts: each click extends the event
     const hhmm = (ms) => T.toDTInput(ms, z).slice(11, 16);
-    const redraw = () => {
-      if (f.qs) { f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
+    const redraw = (refocus = true) => {
+      // (only written when they differ: rewriting a time field while you type in it resets the hour/minute cursor)
+      if (f.qs) { const a = hhmm(sel.start), b = hhmm(sel.end); if (f.qs.value !== a) f.qs.value = a; if (f.qe.value !== b) f.qe.value = b; }
       $('.qc-when', p).textContent = `${T.format(sel.start, z, { weekday: 'long', day: 'numeric', month: 'long' })} · ${T.fmtTime(sel.start, z, s.h12)} – ${T.fmtTime(sel.end, z, s.h12)} (${T.fmtDur(Math.round((sel.end - sel.start) / T.MIN))})`;
       const g = $('.ghost-sel'); if (g) g.style.height = (((sel.end - sel.start) / T.HOUR) * s.hourHeight) + 'px';
-      f.title.focus();
+      // back to the title after a button — not after typing in the From / To fields (refocus = false)
+      if (refocus) f.title.focus();
     };
     $$('.dur-add', p).forEach((b) => (b.onclick = () => { sel.end = Math.max(sel.start + 5 * T.MIN, sel.end + +b.dataset.add * T.MIN); redraw(); }));
-    $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start, before = sel.end; sel.start = nowMin(); sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); offerEnd(before); });
+    $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start, before = sel.end; sel.start = nowMin(); if (linkTimesOn()) sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); if (linkTimesOn()) offerEnd(before); });
     $('.en-now', p)?.addEventListener('click', () => { sel.end = Math.max(sel.start + 5 * T.MIN, nowMin()); redraw(); });
-    // From: move the whole slot (the length stays)
-    // From −/+ moves only the start (the end stays, and is pushed on only if the start would pass it)
-    $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; redraw(); }));
-    // typed times: same day as the start; an end before the start means the next day
+    // From −/+ moves only the start (the end stays)
+    $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (linkTimesOn() && sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; redraw(); }));
+    // typed To: same day as the start; a To before the From means the next day (e.g. sleep 23:00–07:00)
     const fromInputs = () => {
       const day = T.dayKey(sel.start, z);
       const st0 = T.atTime(day, f.qs.value || hhmm(sel.start), z);
       let en = T.atTime(day, f.qe.value || hhmm(sel.end), z);
       if (en <= st0) en = T.atTime(T.addDays(day, 1), f.qe.value || hhmm(sel.end), z);
-      sel.start = st0; sel.end = en; redraw();
+      sel.start = st0; sel.end = en; redraw(false);
     };
-    // changing From moves To with it (the length stays)
-    // ↶ next to To puts back the end you had before From moved it
-    const offerEnd = (before) => f.qe && offerRevert(f.qe, before, { valid: (v) => v > sel.start, get: () => sel.end, set: (v) => { sel.end = Math.max(sel.start + 5 * T.MIN, v); redraw(); }, label: (ms) => T.fmtTime(ms, z, s.h12) });
-    const fromStart = () => { const len = sel.end - sel.start, before = sel.end; const day = T.dayKey(sel.start, z); sel.start = T.atTime(day, f.qs.value || hhmm(sel.start), z); sel.end = sel.start + Math.max(5 * T.MIN, len); redraw(); offerEnd(before); };
+    // typed From: only the start changes (with "From moves To" on in Settings, To moves with it and ↶ puts it back)
+    const offerEnd = (before) => f.qe && offerRevert(f.qe, before, { valid: (v) => v > sel.start, get: () => sel.end, set: (v) => { sel.end = Math.max(sel.start + 5 * T.MIN, v); redraw(false); }, label: (ms) => T.fmtTime(ms, z, s.h12) });
+    const fromStart = () => {
+      const len = sel.end - sel.start, before = sel.end, day = T.dayKey(sel.start, z), endDay = T.dayKey(sel.end - 1, z);
+      sel.start = T.atTime(day, f.qs.value || hhmm(sel.start), z);
+      if (linkTimesOn()) { sel.end = sel.start + Math.max(5 * T.MIN, len); redraw(false); offerEnd(before); return; }
+      // the end keeps its time; it only moves to the next day when it is now before the start on the same day
+      sel.end = T.atTime(endDay, f.qe.value || hhmm(before), z);
+      if (sel.end <= sel.start) sel.end = T.atTime(T.addDays(day, 1), f.qe.value || hhmm(before), z);
+      redraw(false);
+    };
     if (f.qs) { f.qs.addEventListener('change', fromStart); f.qe.addEventListener('change', fromInputs); f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
     $('.since-last', p)?.addEventListener('click', async () => {
       const ref = sel.start, nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;

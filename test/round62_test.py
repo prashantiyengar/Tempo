@@ -87,7 +87,8 @@ async def main(app):
     await page.close()
 
     # ——— 3. ↶ puts the end back after changing From ———
-    page = await app.page(settings={'tz': TZ}, now='2026-11-02T08:00:00Z', wait=2500)
+    # (since Round 65 From and To are independent by default; this is the optional 'From moves To' behaviour)
+    page = await app.page(settings={'tz': TZ, 'linkTimes': True}, now='2026-11-02T08:00:00Z', wait=2500)
     page.set_default_timeout(8000)
     await page.click('#btn-new-event'); await page.wait_for_selector('dialog [name=sTime]')
     await type_time(page, 'dialog [name=sTime]', '1000'); await type_time(page, 'dialog [name=eTime]', '1630')

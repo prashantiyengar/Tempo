@@ -41,6 +41,7 @@ export const DEFAULT_SETTINGS = {
   marginDays: 0,           // default safety margin: aim to finish this many days before a deadline
   repeatHorizonDays: 28,   // repeating tasks are planned this far ahead
   sinceLastBuffer: 1,      // "since last event" starts this many minutes after it ends
+  linkTimes: false,        // changing From moves To with it (keeps the length); off: From and To are independent
   travelMinutes: 15,       // buffer before and after events that have a (physical) location; 0 = off
   pomodoro: { work: 25, rest: 5 },
   learnSpeed: true,        // adjust reading speed from what you report
@@ -472,7 +473,11 @@ export function prerequisites(task, tasks, s) {
 // Higher-ranked tasks (lower number) are placed first, so they take the earliest free time and lower-ranked
 // tasks get pushed to later slots automatically. A task waits for its prerequisites, and a prerequisite inherits
 // the urgency (rank) of the tasks waiting for it. A daily total cap is shared by all tasks.
-export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
+// `me` is this device's id: a plan another device made (task.plan = { at, by, rev }, see engine.js) is followed
+// here as long as it still works — its sessions stay where they are, so two devices never plan the same task
+// against each other (which left stray "adjacent" sessions on both). It is planned afresh here only when a session
+// is in the past, overlaps something on this device's calendar, the task was edited (rev), or the plan is short.
+export function rescheduleAll(tasks, busy, settings, now = Date.now(), { me = null } = {}) {
   let list = tasks.map((t) => (t.archived ? t : freezePast(t, now, settings, busy)));
   const fixed = [];
   const tz = settings.tz;
@@ -509,7 +514,10 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
     const t = after ? { ...t0, earliestStart: Math.max(t0.earliestStart || 0, after + gap) } : t0;
     const prev = t0.planned || [];
     let planned, lastPlan;
-    if (t.repeat) {
+    const held = t0.plan?.by && t0.plan.by !== me && t0.plan.rev === (t0.rev || 0) ? heldPlan(t, occupied, now) : null;
+    if (held) {
+      planned = held; lastPlan = { ...(t0.lastPlan || { shortfall: 0, remaining: 0 }), at: now, held: true, finish: held[held.length - 1]?.end ?? null };
+    } else if (t.repeat) {
       // Plan each upcoming period (day or week) of a repeating task on its own.
       // Anchored series with an end are planned to the end (so what you saw in the preview is on the calendar); others ahead by the horizon
       const rEnd = repeatEnd(t, settings);
@@ -555,6 +563,20 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now()) {
   return { tasks: list, problems, moves: movesBetween(tasks, list, now) };
 }
 
+// The planned sessions of a plan made elsewhere, if it still works here: all in the future, none overlapping what's
+// busy on this device, and (for a task with a fixed amount of work) covering the work that is left.
+function heldPlan(task, occupied, now) {
+  const planned = (task.planned || []).filter((c) => !c.overdue);
+  if (!planned.length) return null;
+  if (planned.some((c) => c.start < now || (task.deadline && c.end > task.deadline && !task.repeat))) return null;
+  if (planned.some((c) => occupied.some((o) => o.start < c.end && o.end > c.start))) return null;
+  for (let i = 1; i < planned.length; i++) if (planned[i].start < planned[i - 1].end) return null;
+  if (!task.repeat) {
+    const left = totalMinutes(task) - doneWork(task), have = planned.reduce((a, c) => a + dur(c), 0);
+    if (have < left - 1) return null;
+  }
+  return planned.map((c) => ({ ...c }));
+}
 // Which tasks were pushed later by a re-plan: finish time or next session moved later by 10+ minutes.
 export function movesBetween(before, after, now = Date.now()) {
   const out = [];

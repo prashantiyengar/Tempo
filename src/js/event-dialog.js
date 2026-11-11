@@ -3,7 +3,7 @@ import * as T from './tz.js';
 import * as G from './gcal.js';
 import { parseRRule, buildRRule, describe, sameRule } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
-import { $, $$, esc, modal, setHTML, choose, offerRevert } from './ui.js';
+import { $, $$, esc, modal, setHTML, choose, linkTimesOn, offerRevert, toast } from './ui.js';
 import * as C from './categories.js';
 import * as N from './notify.js';
 import { ORD, WDL, askCategoryPick, askTitle, checkCount, limitHint, nudgesHTML, recurrenceExtent, sect, tzDatalist, weekdayToggles, wireSects } from './dialogs.js';
@@ -249,11 +249,13 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     const zoneOf = () => (T.isValidTz(f.tz.value.trim()) ? f.tz.value.trim() : s.tz);
     const endMs = () => T.atTime(f.eDate.value, f.eTime.value || '00:00', zoneOf());
     const startMs = () => T.atTime(f.sDate.value, f.sTime.value || '00:00', zoneOf());
-    const showDur = () => { const m = Math.round((endMs() - startMs()) / T.MIN); const d = $('.dur-now', dlg); if (d) d.textContent = m > 0 ? T.fmtDur(m) : '—'; };
+    const showDur = () => { const m = Math.round((endMs() - startMs()) / T.MIN); const d = $('.dur-now', dlg); if (d) d.textContent = m > 0 ? T.fmtDur(m) : 'ends before it starts'; $('.t-len', dlg)?.classList.toggle('bad', !(m > 0)); };
     $('.st-now', dlg)?.addEventListener('click', () => {
       const d = endMs() - startMs(), n = Math.floor(Date.now() / T.MIN) * T.MIN;
       const a = T.toDTInput(n, zoneOf()); f.sDate.value = a.slice(0, 10); f.sTime.value = a.slice(11, 16);
-      const before = endMs(); setEnd(n + Math.max(5 * T.MIN, d)); f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); offerEndRevert(before);
+      // (only with "From moves To" on does the end follow; otherwise Now changes the start alone)
+      if (linkTimesOn()) { const before = endMs(); setEnd(n + Math.max(5 * T.MIN, d)); offerEndRevert(before); }
+      f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur();
     });
     $('.en-now', dlg)?.addEventListener('click', () => { setEnd(Math.max(startMs() + 5 * T.MIN, Math.floor(Date.now() / T.MIN) * T.MIN)); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); });
     const setEnd = (ms) => { const dt = T.toDTInput(ms, zoneOf()); f.eDate.value = dt.slice(0, 10); f.eTime.value = dt.slice(11, 16); };
@@ -268,10 +270,9 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       const ref = startMs(), nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;
       const r = await ctx.lastEventEnd({ ref: nowish ? null : ref, exclude: ev ? `${ev._calId}|${ev.id}` : null });
       if (!r.found && !nowish) { setHTML($('.since-note', dlg) || $('.dur-row', dlg).appendChild(Object.assign(document.createElement('span'), { className: 'muted small since-note' })), 'No earlier event in the 12 hours before.'); return; }
-      const keepEnd = endMs();
       const dt = T.toDTInput(r.start, zoneOf());
       f.sDate.value = dt.slice(0, 10); f.sTime.value = dt.slice(11, 16);
-      setEnd(nowish ? Math.max(r.end, r.start + 5 * T.MIN) : Math.max(keepEnd, r.start + 5 * T.MIN));
+      if (nowish) setEnd(Math.max(r.end, r.start + 5 * T.MIN)); // "since the last event until now": the end is now
       f.sTime.dispatchEvent(new Event('change', { bubbles: true }));
       showDur();
       setHTML($('.since-note', dlg) || $('.dur-row', dlg).appendChild(Object.assign(document.createElement('span'), { className: 'muted small since-note' })), esc(r.note));
@@ -282,11 +283,11 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       if (!r.found) { note(esc(r.note)); return; }
       setEnd(r.end); f.eTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); note(esc(r.note));
     });
-    // From −/+ moves only the start; the end stays (pushed on only if the start would pass it)
+    // From −/+ moves only the start; the end stays (with "From moves To" on it is pushed on if the start would pass it)
     $$('.st-add', dlg).forEach((b) => (b.onclick = () => {
       const ns = startMs() + +b.dataset.add * T.MIN;
       const a = T.toDTInput(ns, zoneOf()); f.sDate.value = a.slice(0, 10); f.sTime.value = a.slice(11, 16);
-      if (endMs() < ns + 5 * T.MIN) setEnd(ns + 5 * T.MIN);
+      if (linkTimesOn() && endMs() < ns + 5 * T.MIN) setEnd(ns + 5 * T.MIN);
       f.sTime.dispatchEvent(new Event('change', { bubbles: true })); showDur(); sync();
     }));
     $$('.dur-add', dlg).forEach((b) => (b.onclick = () => {
@@ -304,21 +305,17 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     f.addEventListener('input', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
     f.addEventListener('change', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
     f.addEventListener('input', sync);
-    // Changing "from" (date or time) moves "to" with it, keeping the length.
+    // From and To are independent: changing one never changes the other (an end before the start is reported on
+    // Save). With Settings → New events → "From moves To" on, changing From keeps the length, with ↶ to put To back.
     let snap = { s: startMs(), e: endMs() };
     f.addEventListener('change', (e) => {
       const user = e.isTrusted || e.detail === 'user';
-      if (user && (e.target.name === 'sDate' || e.target.name === 'sTime') && Number.isFinite(snap.s) && Number.isFinite(snap.e)) {
+      if (linkTimesOn() && user && (e.target.name === 'sDate' || e.target.name === 'sTime') && Number.isFinite(snap.s) && Number.isFinite(snap.e)) {
         const ns = startMs();
         if (Number.isFinite(ns)) { const before = endMs(); setEnd(ns + Math.max(f.allDay.checked ? 0 : 5 * T.MIN, snap.e - snap.s)); showDur(); offerEndRevert(before); }
-      } else {
-        if (e.target.name === 'sDate' && f.eDate.value < f.sDate.value) f.eDate.value = f.sDate.value;
-        if (e.target.name === 'sTime' && f.sDate.value === f.eDate.value && f.eTime.value <= f.sTime.value) {
-          f.eTime.value = T.hhmm(Math.min(23 * 60 + 55, T.parseHHMM(f.sTime.value) + s.defaultEventMinutes));
-        }
       }
       snap = { s: startMs(), e: endMs() };
-      sync();
+      showDur(); sync();
     });
     sync();
     wireSects(dlg, {
@@ -365,12 +362,13 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       };
       if (ad) {
         if (f.eDate.value < f.sDate.value) f.eDate.value = f.sDate.value;
+        if (f.eDate.value < f.sDate.value) { toast('The last day must not be before the first.', { noUndo: true }); f.eDate.focus(); return; }
         body.start = { date: f.sDate.value };
         body.end = { date: T.addDays(f.eDate.value, 1) };
       } else {
         const a = T.atTime(f.sDate.value, f.sTime.value, zone);
-        let b = T.atTime(f.eDate.value, f.eTime.value, zone);
-        if (b <= a) b = a + 30 * T.MIN;
+        const b = T.atTime(f.eDate.value, f.eTime.value, zone);
+        if (!(b > a)) { showDur(); toast('The end must be after the start.', { noUndo: true }); f.eTime.focus(); return; }
         body.start = { dateTime: new Date(a).toISOString(), timeZone: zone };
         body.end = { dateTime: new Date(b).toISOString(), timeZone: zone };
       }
