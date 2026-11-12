@@ -1,7 +1,9 @@
 // Projects: a named chain of steps — splittable tasks and calendar events — each with an ideal start, end and (for
 // tasks) hours. Stored in settings.projects (synced like your other settings):
 //   { id, name, sequential, titleMode: 'prefix' | 'suffix' | 'none', color?, created,
-//     steps: [{ id, kind: 'task' | 'event', title, start, end, hours?, allDay?, ref }] }
+//     steps: [{ id, kind: 'task' | 'event', title, start, end, hours?, rank?, allDay?, ref, orig?: { start, end } }] }
+// `orig` is when the step was first planned; when its task is moved, delayed or gets a new deadline, the project
+// shows the task's current dates with a note about the original plan (stepDrift).
 // `ref` points to what the step created: a task id, or 'calId|eventId' for an event. Steps run in their list order;
 // with `sequential`, each starts only after the previous one is done (tasks wait for tasks, and never start before
 // an earlier event in the chain has ended).
@@ -33,12 +35,35 @@ export function bareTitle(p, title) {
 export function steps(p, tasks) {
   const mine = tasks.filter((t) => t.projectId === p.id && !t.archived);
   const known = new Set(mine.map((t) => t.id));
-  const out = (p.steps || []).filter((st) => st.kind !== 'task' || !st.ref || known.has(st.ref));
+  // task steps show their task as it is now (dates, hours and rank may have been changed in the task itself);
+  // the plan the step started with is kept in `orig`
+  const live = (st) => {
+    const t = st.kind === 'task' && st.ref && mine.find((x) => x.id === st.ref);
+    const orig = st.orig || (st.start || st.end ? { start: st.start || null, end: st.end || null } : null);
+    if (!t) return { ...st, ...(orig ? { orig } : {}) };
+    return { ...st, start: t.earliestStart || st.start || null, end: t.deadline || st.end || null, hours: +(S.totalMinutes(t) / 60).toFixed(2), rank: t.rank ?? st.rank ?? 3, ...(orig ? { orig } : {}) };
+  };
+  const out = (p.steps || []).filter((st) => st.kind !== 'task' || !st.ref || known.has(st.ref)).map(live);
   const have = new Set(out.filter((x) => x.kind === 'task').map((x) => x.ref));
   for (const t of mine.sort((a, b) => (a.projectStep ?? 1e9) - (b.projectStep ?? 1e9) || (a.created || 0) - (b.created || 0))) {
-    if (!have.has(t.id)) out.push({ id: newStepId(), kind: 'task', title: bareTitle(p, t.title), start: t.earliestStart || null, end: t.deadline || null, hours: +(S.totalMinutes(t) / 60).toFixed(2), ref: t.id });
+    if (!have.has(t.id)) out.push({ id: newStepId(), kind: 'task', title: bareTitle(p, t.title), start: t.earliestStart || null, end: t.deadline || null, hours: +(S.totalMinutes(t) / 60).toFixed(2), rank: t.rank ?? 3, ref: t.id, orig: { start: t.earliestStart || null, end: t.deadline || null } });
   }
   return out;
+}
+
+// How a task step differs from its original plan: { deadline: [orig, now], start: [orig, now], finish: [orig end,
+// projected finish] } — each only when it moved by at least an hour; null when it's on plan (or done).
+export function stepDrift(st, task, now = Date.now()) {
+  if (st.kind !== 'task' || !st.orig || !task) return null;
+  if (S.progress(task, now).pct >= 100) return null;
+  const moved = (a, b) => a && b && Math.abs(b - a) >= T.HOUR;
+  const out = {};
+  if (moved(st.orig.end, task.deadline)) out.deadline = [st.orig.end, task.deadline];
+  if (moved(st.orig.start, task.earliestStart)) out.start = [st.orig.start, task.earliestStart];
+  const fin = task.lastPlan?.finish;
+  // delayed: it won't be done by the original end (sessions pushed later, or not enough time before the deadline)
+  if (st.orig.end && ((fin && fin > st.orig.end + T.MIN) || task.lastPlan?.shortfall > 0)) out.finish = [st.orig.end, fin || null, task.lastPlan?.shortfall > 0];
+  return Object.keys(out).length ? out : null;
 }
 
 // Progress: per step and overall (work-minutes done / planned; events count by their length once they're over or ticked off).

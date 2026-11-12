@@ -10,6 +10,7 @@ import * as C from './categories.js';
 import * as AC from './accounts.js';
 import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
 import { $, $$, esc, el, toast as uiToast, closePopover, download, modal, setLinkTimes, setQuickTz } from './ui.js';
+import { configureDatePicker, initDatePicker } from './datepicker.js';
 import * as W from './weather.js';
 import * as GM from './game.js';
 import { LOCAL_COLOR, app, set, st, tz } from './core.js';
@@ -704,7 +705,7 @@ export async function openSettings() {
     const prevSettings = JSON.parse(JSON.stringify(before));
     st().settings = r.settings;
     await E.persist(st(), ['settings']);
-    setQuickTz(r.settings.tz); setLinkTimes(r.settings.linkTimes);
+    setQuickTz(r.settings.tz); setLinkTimes(r.settings.linkTimes); configureDatePicker({ tz: r.settings.tz, weekStart: r.settings.weekStart });
     if (JSON.stringify(prevSettings) !== JSON.stringify(r.settings)) pushUndo('settings change', async () => { st().settings = { ...prevSettings, sharedHash: null }; await E.persist(st(), ['settings']); E.invalidate(); await render(); await cycle(); });
     const ref = C.refreshTaskCategories(st().settings, st().tasks);
     if (ref.changed.length) st().tasks = ref.tasks;
@@ -880,7 +881,7 @@ async function init() {
   // Web app: finish a Google sign-in that just came back in the URL, or renew an expired one silently.
   const redirect = await G.completeRedirect();
   app.state = await E.loadState();
-  setQuickTz(set().tz); setLinkTimes(set().linkTimes);
+  setQuickTz(set().tz); setLinkTimes(set().linkTimes); configureDatePicker({ tz: set().tz, weekStart: set().weekStart }); initDatePicker();
   app.cursor = app.miniCursor = T.dayKey(Date.now(), tz());
   if (innerWidth < 760) app.view = 'day';
   { const v = new URLSearchParams(location.search).get('view'); if (['day', '3day', 'week', 'month', 'analysis', 'review', 'goals'].includes(v)) app.view = v; }

@@ -726,6 +726,19 @@ export function projectDialog(ctx, project = null) {
     if (r.st.kind === 'task') return `<span class="ps-pct">${r.pct}%${r.next ? ` · next ${esc(T.fmtDate(r.next, tz))}` : ''}${r.late ? ' · ⚠' : ''}</span>`;
     return `<span class="ps-pct">${r.next ? esc(T.fmtDate(r.next, tz)) : ''}</span>`;
   };
+  // A task step whose task moved, got a new deadline or is running late: what it is now, and what was planned
+  const when = (ms) => `${T.fmtDate(ms, tz)} ${T.fmtTime(ms, tz, s.h12)}`;
+  const days = (a, b) => { const d = T.daysBetween(T.dayKey(a, tz), T.dayKey(b, tz)); return d ? ` (${d > 0 ? '+' : '−'}${Math.abs(d)} day${Math.abs(d) === 1 ? '' : 's'})` : ''; };
+  const driftNote = (x) => {
+    const t = x.kind === 'task' && x.ref && st.tasks.find((y) => y.id === x.ref);
+    const d = t && P.stepDrift(x, t);
+    if (!d) return '';
+    const lines = [];
+    if (d.deadline) lines.push(`⏰ Deadline moved: planned by <b>${esc(when(d.deadline[0]))}</b>, now <b>${esc(when(d.deadline[1]))}</b>${days(d.deadline[0], d.deadline[1])}`);
+    if (d.start) lines.push(`⏩ Start moved: planned from ${esc(T.fmtDate(d.start[0], tz))}, now from ${esc(T.fmtDate(d.start[1], tz))}${days(d.start[0], d.start[1])}`);
+    if (d.finish) lines.push(`⚠ Delayed: planned to be done by <b>${esc(when(d.finish[0]))}</b>${d.finish[1] ? ` — now finishing <b>${esc(when(d.finish[1]))}</b>${days(d.finish[0], d.finish[1])}` : ''}${d.finish[2] ? ' — not enough free time before its deadline' : ''}`);
+    return `<div class="ps-note">${lines.map((l) => `<span>${l}</span>`).join('')}<button type="button" class="link ps-accept" title="Forget the original dates and treat the current ones as the plan">Make the current dates the plan</button></div>`;
+  };
   const html = `<form class="project-form" autocomplete="off" novalidate>
     <header class="dlg-head"><input name="name" class="title-input" placeholder="Project name, e.g. Thesis" value="${esc(p0.name)}" maxlength="40" autofocus><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header>
     <div class="dlg-body">
@@ -759,9 +772,11 @@ export function projectDialog(ctx, project = null) {
         x.title = $('.ps-title', row).value;
         const sd = $('input.ps-sd', row).value, ed = $('input.ps-ed', row).value || sd;
         if (x.kind === 'task') {
-          x.start = sd ? T.atTime(sd, s.bounds.start, tz) : null;
-          x.end = ed ? T.atTime(ed, s.bounds.end, tz) : null;
+          // (a date left as it was keeps its exact time, e.g. a deadline the task dialog set to 18:30)
+          x.start = sd ? (x.start && keyOf(x.start) === sd ? x.start : T.atTime(sd, s.bounds.start, tz)) : null;
+          x.end = ed ? (x.end && keyOf(x.end) === ed ? x.end : T.atTime(ed, s.bounds.end, tz)) : null;
           x.hours = Math.max(0.25, +$('input.ps-h', row).value || 1);
+          x.rank = Math.max(1, Math.min(99, Math.round(+$('input.ps-rk', row).value || 3)));
           delete x.allDay;
         } else {
           x.start = sd ? T.atTime(sd, $('input.ps-st', row).value || '10:00', tz) : null;
@@ -776,10 +791,11 @@ export function projectDialog(ctx, project = null) {
         <select class="ps-kind" aria-label="Kind"><option value="task">Task</option><option value="event" ${x.kind === 'event' ? 'selected' : ''}>Event</option></select>
         <input class="ps-title" placeholder="${x.kind === 'task' ? 'What to do, e.g. Write chapter 2' : 'Event, e.g. Meeting with supervisor'}" value="${esc(x.title || '')}">
         <div class="ps-when">${x.kind === 'task'
-          ? `<label>Start <input type="date" data-quick="off" class="ps-sd" value="${keyOf(x.start)}"></label><label>End <input type="date" data-quick="off" class="ps-ed" value="${keyOf(x.end)}"></label><label>Hours <input type="number" class="ps-h num" min="0.25" step="0.25" value="${x.hours ?? 2}"></label>`
+          ? `<label>Start <input type="date" data-quick="off" class="ps-sd" value="${keyOf(x.start)}"></label><label>End <input type="date" data-quick="off" class="ps-ed" value="${keyOf(x.end)}"></label><label>Hours <input type="number" class="ps-h num" min="0.25" step="0.25" value="${x.hours ?? 2}"></label><label title="1 = most important; higher-ranked tasks get the earliest free time">Rank <input type="number" class="ps-rk num" min="1" max="99" step="1" value="${x.rank ?? 3}"></label>`
           : `<label><input type="date" data-quick="off" class="ps-sd" value="${keyOf(x.start)}"> <input type="time" class="ps-st" value="${timeOf(x.start, '10:00')}" step="300"></label><label>to <input type="date" data-quick="off" class="ps-ed" value="${keyOf(x.end)}"> <input type="time" class="ps-et" value="${timeOf(x.end, '11:00')}" step="300"></label>`}</div>
         <span class="ps-status">${statusOf(x)}</span>
         <span class="ps-acts"><button type="button" class="icon-btn sm ps-up" title="Earlier in the chain" ${i ? '' : 'disabled'}>▲</button><button type="button" class="icon-btn sm ps-down" title="Later in the chain" ${i < steps.length - 1 ? '' : 'disabled'}>▼</button><button type="button" class="icon-btn sm ps-del" title="Remove this step">✕</button></span>
+        ${driftNote(x)}
       </div>`).join('') || '<p class="muted small">No steps yet — add the tasks and events of this project in the order they happen.</p>');
       $$('.pj-step', box).forEach((row) => {
         const i = +row.dataset.i;
@@ -796,6 +812,7 @@ export function projectDialog(ctx, project = null) {
         };
         $('input.ps-sd', row).addEventListener('change', moveEnd);
         $('input.ps-st', row)?.addEventListener('change', moveEnd);
+        $('.ps-accept', row)?.addEventListener('click', () => { read(); const x = steps[i]; const t = st.tasks.find((y) => y.id === x.ref); x.orig = { start: x.start, end: x.end }; if (t?.lastPlan?.finish > x.end) x.orig.end = t.lastPlan.finish; draw(); });
         $('.ps-up', row).onclick = () => { read(); [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; draw(); };
         $('.ps-down', row).onclick = () => { read(); [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]]; draw(); };
         $('.ps-del', row).onclick = () => { read(); const [x] = steps.splice(i, 1); if (x.ref) removed.push(x); draw(); };
@@ -808,7 +825,7 @@ export function projectDialog(ctx, project = null) {
       const startK = last?.end ? keyOf(last.end) : today;
       const kind = b.dataset.kind;
       steps.push(kind === 'task'
-        ? { id: P.newStepId(), kind, title: '', start: T.atTime(startK, s.bounds.start, tz), end: T.atTime(T.addDays(startK, 7), s.bounds.end, tz), hours: 2, ref: null }
+        ? { id: P.newStepId(), kind, title: '', start: T.atTime(startK, s.bounds.start, tz), end: T.atTime(T.addDays(startK, 7), s.bounds.end, tz), hours: 2, rank: 3, ref: null }
         : { id: P.newStepId(), kind, title: '', start: T.atTime(startK, '10:00', tz), end: T.atTime(startK, '11:00', tz), ref: null });
       draw();
       $$('.pj-step .ps-title', box).pop()?.focus();
@@ -826,7 +843,7 @@ export function projectDialog(ctx, project = null) {
       const bad = !name ? 'Give the project a name.' : steps.find((x) => !x.title.trim()) ? 'Every step needs a title.'
         : steps.find((x) => !x.start || !x.end) ? 'Every step needs a start and an end.' : steps.find((x) => x.kind === 'task' && x.end <= x.start) ? 'A task ends before it starts.' : '';
       if (bad) { err.textContent = bad; err.hidden = false; if (!name) f.name.focus(); return; }
-      close({ project: { ...p0, name, titleMode: f.titleMode.value, catId: f.catId.value || null, sequential: f.sequential.checked, steps: steps.map((x) => ({ ...x, title: x.title.trim() })) }, removed });
+      close({ project: { ...p0, name, titleMode: f.titleMode.value, catId: f.catId.value || null, sequential: f.sequential.checked, steps: steps.map((x) => ({ ...x, title: x.title.trim(), orig: x.orig || { start: x.start, end: x.end } })) }, removed });
     });
   }, { cls: 'wide' });
 }

@@ -261,9 +261,11 @@ function renderProjects(tab = app.sideTab || 'tasks') {
   const card = ({ p, pr }) => {
       const nx = pr.next;
       const late = pr.rows.some((r) => r.late);
+      const drifted = pr.rows.filter((r) => r.task && P.stepDrift(r.st, r.task, now)).length;
       const last = pr.rows.reduce((a, r) => Math.max(a, r.finish || r.st.end || 0), 0);
       return `<button type="button" class="pj-card ${pr.complete ? 'complete' : ''}" data-id="${esc(p.id)}">
         <span class="pj-t">📁 ${esc(p.name)}${late ? ' <span class="warn-ic" title="A task in it doesn\'t fit before its end date">⚠</span>' : ''}</span>
+        ${drifted && !pr.complete ? `<span class="pj-drift">⏰ ${drifted} step${drifted > 1 ? 's' : ''} moved or delayed from the plan</span>` : ''}
         <span class="pj-meta">${pr.complete ? 'Done ✓' : `${pr.finished}/${pr.count} steps · ${T.fmtDur(pr.done)} of ${T.fmtDur(pr.total)}${last ? ` · done by ${esc(fmt(last))}` : ''}`}</span>
         <span class="bar"><i style="width:${pr.pct}%"></i></span>
         ${nx && !pr.complete ? `<span class="pj-next">Next: ${nx.st.kind === 'event' ? '📅' : '⧉'} ${esc(nx.st.title)}${nx.next ? ` · ${esc(fmt(nx.next))}` : ''}</span>` : ''}
@@ -307,7 +309,7 @@ async function saveProject(r, before) {
     const x = p.steps[i];
     const title = P.fullTitle(p, x.title);
     if (x.kind === 'task') {
-      const fields = { title, earliestStart: Math.max(x.start || 0, p.sequential ? prevEventEnd : 0) || null, deadline: x.end, totalMinutes: Math.max(5, Math.round((+x.hours || 1) * 60)), projectId: p.id, projectName: p.name, projectStep: i + 1 };
+      const fields = { title, earliestStart: Math.max(x.start || 0, p.sequential ? prevEventEnd : 0) || null, deadline: x.end, totalMinutes: Math.max(5, Math.round((+x.hours || 1) * 60)), rank: Math.max(1, Math.round(+x.rank || 3)), projectId: p.id, projectName: p.name, projectStep: i + 1 };
       const t = x.ref && st().tasks.find((y) => y.id === x.ref);
       if (t) {
         const recat = pcat && catChanged && (!t.categoryId || t.categoryId === oldCat);
