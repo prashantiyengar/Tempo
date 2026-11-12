@@ -4,6 +4,7 @@
 //   date fields:       a day sets the date and closes; Today = today; Clear empties (unless the field is required)
 //   date-and-time:     a day sets the date and keeps the time; the time can be set in the calendar too; Done closes
 import * as T from './tz.js';
+import { setHTML } from './ui.js';
 
 let tz = T.systemTz(), weekStart = 1;
 export function configureDatePicker(o = {}) {
@@ -68,7 +69,7 @@ function draw() {
     cells.push(`<button type="button" class="dp-d${m !== view.m ? ' out' : ''}${k === today ? ' today' : ''}${k === sel ? ' on' : ''}" data-k="${k}" ${inRange(field, k) ? '' : 'disabled'} aria-label="${k}">${d}</button>`);
   }
   const heads = Array.from({ length: 7 }, (_, i) => `<span>${WD[(weekStart + i) % 7]}</span>`).join('');
-  pop.innerHTML = `<div class="dp-head"><button type="button" class="dp-nav" data-n="-1" aria-label="Previous month">‹</button><b>${MONTHS[view.m - 1]} ${view.y}</b><button type="button" class="dp-nav" data-n="1" aria-label="Next month">›</button></div>
+  setHTML(pop, `<div class="dp-head"><button type="button" class="dp-nav" data-n="-1" aria-label="Previous month">‹</button><b>${MONTHS[view.m - 1]} ${view.y}</b><button type="button" class="dp-nav" data-n="1" aria-label="Next month">›</button></div>
     <div class="dp-grid">${heads}${cells.join('')}</div>
     <div class="dp-foot">
       <button type="button" class="dp-today" ${inRange(field, today) ? '' : 'disabled'}>Today</button>
@@ -76,7 +77,7 @@ function draw() {
       <span class="dp-grow"></span>
       ${field.required ? '' : '<button type="button" class="dp-clear">Clear</button>'}
       ${dt ? '<button type="button" class="dp-done">Done</button>' : ''}
-    </div>`;
+    </div>`);
   pop.querySelectorAll('.dp-nav').forEach((b) => (b.onclick = () => { const k = T.addMonths(T.keyOf(view.y, view.m, 1), +b.dataset.n); const p = T.parseKey(k); view = { y: p.y, m: p.m }; draw(); }));
   pop.querySelectorAll('.dp-d').forEach((b) => (b.onclick = () => { setDay(b.dataset.k); if (dt) draw(); else closeDatePicker(); }));
   pop.querySelector('.dp-today').onclick = () => {
