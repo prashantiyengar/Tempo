@@ -67,5 +67,13 @@ eq('months keep their day (31st → last day of shorter months)', [T.addMonthsKe
   eq('3-way merge: unchanged here takes Google, plain values take this device when both changed', [E.merge3(1, 2, 1), E.merge3(3, 2, 1), E.merge3([1, 2], [2, 3], [1])], [2, 3, [1, 2]]);
 }
 
+{ // a plan made on another device is kept — until one of its days becomes a leave day
+  const z = 'Europe/Berlin', now = T.atTime('2026-11-16', '08:30', z), st0 = T.atTime('2026-11-16', '09:00', z);
+  const set0 = { ...S.DEFAULT_SETTINGS, tz: z };
+  const task = { id: 't', title: 'Report', kind: 'generic', rank: 3, totalMinutes: 60, deadline: T.atTime('2026-11-18', '17:00', z), created: 1, rev: 5, plan: { at: 9, by: 'other', rev: 5 }, planned: [{ id: 'c1', start: st0 + 3 * T.HOUR, end: st0 + 4 * T.HOUR }], frozen: [] };
+  const day = (settings) => T.dayKey(S.rescheduleAll([task], [], settings, now, { me: 'me' }).tasks[0].planned[0].start, z) + ' ' + T.hhmm(T.minutesOfDay(S.rescheduleAll([task], [], settings, now, { me: 'me' }).tasks[0].planned[0].start, z));
+  eq('followed plan: kept as it is / re-planned off a new leave day', [day(set0), day({ ...set0, leave: { '2026-11-16': 'sick' } })], ['2026-11-16 12:00', '2026-11-17 09:00']);
+}
+
 console.log(fails ? `${fails} FAILED` : 'ALL PASS');
 process.exitCode = fails ? 1 : 0;

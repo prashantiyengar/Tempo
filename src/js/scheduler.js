@@ -514,7 +514,7 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now(), { me = nu
     const t = after ? { ...t0, earliestStart: Math.max(t0.earliestStart || 0, after + gap) } : t0;
     const prev = t0.planned || [];
     let planned, lastPlan;
-    const held = t0.plan?.by && t0.plan.by !== me && t0.plan.rev === (t0.rev || 0) ? heldPlan(t, occupied, now) : null;
+    const held = t0.plan?.by && t0.plan.by !== me && t0.plan.rev === (t0.rev || 0) ? heldPlan(t, occupied, now, settings) : null;
     if (held) {
       planned = held; lastPlan = { ...(t0.lastPlan || { shortfall: 0, remaining: 0 }), at: now, held: true, finish: held[held.length - 1]?.end ?? null };
     } else if (t.repeat) {
@@ -565,11 +565,22 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now(), { me = nu
 
 // The planned sessions of a plan made elsewhere, if it still works here: all in the future, none overlapping what's
 // busy on this device, and (for a task with a fixed amount of work) covering the work that is left.
-function heldPlan(task, occupied, now) {
+function heldPlan(task, occupied, now, settings) {
   const planned = (task.planned || []).filter((c) => !c.overdue);
   if (!planned.length) return null;
   if (planned.some((c) => c.start < now || (task.deadline && c.end > task.deadline && !task.repeat))) return null;
   if (planned.some((c) => occupied.some((o) => o.start < c.end && o.end > c.start))) return null;
+  // …and every session must still be in time this task may use as things are now: inside its hours (work hours, a
+  // time period, custom hours), not on a leave day (vacation / sick leave set since), not in a slot you removed,
+  // not before its earliest start. Otherwise a device following another's plan would keep sessions on a day that
+  // has just been marked as leave.
+  const tz = settings.tz, bounds = params(task, settings).bounds;
+  const blocked = merge([...(task.skipped || []), ...(usesLeaveDays(task, settings) ? [] : leaveBlocks(settings, now - T.DAY, now + 800 * T.DAY))]);
+  for (const c of planned) {
+    if (task.earliestStart && c.start < task.earliestStart - T.MIN) return null;
+    const ok = subtract(windows(c.start, c.end, bounds, tz), blocked).reduce((a, w) => a + (w.end - w.start), 0);
+    if (ok < c.end - c.start - T.MIN) return null;
+  }
   for (let i = 1; i < planned.length; i++) if (planned[i].start < planned[i - 1].end) return null;
   if (!task.repeat) {
     const left = totalMinutes(task) - doneWork(task), have = planned.reduce((a, c) => a + dur(c), 0);
