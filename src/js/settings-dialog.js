@@ -314,7 +314,8 @@ export function settingsDialog(ctx) {
           <div class="wd-toggles">${[1, 2, 3, 4, 5, 6, 0].map((d) => `<label class="wd"><input type="checkbox" class="r-day" value="${d}" ${r.days.includes(d) ? 'checked' : ''}><span>${DAYN[d].slice(0, 2)}</span></label>`).join('')}</div>
           <button type="button" class="icon-btn r-del" title="Remove rule" aria-label="Remove rule">✕</button></div>`).join('')}
         <div class="row"><button type="button" class="link per-add-rule">+ Add rule</button><span class="grow"></span><label class="chk small"><input type="checkbox" class="per-leave" ${p.onLeave ? 'checked' : ''}> Includes leave days</label></div></div>`).join('') || '<p class="muted small">No periods.</p>');
-      $$('.period', dlg).forEach((el2) => {
+      // (only the periods: fill-in blocks further down share the .period look)
+      $$('.periods-list > .period', dlg).forEach((el2) => {
         const p = periods[+el2.dataset.i];
         $('.per-name', el2).oninput = (e) => { p.name = e.target.value; };
         $('.per-del', el2).onclick = () => { periods.splice(+el2.dataset.i, 1); drawPeriods(); };

@@ -57,10 +57,31 @@ function nextWorkDay(k) {
 export async function afterLeave(keys, forced = null) {
   const items = (await collectItems(keys)).filter((it) => !it.allDay && keys.includes(T.dayKey(it.start, tz())));
   const sessions = items.filter((it) => it.kind === 'chunk' && it.status !== 'done' && !it.task?.onLeave && !(it.task && S.usesLeaveDays(it.task, set())));
-  const events = items.filter((it) => it.kind === 'event' && it.editable && !it.declined && !it.ev?.extendedProperties?.private?.tempoTask);
+  const z0 = tz();
+  // Events that may move to the next working day. Left where they are (moving them would put a second copy next to
+  // one that is already there): blocks Tempo makes by itself each day (sleep, fill-ins, the goal-setting slot), an
+  // occurrence of a repeating event that also takes place on the day it would move to, and anything that is
+  // already on that day with the same title and time (e.g. moved from another device). Two occurrences of one
+  // series on a longer leave don't both land on the same day either.
+  const autoMade = (it) => { const p = it.ev?.extendedProperties?.private || {}; return !!(p.tempoSleep || p.tempoFill || p.tempoGoalSlot); };
+  const cand = items.filter((it) => it.kind === 'event' && it.editable && !it.declined && !it.ev?.extendedProperties?.private?.tempoTask && !autoMade(it));
+  const targetOf = (it) => nextWorkDay(T.dayKey(it.start, z0));
+  const targetDays = [...new Set(cand.map(targetOf))].sort();
+  const onTarget = targetDays.length ? (await collectItems([targetDays[0], targetDays[targetDays.length - 1]])).filter((x) => x.kind === 'event' && !x.declined) : [];
+  const series = (x) => x.ev?.recurringEventId || null, hm = (ms) => T.minutesOfDay(ms, z0), norm = (t) => String(t || '').trim().toLowerCase();
+  const taken = new Set(), events = [];
+  let stay = 0;
+  for (const it of cand) {
+    const to = targetOf(it), sid = series(it);
+    const clash = onTarget.some((x) => x.key !== it.key && T.dayKey(x.start, z0) === to && ((sid && series(x) === sid) || (!x.allDay && norm(x.title) === norm(it.title) && hm(x.start) === hm(it.start))))
+      || (sid && taken.has(`${sid}|${to}`));
+    if (clash) { stay++; continue; }
+    if (sid) taken.add(`${sid}|${to}`);
+    events.push(it);
+  }
   if (!sessions.length && !events.length) { toast(`Marked ${keys.length} day${keys.length > 1 ? 's' : ''} as leave`); cycle(); return 'none'; }
   const what = [events.length ? `${events.length} event${events.length > 1 ? 's' : ''}` : '', sessions.length ? `${sessions.length} task session${sessions.length > 1 ? 's' : ''}` : ''].filter(Boolean).join(' and ');
-  const opts = [{ value: 'all', primary: true, label: 'Yes, reschedule them', desc: `${sessions.length ? 'Task sessions move to other days. ' : ''}${events.length ? 'Events move to the next working day at the same time.' : ''}` }];
+  const opts = [{ value: 'all', primary: true, label: 'Yes, reschedule them', desc: `${sessions.length ? 'Task sessions move to other days. ' : ''}${events.length ? 'Events move to the next working day at the same time.' : ''}${stay ? ` ${stay} event${stay > 1 ? 's stay' : ' stays'} (repeating ones that also happen that day, or already there).` : ''}` }];
   if (events.length && sessions.length) opts.push({ value: 'tasks', label: 'Only move the task sessions', desc: 'Your events stay where they are.' });
   opts.push({ value: 'keep', label: 'No, keep everything where it is', desc: sessions.length ? 'Task sessions on these days stay (they are pinned).' : 'Events stay where they are.' });
   const r = forced || await choose(`Reschedule ${keys.length > 1 ? 'these days’' : 'this day’s'} ${what}?`, `${keys.length > 1 ? 'These days are' : 'This day is'} now marked as leave.`, opts, { cancel: 'Back — don’t mark as leave' });
@@ -84,7 +105,7 @@ export async function afterLeave(keys, forced = null) {
         } catch (err) { handleError(err); }
       }
       E.invalidate();
-      toast(`Moved ${moved} event${moved === 1 ? '' : 's'} to the next working day${sessions.length ? ' · task sessions re-planned' : ''}`, { ms: 6000 });
+      toast(`Moved ${moved} event${moved === 1 ? '' : 's'} to the next working day${stay ? ` · ${stay} repeating or already there left in place` : ''}${sessions.length ? ' · task sessions re-planned' : ''}`, { ms: 6000 });
     } else toast(sessions.length ? 'Task sessions re-planned around your leave' : 'Marked as leave');
   }
   cycle();
