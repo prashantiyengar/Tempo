@@ -803,9 +803,11 @@ export function projectDialog(ctx, project = null) {
         // changing a step's start moves its end with it (the length stays)
         // (the end fields are updated in place, so typing in the start field isn't interrupted)
         const moveEnd = (e) => {
-          if (!e.isTrusted || !linkTimesOn()) return;
+          if (!(e.isTrusted || e.detail === 'user')) return;
           const old = { ...steps[i] }; read(); const x = steps[i];
           if (!(old.start && old.end && x.start && x.kind === old.kind)) return;
+          // (From and To independent: the end only follows when the new start reaches or passes it)
+          if (!linkTimesOn() && x.start < old.end) return;
           x.end = x.start + (old.end - old.start);
           $('input.ps-ed', row).value = keyOf(x.end);
           if (x.kind === 'event') $('input.ps-et', row).value = timeOf(x.end, '11:00');

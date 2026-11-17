@@ -250,8 +250,10 @@ export function linkRange(a, b, { minGap = 0 } = {}) {
     const iso = new Date(ms).toISOString();
     return kind === 'date' ? iso.slice(0, 10) : iso.slice(0, 16);
   };
-  let prev = num(a.value);
-  const remember = () => { prev = num(a.value); };
+  // (prevB / pushed: for "From passes To" below — the To you had when you started changing From)
+  let prev = num(a.value), prevB = num(b.value), startA = prev, pushed = false, lastA = -1e9;
+  const remember = () => { prev = num(a.value); prevB = num(b.value); startA = prev; pushed = false; };
+  b.addEventListener('change', (e) => { if (e.isTrusted || e.detail === 'user') { prevB = num(b.value); startA = num(a.value); pushed = false; } });
   a.addEventListener('focus', remember);
   a.addEventListener('pointerdown', remember);
   a.addEventListener('change', (e) => {
@@ -271,8 +273,43 @@ export function linkRange(a, b, { minGap = 0 } = {}) {
           valid: (v) => num(v) != null && num(a.value) != null && num(v) >= num(a.value) + (kind === 'time' ? 60000 : gap) });
       }
     }
+    // From and To independent: To only moves when the new From reaches or passes it — then it keeps the distance it
+    // had (and comes back if, while you're still changing From, it ends up before the old To again)
+    if (user && !linkTimes && performance.now() - lastA > IDLE) { startA = prev; prevB = num(b.value); pushed = false; } // a new change of From after a pause
+    lastA = performance.now();
+    if (user && cur != null && !linkTimes && prevB != null) {
+      const gap = minGap * 60000, passes = kind === 'date' && !minGap ? cur > prevB : cur >= prevB;
+      const dist = startA != null && prevB - startA > 0 ? prevB - startA : Math.max(gap, kind === 'time' ? 3600000 : kind === 'date' ? 0 : 3600000);
+      const want = passes ? fmt(cur + Math.max(dist, gap)) : pushed ? fmt(prevB) : null;
+      pushed = passes;
+      if (want != null && want !== b.value) { b.value = want; b.dispatchEvent(new Event('input', { bubbles: true })); b.dispatchEvent(new Event('change', { bubbles: true })); }
+    }
     prev = cur;
   });
+}
+// The same for a start and an end that aren't one pair of inputs (an event's date + time fields, quick create):
+// call begin() when a change of From starts (focus moves, or To was changed), and moved() after each change of From.
+//   get: () => ({ s, e }) in ms; setEnd(ms); defLen: length to use when the old one wasn't positive
+// Typing a time changes the field digit by digit (10:45 → 01:45 → 14:45 → 14:00), so the To and length to go by
+// are the ones from when the change began: a click into From, a change of To, or a pause of a few seconds.
+const IDLE = 4000;
+export function endFollower({ get, setEnd, defLen = 3600000 }) {
+  let orig = get(), pushed = false, last = get(), at = -1e9;
+  return {
+    begin() { orig = last = get(); pushed = false; },
+    moved() {
+      if (performance.now() - at > IDLE && !pushed) orig = last;
+      else if (performance.now() - at > IDLE) { orig = last; pushed = false; }
+      at = performance.now();
+      const { s } = get();
+      if (!Number.isFinite(s) || !Number.isFinite(orig.e)) return false;
+      const passes = s >= orig.e, len = orig.e - orig.s > 0 ? orig.e - orig.s : defLen;
+      const was = pushed; pushed = passes;
+      if (passes) setEnd(s + len); else if (was) setEnd(orig.e);
+      last = get();
+      return passes || was;
+    },
+  };
 }
 // How an input's value reads on a revert button: 17:00 · Fri 6 Nov · Fri 6 Nov 17:00
 function valueLabel(v) {

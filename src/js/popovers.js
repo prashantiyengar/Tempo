@@ -7,7 +7,7 @@ import * as G from './gcal.js';
 import * as D from './dialogs.js';
 import { describe } from './rrule.js';
 import * as C from './categories.js';
-import { $, $$, esc, choose, popover, modal, setHTML, linkTimesOn, offerRevert } from './ui.js';
+import { $, $$, esc, choose, popover, modal, setHTML, endFollower, linkTimesOn, offerRevert } from './ui.js';
 import * as UI from './ui.js';
 import * as N from './notify.js';
 import { app, set, st, tz } from './core.js';
@@ -108,17 +108,17 @@ export function quickCreate(rect, sel, onClose) {
       if (refocus) f.title.focus();
     };
     $$('.dur-add', p).forEach((b) => (b.onclick = () => { sel.end = Math.max(sel.start + 5 * T.MIN, sel.end + +b.dataset.add * T.MIN); redraw(); }));
-    $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start, before = sel.end; sel.start = nowMin(); if (linkTimesOn()) sel.end = sel.start + d; $('.ghost-sel')?.remove(); redraw(); if (linkTimesOn()) offerEnd(before); });
+    $('.st-now', p)?.addEventListener('click', () => { const d = sel.end - sel.start, before = sel.end; sel.start = nowMin(); if (linkTimesOn()) sel.end = sel.start + d; else qFollow.moved(); $('.ghost-sel')?.remove(); redraw(); if (linkTimesOn()) offerEnd(before); });
     $('.en-now', p)?.addEventListener('click', () => { sel.end = Math.max(sel.start + 5 * T.MIN, nowMin()); redraw(); });
     // From −/+ moves only the start (the end stays)
-    $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (linkTimesOn() && sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; redraw(); }));
+    $$('.st-add', p).forEach((b) => (b.onclick = () => { sel.start += +b.dataset.add * T.MIN; if (linkTimesOn()) { if (sel.end < sel.start + 5 * T.MIN) sel.end = sel.start + 5 * T.MIN; } else qFollow.moved(); redraw(); }));
     // typed To: same day as the start; a To before the From means the next day (e.g. sleep 23:00–07:00)
     const fromInputs = () => {
       const day = T.dayKey(sel.start, z);
       const st0 = T.atTime(day, f.qs.value || hhmm(sel.start), z);
       let en = T.atTime(day, f.qe.value || hhmm(sel.end), z);
       if (en <= st0) en = T.atTime(T.addDays(day, 1), f.qe.value || hhmm(sel.end), z);
-      sel.start = st0; sel.end = en; redraw(false);
+      sel.start = st0; sel.end = en; qFollow.begin(); redraw(false);
     };
     // typed From: only the start changes (with "From moves To" on in Settings, To moves with it and ↶ puts it back)
     const offerEnd = (before) => f.qe && offerRevert(f.qe, before, { valid: (v) => v > sel.start, get: () => sel.end, set: (v) => { sel.end = Math.max(sel.start + 5 * T.MIN, v); redraw(false); }, label: (ms) => T.fmtTime(ms, z, s.h12) });
@@ -126,11 +126,13 @@ export function quickCreate(rect, sel, onClose) {
       const len = sel.end - sel.start, before = sel.end, day = T.dayKey(sel.start, z), endDay = T.dayKey(sel.end - 1, z);
       sel.start = T.atTime(day, f.qs.value || hhmm(sel.start), z);
       if (linkTimesOn()) { sel.end = sel.start + Math.max(5 * T.MIN, len); redraw(false); offerEnd(before); return; }
-      // the end keeps its time; it only moves to the next day when it is now before the start on the same day
-      sel.end = T.atTime(endDay, f.qe.value || hhmm(before), z);
-      if (sel.end <= sel.start) sel.end = T.atTime(T.addDays(day, 1), f.qe.value || hhmm(before), z);
+      // the end keeps its time — unless the start reaches or passes it: then it moves along, keeping the length
+      qFollow.moved();
       redraw(false);
     };
+    const qFollow = endFollower({ get: () => ({ s: sel.start, e: sel.end }), setEnd: (ms) => { sel.end = ms; }, defLen: Math.max(5, +s.defaultEventMinutes || 60) * T.MIN });
+    f.addEventListener('focusin', () => qFollow.begin());
+    f.qs?.addEventListener('pointerdown', () => qFollow.begin());
     if (f.qs) { f.qs.addEventListener('change', fromStart); f.qe.addEventListener('change', fromInputs); f.qs.value = hhmm(sel.start); f.qe.value = hhmm(sel.end); }
     $('.since-last', p)?.addEventListener('click', async () => {
       const ref = sel.start, nowish = Math.abs(ref - Date.now()) < 20 * T.MIN;

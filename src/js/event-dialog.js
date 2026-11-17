@@ -3,7 +3,7 @@ import * as T from './tz.js';
 import * as G from './gcal.js';
 import { parseRRule, buildRRule, describe, sameRule } from './rrule.js';
 import { LOCAL_CAL, interval } from './engine.js';
-import { $, $$, esc, modal, setHTML, choose, linkTimesOn, offerRevert, toast } from './ui.js';
+import { $, $$, esc, modal, setHTML, choose, endFollower, linkTimesOn, offerRevert, toast } from './ui.js';
 import * as C from './categories.js';
 import * as N from './notify.js';
 import { ORD, WDL, askCategoryPick, askTitle, checkCount, limitHint, nudgesHTML, recurrenceExtent, sect, tzDatalist, weekdayToggles, wireSects } from './dialogs.js';
@@ -307,13 +307,24 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     f.addEventListener('input', sync);
     // From and To are independent: changing one never changes the other (an end before the start is reported on
     // Save). With Settings → New events → "From moves To" on, changing From keeps the length, with ↶ to put To back.
+    // …except that a From moved to or past the To takes the To along, keeping the length it had (an all-day event
+    // keeps its number of days) — also by −/+, Now, the calendar and the shortcuts.
     let snap = { s: startMs(), e: endMs() };
+    const follow = endFollower({ get: () => ({ s: startMs(), e: endMs() }), setEnd, defLen: Math.max(5, +s.defaultEventMinutes || 60) * T.MIN });
+    let span0 = Math.max(0, T.daysBetween(f.sDate.value, f.eDate.value) || 0), sDate0 = f.sDate.value;
+    const begin = () => { follow.begin(); span0 = Math.max(0, T.daysBetween(f.sDate.value, f.eDate.value) || 0); sDate0 = f.sDate.value; };
+    f.addEventListener('focusin', begin);
+    for (const n of ['sDate', 'sTime']) f[n].addEventListener('pointerdown', begin);
     f.addEventListener('change', (e) => {
       const user = e.isTrusted || e.detail === 'user';
-      if (linkTimesOn() && user && (e.target.name === 'sDate' || e.target.name === 'sTime') && Number.isFinite(snap.s) && Number.isFinite(snap.e)) {
+      const isStart = e.target.name === 'sDate' || e.target.name === 'sTime';
+      if (linkTimesOn() && user && isStart && Number.isFinite(snap.s) && Number.isFinite(snap.e)) {
         const ns = startMs();
         if (Number.isFinite(ns)) { const before = endMs(); setEnd(ns + Math.max(f.allDay.checked ? 0 : 5 * T.MIN, snap.e - snap.s)); showDur(); offerEndRevert(before); }
-      }
+      } else if (isStart && f.allDay.checked) {
+        if (f.sDate.value && f.eDate.value < f.sDate.value) f.eDate.value = T.addDays(f.sDate.value, sDate0 && f.eDate.value >= sDate0 ? span0 : 0);
+      } else if (isStart) follow.moved();
+      else begin();
       snap = { s: startMs(), e: endMs() };
       showDur(); sync();
     });
