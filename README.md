@@ -16,7 +16,21 @@ Tempo helps you *cultivate yourself*: it turns your Google Calendar into a syste
 >
 > **V. Odysseus Reaches Ithaca** — Tempo is the compass. He splits the work, tracks the habits, finds where the hours went — and sails home. *Your labor time, cultivated.*
 
-## Features
+**Try it:** [open the web app](https://prashantiyengar.github.io/Tempo/) on your computer or phone, or install the extension for Chrome or Firefox ([Install](#install)). It works with your existing Google Calendar; nothing else to sign up for.
+
+## Key features
+
+- **Tasks that plan themselves.** Say what needs doing, how long it takes and by when. Tempo splits it into sessions, places them in the free time around your calendar, and re-plans when a meeting lands on top, a session slips or you fall ill. Tasks can repeat (*2 hours every 3 weeks, after hours*), wait for each other, and carry a rank so the important ones get the earliest slots.
+- **Your Google Calendar, with better tools.** Day, week and month views with drag, resize and quick create; repeating events; several calendars and accounts. Shortcuts for real life: *fill time since last event*, *till next event*, *started late*, *finished early*.
+- **Projects.** Chain tasks and events into steps that run in order, with progress per step — and a note when a step moves or runs late against its original plan.
+- **Reading plans.** Give a book's pages or an audiobook's length and a deadline; get sessions labelled with the pages to read, a pace that learns from what you report, and a bookcase of what you've read.
+- **Habits and goals.** A habit tracker with scores and streaks (yes/no or measured, ticked by hand or automatically from your calendar), and ranked weekly and monthly goals with time budgets that fill up as you work on them.
+- **See where your time goes.** Analysis of free and occupied time by category, task or calendar, for any period; a weekly review written as a newspaper; category colors throughout.
+- **Kind to real days.** Sick leave and vacation move everything off those days; sleep and fill-in blocks record the routine parts of a day; a *Later* list holds what isn't scheduled yet, and a *Graveyard* keeps what you gave up on, with its history.
+- **Everywhere, in sync.** Chrome and Firefox extension plus an installable phone app, all kept in step through your own Google Calendar: tasks, settings, habits and goals. Works offline; optional backups to your Google Drive.
+- **Yours.** No server and no account with us: your data lives in your browser and your Google account. Free, with all the code in this repository — and an optional game mode (XP, levels, streaks) if you like that sort of thing.
+
+## All features in detail
 - **Google Calendar sync**: see, create, edit, drag, resize and delete events across all your calendars. Supports time zones (per event and display), recurring events (daily / weekly on chosen days / monthly by date or "2nd Tuesday" / "last Friday" / yearly, with an end date or count), and edits or deletes scoped to *this event*, *this and following*, or *all events*. Also notifications (popup and email, several per event), guests, Google Meet, location, color, busy/free and visibility.
 - **From moves To**: wherever there's a start and an end — the event dialog, quick create, the task dialog (don't start before → deadline), project steps, leave days, the custom export range and Analysis' custom period — typing or picking a new start moves the end with it, so the length stays the same. The −/+ buttons are different: each changes only its own field (see below).
 - **From / To**: in the event dialog the start (*From*) and end (*To*) are on separate lines, each with its own −/+ buttons underneath (a small **−** and **+**: tap one and the steps show for a moment — 5, 10, 15, 30 min and 1 h, the same both ways (15 min, 1 h, 1 day for dates) — and fold away a few seconds after the last tap; under *From* they change only the start, under *To* only the end — the end is pushed on only if the start would pass it) and *Now*, *Since last event* / *Till next event*. The task dialog has *From* (don't start before) and *To* (deadline) lines the same way, with −1d … +1d buttons — also each changing only its own field (*From* never moves the deadline, unless it would come within a day of it). Quick create's −/+ buttons work the same way.
