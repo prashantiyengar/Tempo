@@ -951,7 +951,10 @@ async function init() {
   if (isWeb && 'serviceWorker' in navigator && document.querySelector('link[rel=manifest]')) navigator.serviceWorker.register('sw.js').catch(() => {});
   addEventListener('offline', () => { offlineStatus(); toast('You’re offline — showing your saved calendar. Changes sync when you’re back.', { noUndo: true, ms: 5000 }); });
   addEventListener('online', () => { st().offline = null; E.invalidate(); cycle({ pull: true }); });
-  setInterval(() => cycle({ pull: true }), 5 * 60 * 1000);
+  // A full refresh every 5 minutes while you're looking at Tempo; every 15 while the tab is in the background (it
+  // refreshes as soon as you come back to it anyway) — a tab left open all day made most of Tempo's Google requests.
+  let lastFull = Date.now();
+  setInterval(() => { if (document.hidden && Date.now() - lastFull < 14.5 * 60 * 1000) return; lastFull = Date.now(); cycle({ pull: true }); }, 5 * 60 * 1000);
   // Auto-refresh: while the app is open, check Google every 45 s for changes made elsewhere (phone, Google Calendar,
   // another browser) and reload when something changed.
   setInterval(async () => {

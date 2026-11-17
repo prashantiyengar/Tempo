@@ -425,17 +425,16 @@ export async function pullTasks(state, now = Date.now()) {
     byTask.get(id).push(ev);
   }
   const tomb = new Set(state.tombstones || []);
-  const fixedStatus = (e) => ['done', 'pinned'].includes(e.extendedProperties?.private?.tStatus);
   for (const [id, evs] of byTask) {
     if (tomb.has(id)) { for (const e of evs) { const g = `${e._cal}::${e.id}`; if (!state.orphanGids.includes(g)) state.orphanGids.push(g); } continue; }
     const local = state.tasks.find((t) => t.id === id);
     const remoteRev = Math.max(...evs.map((e) => +e.extendedProperties?.private?.tRev || 0));
-    // The newest plan on Google (stamped by the device that made it); sessions of older plans that are still being
-    // replaced or removed there are left out, so a half-written plan isn't taken on
+    // The newest plan stamp on Google says which device planned the task last. Only the sessions that device
+    // changed carry the new stamp (unchanged ones aren't rewritten), so the plan is all of the task's sessions.
     const stampEv = evs.filter((e) => +e.extendedProperties?.private?.tPlanAt > 0).sort((a, b) => +b.extendedProperties.private.tPlanAt - +a.extendedProperties.private.tPlanAt)[0];
     const stamp = stampEv ? { at: +stampEv.extendedProperties.private.tPlanAt, by: stampEv.extendedProperties.private.tPlanBy || '', rev: remoteRev } : null;
-    const latest = stamp ? evs.filter((e) => fixedStatus(e) || +e.extendedProperties?.private?.tPlanAt === stamp.at) : evs;
-    const build = () => { const t = taskFromEvents(id, latest, latest[0]._cal, state.settings, now); if (stamp) t.plan = stamp; return t; };
+    const build = () => { const t = taskFromEvents(id, evs, evs[0]._cal, state.settings, now); if (stamp) t.plan = stamp; return t; };
+    const shape = (t) => JSON.stringify([...(t.planned || []), ...(t.frozen || [])].map((c) => [c.id, c.start, c.end, c.status || '', normGid(state, c.gid || '')]).sort());
     if (!local) {
       const t = build();
       state.tasks.push(t); res.imported.push(t);
@@ -443,11 +442,15 @@ export async function pullTasks(state, now = Date.now()) {
       const t = build();
       state.tasks = state.tasks.map((x) => (x.id === id ? { ...t, orphanGids: x.orphanGids || [] } : x));
       res.updated.push(t);
-    } else if (remoteRev === (local.rev || 0) && stamp && stamp.by && stamp.by !== state.installId && stamp.at > (local.plan?.at || 0)) {
-      // the same task, planned more recently on another device: follow that plan (rescheduleAll keeps it while it works here)
+    } else if (remoteRev === (local.rev || 0) && stamp && stamp.by && stamp.by !== state.installId && stamp.at >= (local.plan?.at || 0)) {
+      // The same task, planned on another device (more recently, or the plan this device is already following):
+      // mirror what is on Google. Checked on every pull, so a plan read while the other device was still writing
+      // it is completed on the next one. (rescheduleAll keeps a followed plan while it works here.)
       const t = build();
-      state.tasks = state.tasks.map((x) => (x.id === id ? { ...t, orphanGids: x.orphanGids || [], lastPlan: x.lastPlan } : x));
-      res.followed.push(t);
+      if (stamp.at > (local.plan?.at || 0) || shape(t) !== shape(local)) {
+        state.tasks = state.tasks.map((x) => (x.id === id ? { ...t, orphanGids: x.orphanGids || [], lastPlan: x.lastPlan } : x));
+        res.followed.push(t);
+      }
     }
   }
   // A fresh browser adopts the calendar your tasks already live in as its default for new tasks.
