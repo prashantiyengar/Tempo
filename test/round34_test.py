@@ -12,7 +12,7 @@ const FIX = Date.parse('2026-10-26T06:00:00Z'); const _Date = Date; globalThis._
 class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+globalThis.__off);} else super(...a);} static now(){ return _Date.now()+globalThis.__off; } } globalThis.Date = D;
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false,
+  localStorage.setItem('tempo:settings', JSON.stringify({backwardDefault: false, autoExtendDefault: false, tz: 'Europe/Berlin', askCategory: false, goalNotice: false,
     game: {on: true, started: '2026-10-19', lifeCats: ['study'], noCats: ['personal'], active: ['2026-10-19','2026-10-20','2026-10-21','2026-10-22','2026-10-23','2026-10-24','2026-10-25','2026-10-26']""" + extra + """}}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2099-01-01'));
 }"""

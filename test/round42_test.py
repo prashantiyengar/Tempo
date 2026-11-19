@@ -12,7 +12,7 @@ class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+g
 window.__fw = 0; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.classList?.contains('fireworks')) window.__fw++; }).observe(document, { childList: true, subtree: true });
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false, game: {on: true, started: '2026-10-12', active: ['2026-10-24']}}));
+  localStorage.setItem('tempo:settings', JSON.stringify({backwardDefault: false, autoExtendDefault: false, tz: 'Europe/Berlin', askCategory: false, goalNotice: false, game: {on: true, started: '2026-10-12', active: ['2026-10-24']}}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2099-01-01'));
 }"""
 ok = []

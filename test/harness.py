@@ -25,7 +25,7 @@ if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:settings', JSON.stringify(%s));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2099-01-01'));
   localStorage.setItem('tempo:onboardDone', '1');
-}""" % (json.dumps(auth), json.dumps({'askCategory': False, 'goalNotice': False, **settings}))
+}""" % (json.dumps(auth), json.dumps({'askCategory': False, 'goalNotice': False, 'backwardDefault': False, 'autoExtendDefault': False, **settings}))
     return clock + store + extra
 
 class App:

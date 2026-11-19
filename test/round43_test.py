@@ -13,7 +13,7 @@ const FIX = Date.parse('2026-10-25T06:15:00Z'); const _Date = Date; globalThis._
 class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+globalThis.__off);} else super(...a);} static now(){ return _Date.now()+globalThis.__off; } } globalThis.Date = D;
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false, categories: CATS, sleepCategory: 'sleepc', sleepEvents: true, sleepEventsFrom: '2026-10-23', syncTasksToGoogle: true,
+  localStorage.setItem('tempo:settings', JSON.stringify({backwardDefault: false, autoExtendDefault: false, tz: 'Europe/Berlin', askCategory: false, goalNotice: false, categories: CATS, sleepCategory: 'sleepc', sleepEvents: true, sleepEventsFrom: '2026-10-23', syncTasksToGoogle: true,
     game: {on: true, started: '2026-09-21', lifeCats: ['study'], active: ['2026-10-25']}}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2099-01-01'));
 }""".replace('CATS', json.dumps(CATS))

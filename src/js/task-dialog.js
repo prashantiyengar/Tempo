@@ -21,8 +21,11 @@ export function taskDialog(ctx, task = null, preset = {}) {
     bounds: null, ignoreBounds: false,
     color: TASK_COLORS[st.tasks.length % TASK_COLORS.length],
     reminderMinutes: null, notes: '', frozen: [], planned: [], skipped: [], created: now,
+    backward: s.backwardDefault !== false ? { mode: s.backwardMode === 'cluster' ? 'cluster' : 'spread', bufferMin: Math.round((s.backwardBufferHours ?? 24) * 60), nearEnd: s.backwardNearEnd ?? 2 } : null,
     ...(preset.draft || {}),
   };
+  const bw0 = t.backward || { mode: s.backwardMode === 'cluster' ? 'cluster' : 'spread', bufferMin: Math.round((s.backwardBufferHours ?? 24) * 60), nearEnd: s.backwardNearEnd ?? 2 };
+  const bufDays = bw0.bufferMin > 0 && bw0.bufferMin % 1440 === 0;
   const r = { pages: 100, startPage: 1, speed: 15, unit: 'pph', labels: 'actual', ...(t.reading || {}) };
   const b = t.bounds || s.bounds;
   const prog = task ? S.progress(task) : null;
@@ -56,6 +59,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
             <input type="date" name="repUntil" class="rep-u" value="${rep?.until ? T.dayKey(rep.until, tz) : T.dayKey(S.defaultRepeatEnd(t.repeatStart || now, rep?.every || 'week', rep?.interval || 1, tz, true) - 1, tz)}"></div></div>
         </div>
         <div class="field rep-days-f"><span>On these days</span>${weekdayToggles('repDays', rep?.days?.length ? rep.days : [0, 1, 2, 3, 4, 5, 6])}</div>
+        <label class="chk rep-auto"><input type="checkbox" name="repAuto" ${(rep ? rep.auto !== false : s.autoExtendDefault !== false) ? 'checked' : ''}> Extend it automatically when it ends, by the same length <span class="muted small">(you're asked on its last day)</span></label>
         <p class="rep-sum muted small"></p>
       </div>
       <div class="row catcol">
@@ -110,6 +114,17 @@ export function taskDialog(ctx, task = null, preset = {}) {
       </div>
       <div class="row t-adj only-once">${nudgesHTML('dl-add', NUDGE_DAY)}</div>
       <div class="dl-presets only-once"><button type="button" class="chip-btn" data-dl="day">End of work day</button><button type="button" class="chip-btn" data-dl="week">End of work week</button><button type="button" class="chip-btn" data-dl="2w">Within two weeks</button></div>
+      <div class="bw-box only-once">
+        <label class="chk"><input type="checkbox" name="bwOn" ${t.backward ? 'checked' : ''}> <b>⇤ Schedule back from the deadline</b> <span class="muted small">— otherwise as soon as possible</span></label>
+        <div class="bw-opts">
+          <label class="field"><span>Buffer before the deadline</span><div class="join"><input type="number" name="bwBuf" min="0" step="0.5" class="num" value="${+(bufDays ? bw0.bufferMin / 1440 : bw0.bufferMin / 60).toFixed(2)}"><select name="bwUnit"><option value="h" ${bufDays ? '' : 'selected'}>hours</option><option value="d" ${bufDays ? 'selected' : ''}>days</option></select></div></label>
+          <div class="field"><span>Sessions</span><div class="seg bw-mode" role="radiogroup" aria-label="How to place the sessions">
+            <label title="A few sessions right before the buffer, the rest spread evenly from the start"><input type="radio" name="bwMode" value="spread" ${bw0.mode !== 'cluster' ? 'checked' : ''}><span>Spread out</span></label>
+            <label title="All sessions packed together, working back from the buffer"><input type="radio" name="bwMode" value="cluster" ${bw0.mode === 'cluster' ? 'checked' : ''}><span>All together at the end</span></label></div></div>
+          <label class="field bw-near"><span>Sessions right before the buffer</span><input type="number" name="bwNear" min="1" max="20" step="1" class="num" value="${bw0.nearEnd ?? 2}"></label>
+        </div>
+        <p class="muted small bw-say"></p>
+      </div>
       <div class="calc muted small"></div>
 
       ${sect('t-notify', 'Notifications', `
@@ -246,6 +261,7 @@ export function taskDialog(ctx, task = null, preset = {}) {
         notes: f.notes.value,
         calendarId: f.calendarId ? f.calendarId.value : t.calendarId,
         marginDays: num(f.margin.value),
+        backward: f.bwOn.checked ? { mode: f.bwMode.value === 'cluster' ? 'cluster' : 'spread', bufferMin: Math.max(0, Math.round((+f.bwBuf.value || 0) * (f.bwUnit.value === 'd' ? 1440 : 60))), nearEnd: Math.max(1, Math.min(20, Math.round(+f.bwNear.value || 2))) } : null,
         after: $$('input[name=after]:checked', dlg).map((c) => c.value),
         ...readRepeat(kind),
         ...readProject(),
@@ -261,8 +277,12 @@ export function taskDialog(ctx, task = null, preset = {}) {
       if (f.repEnd.value === 'until') repeat.until = T.atTime(f.repUntil.value || T.dayKey(now, tz), '23:59', tz);
       else repeat.count = Math.max(1, Math.round(+f.repCount.value || 1));
       const repeatStart = T.dayStart(f.repStart.value || T.dayKey(now, tz), tz);
+      // auto-extend: by the length it was set up with (kept through extensions; taken anew when you change the end here)
+      repeat.auto = !!f.repAuto.checked;
+      repeat.extend = rep?.extend && !repEndEdited && !!rep.until === !!repeat.until ? rep.extend
+        : repeat.until ? { days: Math.max(1, T.daysBetween(T.dayKey(repeatStart, tz), T.dayKey(repeat.until, tz)) + 1) } : { count: repeat.count };
       const draft = { repeat, repeatStart, created: t.created };
-      return { repeat, repeatStart, earliestStart: null, deadline: S.repeatEnd(draft, s) };
+      return { repeat, repeatStart, earliestStart: null, backward: null, deadline: S.repeatEnd(draft, s) };
     };
     const readProject = () => {
       const v = f.projectId.value;
@@ -289,6 +309,16 @@ export function taskDialog(ctx, task = null, preset = {}) {
       dlg.classList.toggle('repeating', repOn);
       $$('.only-rep', dlg).forEach((e) => (e.style.display = repOn ? '' : 'none'));
       $$('.only-once', dlg).forEach((e) => (e.style.display = repOn || (kind !== 'generic' && e.classList.contains('only-generic')) ? 'none' : ''));
+      // back from the deadline: its options, and the safety margin is replaced by the buffer
+      { const on = f.bwOn.checked && !repOn;
+        $('.bw-opts', dlg).style.display = on ? '' : 'none';
+        $('.bw-near', dlg).style.display = on && f.bwMode.value !== 'cluster' ? '' : 'none';
+        f.margin.closest('.field').style.display = on || repOn ? 'none' : '';
+        const buf = (+f.bwBuf.value || 0) * (f.bwUnit.value === 'd' ? 1440 : 60), dl = T.fromDTInput(f.deadline.value, tz);
+        const by = dl ? T.format(dl - buf * T.MIN, tz, { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: s.h12 }) : '';
+        $('.bw-say', dlg).textContent = !on ? '' : f.bwMode.value === 'cluster'
+          ? `All sessions together, working back from ${by || 'the buffer'}.`
+          : `${Math.max(1, Math.round(+f.bwNear.value || 2))} session${Math.round(+f.bwNear.value || 2) === 1 ? '' : 's'} right before ${by || 'the buffer'}; the rest spread evenly from ${f.earliest.value ? 'the start' : 'today'}.`; }
       const repEvery = f.repEvery.value;
       const repInterval = Math.max(1, Math.round(+f.repInterval.value || 1));
       const daily1 = repEvery === 'day' && repInterval === 1;
@@ -353,8 +383,9 @@ export function taskDialog(ctx, task = null, preset = {}) {
     };
     // Repeating: the end follows the defaults until you change it; one block per time unless you choose to split;
     // "During" mirrors the When-to-schedule choice
-    let repEndTouched = !!rep, blockTouched = !!task;
-    ['repCount', 'repUntil', 'repEnd'].forEach((n) => f[n].addEventListener('input', () => { repEndTouched = true; }));
+    let repEndTouched = !!rep, blockTouched = !!task, repEndEdited = false;
+    ['repCount', 'repUntil', 'repEnd'].forEach((n) => f[n].addEventListener('input', () => { repEndTouched = true; repEndEdited = true; }));
+    ['repStart', 'repInterval', 'repEvery'].forEach((n) => f[n].addEventListener('input', () => { repEndEdited = true; }));
     $$('input[name=blockmode]', dlg).forEach((r) => r.addEventListener('change', () => { blockTouched = true; }));
     f.repOn.addEventListener('change', () => { if (f.repOn.checked && !blockTouched) f.blockmode.value = 'single'; });
     f.repWin.value = f.bmode.value; if (!f.repWin.value) f.repWin.value = 'default';

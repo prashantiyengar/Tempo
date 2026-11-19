@@ -15,7 +15,7 @@ const FIX = Date.parse('2026-10-28T08:00:00Z'); const _Date = Date; globalThis._
 class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+globalThis.__off);} else super(...a);} static now(){ return _Date.now()+globalThis.__off; } } globalThis.Date = D;
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false, categories: CATS, later: [{id: 'l1', text: 'Plan offsite', created: 1792000000000, minutes: 90}]}));
+  localStorage.setItem('tempo:settings', JSON.stringify({backwardDefault: false, autoExtendDefault: false, tz: 'Europe/Berlin', askCategory: false, goalNotice: false, categories: CATS, later: [{id: 'l1', text: 'Plan offsite', created: 1792000000000, minutes: 90}]}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2099-01-01'));
 }""".replace('CATS', json.dumps(CATS))
 ok = []

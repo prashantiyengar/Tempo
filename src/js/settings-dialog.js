@@ -32,7 +32,7 @@ const FIELDS = [
   ['sleepEvents', 'sleepEvents', 'chk'], ['sleepCal', 'sleepCal', 'str'], ['sleepAssume', 'sleepAssume', 'chk'], ['sleepCategory', 'sleepCategory', 'str', { empty: null }],
   ['sleepStart', 'sleepStart', 'str', { def: '23:00' }], ['sleepEnd', 'sleepEnd', 'str', { def: '07:00' }], ['sleepDelayMin', 'sleepDelayMin', 'num', { min: 0, def: 0 }],
   ['dailyCapMinutes', 'dailyCapMinutes', 'num', { min: 0, def: 0 }], ['marginDays', 'marginDays', 'num', { min: 0, def: 0 }], ['travelMinutes', 'travelMinutes', 'num', { min: 0, def: 0 }],
-  ['repeatHorizonDays', 'repeatHorizonDays', 'num', { min: 7, def: 28 }], ['learnSpeed', 'learnSpeed', 'chk'],
+  ['repeatHorizonDays', 'repeatHorizonDays', 'num', { min: 7, def: 28 }], ['backwardDefault', 'backwardDefault', 'chk'], ['backwardBufferHours', 'backwardBufferHours', 'num', { min: 0, def: 24 }], ['backwardMode', 'backwardMode', 'str'], ['backwardNearEnd', 'backwardNearEnd', 'num', { min: 1, def: 2, round: true }], ['autoExtendDefault', 'autoExtendDefault', 'chk'], ['learnSpeed', 'learnSpeed', 'chk'],
   ['sessionWarn', 'sessionWarn', 'num', { min: 0, def: 0 }], ['sessionMax', 'sessionMax', 'num', { min: 0, def: 0 }], ['maxSpanDays', 'maxSpanDays', 'num', { min: 0, def: 0 }],
   ['assumePastDone', 'assumePastDone', 'chk'], ['allDayBlocks', 'allDayBlocks', 'chk'], ['syncTasksToGoogle', 'syncTasksToGoogle', 'chk'], ['taskCalendarId', 'taskCalendarId', 'str', { empty: null }],
   ['notifyTasks', 'notifyTasks', 'chk'], ['notifyLocal', 'notifyLocal', 'chk'], ['notifyGoogle', 'notifyGoogle', 'chk'],
@@ -157,7 +157,15 @@ export function settingsDialog(ctx) {
         </div>`)}
         ${sect('s-overflow', 'When a task ignores day bounds', `<div class="row"><input type="time" name="oStart" value="${s.overflowBounds.start}" step="900"> <span class="muted">to</span> <input type="time" name="oEnd" value="${s.overflowBounds.end}" step="900"></div>
           ${weekdayToggles('odays', s.overflowBounds.days)}`)}
-        ${sect('s-planning', 'Planning', `<div class="grid3">
+        ${sect('s-planning', 'Planning', `
+          <label class="chk"><input type="checkbox" name="backwardDefault" ${s.backwardDefault !== false ? 'checked' : ''}> New tasks are scheduled <b>back from their deadline</b> (otherwise as soon as possible) — each task can change this</label>
+          <div class="grid3">
+            <label class="field"><span>Buffer before the deadline (hours)</span><input type="number" name="backwardBufferHours" min="0" step="1" value="${s.backwardBufferHours ?? 24}"></label>
+            <label class="field"><span>Sessions</span><select name="backwardMode"><option value="spread" ${s.backwardMode !== 'cluster' ? 'selected' : ''}>Spread out, a few right before the buffer</option><option value="cluster" ${s.backwardMode === 'cluster' ? 'selected' : ''}>All together, back from the buffer</option></select></label>
+            <label class="field"><span>Sessions right before the buffer (spread out)</span><input type="number" name="backwardNearEnd" min="1" max="20" step="1" value="${s.backwardNearEnd ?? 2}"></label>
+          </div>
+          <label class="chk"><input type="checkbox" name="autoExtendDefault" ${s.autoExtendDefault !== false ? 'checked' : ''}> Repeating events and tasks with an end <b>extend themselves</b> by the same length when they end (each can change this; on its last day you're asked)</label>
+          <div class="grid3">
             <label class="field"><span>Most task time per day, all tasks together (min, 0 = no cap)</span><input type="number" name="dailyCapMinutes" min="0" step="15" value="${s.dailyCapMinutes || 0}"></label>
             <label class="field"><span>Default safety margin — aim to finish … days before a deadline</span><input type="number" name="marginDays" min="0" step="0.5" value="${s.marginDays || 0}"></label>
             <label class="field"><span>Travel buffer around events with a place (min, 0 = off)</span><input type="number" name="travelMinutes" min="0" step="5" value="${s.travelMinutes ?? 15}"></label>

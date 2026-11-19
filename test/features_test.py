@@ -12,7 +12,7 @@ const FIX = Date.parse('2026-10-19T09:30:00Z'); const _Date = Date; const off = 
 class D extends _Date { constructor(...a){ if(a.length===0){ super(_Date.now()+off);} else super(...a);} static now(){ return _Date.now()+off; } } globalThis.Date = D;
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({breakMinutes: 0, minChunkMinutes: null, tz: 'Europe/Berlin'}));  // saved by an older version
+  localStorage.setItem('tempo:settings', JSON.stringify({backwardDefault: false, autoExtendDefault: false, breakMinutes: 0, minChunkMinutes: null, tz: 'Europe/Berlin'}));  // saved by an older version
 }"""
 async def main():
     g = MockGoogle(); errs = []; auth_reqs = []

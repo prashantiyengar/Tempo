@@ -11,6 +11,7 @@ import * as AC from './accounts.js';
 import { ext, isWeb, get as storeGet, set as storeSet } from './storage.js';
 import { $, $$, esc, el, toast as uiToast, closePopover, download, modal, setLinkTimes, setQuickTz } from './ui.js';
 import { configureDatePicker, initDatePicker } from './datepicker.js';
+import { recurExtendCheck } from './recur-extend.js';
 import * as W from './weather.js';
 import * as GM from './game.js';
 import { LOCAL_COLOR, app, set, st, tz } from './core.js';
@@ -586,7 +587,7 @@ async function runCycle({ sync = true, pull = false } = {}) {
     renderBanner();
   }
   markBaseline();
-  autoBlocks().then(() => { scheduleAutoBlocks(); return autoHabits(); }).then(() => goalSlotCheck()).then(() => gameRefresh()).then(() => dailyBackup());
+  autoBlocks().then(() => { scheduleAutoBlocks(); return autoHabits(); }).then(() => goalSlotCheck()).then(() => recurExtendCheck()).then(() => gameRefresh()).then(() => dailyBackup());
   await handleProblems(problems);
 }
 

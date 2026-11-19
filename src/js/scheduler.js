@@ -3,6 +3,7 @@
 // Task model:
 // {
 //   id, title, kind: 'generic' | 'reading', rank (1 = most important), deadline (ms), earliestStart (ms|null),
+//   backward?: { mode: 'spread' | 'cluster', bufferMin, nearEnd } — plan back from the deadline (see planOne),
 //   totalMinutes,                                   // generic tasks
 //   reading: { pages, startPage, speed, unit: 'pph'|'ppm'|'mpp', labels: 'actual'|'relative' },
 //   chunkMinutes, minChunkMinutes, maxPerDayMinutes, breakMinutes  (null -> settings defaults)
@@ -41,6 +42,11 @@ export const DEFAULT_SETTINGS = {
   marginDays: 0,           // default safety margin: aim to finish this many days before a deadline
   repeatHorizonDays: 28,   // repeating tasks are planned this far ahead
   sinceLastBuffer: 1,      // "since last event" starts this many minutes after it ends
+  backwardDefault: true,   // new tasks are planned back from their deadline (task.backward), not as soon as possible
+  backwardBufferHours: 24, // …ending this long before the deadline
+  backwardMode: 'spread',  // 'spread': a few sessions right before the buffer, the rest spread evenly from the start; 'cluster': all packed back from it
+  backwardNearEnd: 2,      // sessions placed right before the buffer in 'spread' mode
+  autoExtendDefault: true, // repeating events and tasks with an end extend themselves by the same length when they end
   linkTimes: false,        // changing From moves To with it (keeps the length); off: From and To are independent
   travelMinutes: 15,       // buffer before and after events that have a (physical) location; 0 = off
   pomodoro: { work: 25, rest: 5 },
@@ -237,6 +243,56 @@ function allocate(slots, need, p, tz, dayUsed, gUsed = {}) {
   return { chunks: out, need };
 }
 
+// allocate(), from the end of the time backwards: the last session ends as late as possible
+function allocateBack(slots, need, p, tz, dayUsed, gUsed = {}) {
+  const out = [], used = { ...dayUsed }, g = { ...gUsed }, q = 5 * T.MIN;
+  for (let i = slots.length - 1; i >= 0 && need > 0; i--) {
+    const s = slots[i];
+    let pos = Math.floor(s.end / q) * q;
+    while (need > 0) {
+      const k = T.dayKey(pos - 1, tz);
+      const cap = Math.min(p.maxPerDay ? p.maxPerDay - (used[k] || 0) : Infinity, p.dayCap ? p.dayCap - (g[k] || 0) : Infinity);
+      let len = Math.floor(Math.min(p.chunk, need, (pos - s.start) / T.MIN, cap));
+      if (len <= 0 || len < Math.min(p.minChunk, need)) break;
+      const rest = need - len;
+      if (rest > 0 && rest < Math.max(15, p.wiggle || 0) && len + rest <= p.chunk + (p.wiggle || 0) && pos - (len + rest) * T.MIN >= s.start && len + rest <= cap) len += rest;
+      out.push({ start: pos - len * T.MIN, end: pos });
+      used[k] = (used[k] || 0) + len; g[k] = (g[k] || 0) + len;
+      need -= len;
+      pos -= (len + p.breakMin) * T.MIN;
+    }
+  }
+  return { chunks: out.sort((a, b) => a.start - b.start), need };
+}
+// Planning back from the deadline. `wins`: free time from now (or the earliest start) to the buffer.
+//   cluster: every session packed back from the buffer
+//   spread:  `nearEnd` sessions right before the buffer, the others spaced evenly from the start date (the earliest
+//            start, else when the task was made — a fixed point, so the plan doesn't drift as time passes) to them
+function planBackward(task, bw, wins, need, p, tz, dayUsed, gUsed, gap, from) {
+  if (!wins.length || need <= 0) return { chunks: [], need };
+  const pad = (cs) => merge(cs.map((c) => ({ start: c.start - gap, end: c.end + gap })));
+  if (bw.mode === 'cluster') return allocateBack(wins, need, p, tz, dayUsed, gUsed);
+  const n = Math.max(1, Math.ceil(need / p.chunk)), k = Math.min(n, Math.max(1, Math.round(+bw.nearEnd || 2)));
+  const near = allocateBack(wins, n <= k ? need : Math.min(need, k * p.chunk), p, tz, dayUsed, gUsed);
+  let chunks = near.chunks, left = need - near.chunks.reduce((a, c) => a + dur(c), 0);
+  if (left <= 0) return { chunks, need: Math.max(0, near.need) };
+  const end = chunks.length ? chunks[0].start - gap : wins[wins.length - 1].end;
+  const start = Math.min(Math.max(task.earliestStart || task.created || from, 0), end);
+  const m = Math.max(1, Math.ceil(left / p.chunk)), step = (end - start) / m;
+  for (let i = 0; i < m && left > 0; i++) {
+    const target = Math.max(from, T.dayStart(T.dayKey(start + i * step, tz), tz)); // (from the start of that day)
+    const one = Math.min(p.chunk, left);
+    const avoid = pad(chunks);
+    const tryIn = (a, b) => allocate(subtract(intersect(wins, [{ start: a, end: b }]), avoid), one, p, tz, perDay(chunks, tz), addDays(gUsed, chunks, tz));
+    let r = tryIn(target, end);
+    if (r.need >= one) r = tryIn(from, end); // nothing free after its point: the nearest free time before it
+    chunks = [...chunks, ...r.chunks].sort((a, b) => a.start - b.start);
+    left -= one - r.need;
+    if (r.need >= one) break;
+  }
+  return { chunks, need: Math.max(0, left) };
+}
+
 function perDay(chunks, tz) {
   const m = {};
   for (const c of chunks) { const k = T.dayKey(c.start, tz); m[k] = (m[k] || 0) + dur(c); }
@@ -286,7 +342,9 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366, gUse
   if (p.single) { p.chunk = p.minChunk = Math.max(5, remaining); p.wiggle = 0; } // what's left, still in one piece
   const from = Math.max(ceilTo(now, 5 * T.MIN), task.earliestStart || 0);
   const deadline = task.deadline || from + 30 * T.DAY;
-  const soft = Math.max(from, deadline - marginDays(task, settings) * T.DAY);
+  // Back from the deadline: work should be done `bufferMin` before it (the buffer replaces the safety margin)
+  const bw = task.backward && !task.repeat ? task.backward : null;
+  const soft = bw ? Math.max(from, deadline - Math.max(0, +bw.bufferMin || 0) * T.MIN) : Math.max(from, deadline - marginDays(task, settings) * T.DAY);
   const busy = merge([...occupied, ...(task.skipped || []), ...(usesLeaveDays(task, settings) ? [] : leaveBlocks(settings, now - T.DAY, now + 800 * T.DAY))]);
   const frozenTT = (task.frozen || []).filter(takesTime);
   const free = (a, b) => (b > a ? subtract(windows(a, b, p.bounds, tz), busy) : []);
@@ -302,6 +360,11 @@ export function planOne(task, { occupied, now, settings, horizonDays = 366, gUse
   if (p.minChunk < p.chunk) phases.push({ wins: free(from, deadline), p, short: true });
   let need = remaining, chunks = [];
   const gap = p.breakMin * T.MIN;
+  if (bw) {
+    // placed back from the buffer (what doesn't fit there goes through the usual phases below: the buffer, shorter sessions…)
+    const r = planBackward(task, bw, free(from, soft), need, smart, tz, perDay(frozenTT, tz), gUsed, gap, from);
+    chunks = r.chunks; need = r.need;
+  }
   for (const ph of phases) {
     if (need <= 0) break;
     const avail = subtract(ph.wins, merge(chunks.map((c) => ({ start: c.start - gap, end: c.end + gap }))));
@@ -526,7 +589,7 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now(), { me = nu
       planned = []; lastPlan = { shortfall: 0, remaining: 0, at: now, periods: [] };
       let occ = occupied, g = gUsed;
       for (const per of pers) {
-        const vt = { ...t, repeat: null, kind: 'generic', totalMinutes: t.repeat.minutes, marginDays: 0,
+        const vt = { ...t, repeat: null, backward: null, kind: 'generic', totalMinutes: t.repeat.minutes, marginDays: 0,
           earliestStart: Math.max(per.start, t.earliestStart || 0), deadline: per.end,
           frozen: (t.frozen || []).filter((c) => inPeriod(c, per)), planned: prev.filter((c) => c.pk === per.key) };
         const r = planOne(vt, { occupied: occ, now, settings, horizonDays: 0, gUsed: g });

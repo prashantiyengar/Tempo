@@ -114,6 +114,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
           <input type="date" name="until" value="${r0.until}" class="ends-on">
           <input type="number" name="count" min="1" max="999" value="${r0.count}" class="ends-after num"><span class="ends-after">occurrences</span>
         </div>
+        <label class="chk rec-only rec-auto"><input type="checkbox" name="recAuto" ${(ev?.extendedProperties?.private?.tempoAutoExt != null ? ev.extendedProperties.private.tempoAutoExt === '1' : s.autoExtendDefault !== false) ? 'checked' : ''}> Extend it automatically when it ends, by the same length <span class="muted small">(you're asked on its last day)</span></label>
         <div class="muted small rec-desc"></div>`)}
 
       ${sect('ev-more', 'Calendar, location &amp; more', `
@@ -217,6 +218,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       $('.unit-label', dlg).textContent = { DAILY: 'day(s)', WEEKLY: 'week(s)', MONTHLY: 'month(s)', YEARLY: 'year(s)' }[freq] || '';
       $$('.ends-on', dlg).forEach((e) => (e.style.display = freq && f.ends.value === 'on' ? '' : 'none'));
       $$('.ends-after', dlg).forEach((e) => (e.style.display = freq && f.ends.value === 'after' ? '' : 'none'));
+      $$('.rec-auto', dlg).forEach((e) => (e.style.display = freq && f.ends.value !== 'never' ? '' : 'none'));
       const g = (f.calId.value || calId) !== LOCAL_CAL;
       $$('.google-only', dlg).forEach((e) => (e.style.display = g ? '' : 'none'));
       remBox.style.display = g && f.useDefault.checked ? 'none' : '';
@@ -301,7 +303,7 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     }));
     f.addEventListener('input', showDur); f.addEventListener('change', showDur); showDur();
     let recTouched = false;
-    const REC_FIELDS = new Set(['freq', 'interval', 'byday', 'monthMode', 'ends', 'until', 'count']);
+    const REC_FIELDS = new Set(['freq', 'interval', 'byday', 'monthMode', 'ends', 'until', 'count', 'recAuto']);
     f.addEventListener('input', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
     f.addEventListener('change', (e) => { if (REC_FIELDS.has(e.target.name)) recTouched = true; });
     f.addEventListener('input', sync);
@@ -407,6 +409,23 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
           recNow = recNow.map((l) => (l.startsWith('RRULE:') ? l.replace(/;(COUNT|UNTIL)=[^;]*/g, '') + ';UNTIL=' + u : l));
           body.recurrence = recNow;
         } else if (!(await checkCount('occurrences', ext.n, s))) return;
+      }
+      // Auto-extend (Settings default; the checkbox): the series remembers the length it was set up with (14 days, or
+      // 10 times) and the day of its last occurrence, so it can be offered / extended on that day (recur-extend.js).
+      if (recNow.length && (isNew || recChanged || recTouched)) {
+        const r = parseRRule(recNow), p0 = ev?.extendedProperties?.private || {};
+        const allDay0 = !!body.start.date, st0 = allDay0 ? T.dayStart(body.start.date, zone) : Date.parse(body.start.dateTime);
+        const ext = r && (r.count || r.until) ? recurrenceExtent(recNow, st0, allDay0, body.start.date, zone) : null;
+        const lastKey = ext && Number.isFinite(ext.end) ? T.dayKey(ext.end, zone) : '';
+        const ruleEdited = recChanged && !(p0.tempoExt && sameRule(recNow, rec || []));
+        const extLen = !ext ? '' : r.count ? (p0.tempoExt?.startsWith('C') && !ruleEdited ? p0.tempoExt : `C${r.count}`)
+          : (p0.tempoExt?.startsWith('D') && !ruleEdited ? p0.tempoExt : (() => {
+            // from when you set it up (or its first occurrence, if that's earlier) to its end date: "until 2 weeks from now" → 14 days
+            const from = [allDay0 ? body.start.date : T.dayKey(st0, zone), T.dayKey(Date.now(), zone)].sort()[0];
+            return `D${Math.max(1, T.daysBetween(from, `${r.until.slice(0, 4)}-${r.until.slice(4, 6)}-${r.until.slice(6, 8)}`))}`;
+          })());
+        const base = body.extendedProperties || ev?.extendedProperties || {};
+        body.extendedProperties = { ...base, private: { ...(base.private || {}), tempoAutoExt: ext && f.recAuto.checked ? '1' : '0', tempoExt: extLen, tempoLast: lastKey } };
       }
       const targetCal = f.calId.value || calId;
       const g = targetCal !== LOCAL_CAL;

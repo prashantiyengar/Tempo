@@ -166,6 +166,12 @@ export function createApi(h) {
     if (a.period) { const p = (h.set().periods || []).find((x) => x.name.toLowerCase() === String(a.period).toLowerCase() || x.id === a.period) || err(`No time period "${a.period}".`); Object.assign(draft, { periodId: p.id, periodName: p.name, periodRules: p.rules }); }
     if (a.ignoreBounds) draft.ignoreBounds = true;
     if (a.single || a.oneBlock) draft.single = true; // one uninterrupted block (per time, for repeats)
+    // backward: false / "asap" plans as soon as possible; true, "spread" or "cluster" (or { mode, bufferHours, nearEnd }) back from the deadline
+    if (a.backward != null || a.asap) {
+      const b = a.asap || a.backward === false || a.backward === 'asap' ? null : typeof a.backward === 'object' ? a.backward : { mode: a.backward === true ? null : a.backward };
+      const s0 = h.set();
+      draft.backward = b ? { mode: (b.mode || s0.backwardMode) === 'cluster' ? 'cluster' : 'spread', bufferMin: Math.round((b.bufferHours ?? s0.backwardBufferHours ?? 24) * 60), nearEnd: b.nearEnd ?? s0.backwardNearEnd ?? 2 } : null;
+    }
     if (a.notes) draft.notes = a.notes;
     if (a.notify) draft.notifyProfile = /^(none|off|no)$/i.test(a.notify) ? 'none' : profileByName(a.notify).id;
     if (a.project) {
@@ -327,7 +333,7 @@ export function createApi(h) {
     } },
     listProfiles: { about: 'Notification profiles (name and reminders) and which ones new events and task sessions use.', run: () => ({ profiles: N.profiles(h.set()).map((p) => ({ name: p.name, reminders: N.describeProfile(p) })), events: N.eventDefault(h.set())?.name, taskSessions: N.taskDefault(h.set())?.name }) },
     listCategories: { about: 'Categories (name, icon, preferred time of day).', run: () => (h.set().categories || []).map((c) => ({ name: c.name, icon: c.icon || '', prefer: c.prefer || null })) },
-    addTask: { params: 'title, hours | pages (+ startPage, pagesPerHour) | repeat {every: "day"|"week"|"month", interval?, hours, until | count, days?, on? ("day": each time on the start day; "period": any day until the next)}, start? (first day of a repeat), deadline, rank?, category?, notify? (notification profile name, or "none"), notBefore?, marginDays?, after?, project?, period?, single? (one block), sessionMinutes? — or text: "Read Dune 200 pages by Friday, Study"', about: 'Create a task; Tempo splits it into sessions.', write: true, run: async (a) => {
+    addTask: { params: 'title, hours | pages (+ startPage, pagesPerHour) | repeat {every: "day"|"week"|"month", interval?, hours, until | count, days?, on? ("day": each time on the start day; "period": any day until the next)}, start? (first day of a repeat), deadline, rank?, category?, notify? (notification profile name, or "none"), notBefore?, marginDays?, after?, project?, period?, single? (one block), backward? ("spread" | "cluster" | false = as soon as possible | { mode, bufferHours, nearEnd }; default from Settings), sessionMinutes? — or text: "Read Dune 200 pages by Friday, Study"', about: 'Create a task; Tempo splits it into sessions.', write: true, run: async (a) => {
       const t = taskFromSpec(a);
       h.st().tasks.push({ ...t, rev: Date.now() });
       await h.saveTasks(`AI: add “${t.title}”`);

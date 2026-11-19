@@ -123,6 +123,8 @@ export function buildDraft(d) {
     deadline: T.atTime(T.addDays(T.dayKey(now, z), 7), s.bounds.end, z), earliestStart: null,
     chunkMinutes: null, minChunkMinutes: null, maxPerDayMinutes: null, breakMinutes: null, bounds: null, ignoreBounds: false,
     color: D.TASK_COLORS_PUBLIC[st().tasks.length % D.TASK_COLORS_PUBLIC.length], reminderMinutes: null, notes: '', frozen: [], planned: [], skipped: [], created: now,
+    // planned back from the deadline unless that's off in Settings (repeating tasks are planned per period)
+    backward: s.backwardDefault !== false && !d.repeat ? { mode: s.backwardMode === 'cluster' ? 'cluster' : 'spread', bufferMin: Math.round((s.backwardBufferHours ?? 24) * 60), nearEnd: s.backwardNearEnd ?? 2 } : null,
     ...d,
   };
   if (t.repeat) t.deadline = S.repeatEnd(t, s);

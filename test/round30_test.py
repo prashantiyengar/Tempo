@@ -8,7 +8,7 @@ srv = subprocess.Popen(['python3','-m','http.server','8824','-d','dist/web'], st
 INIT = """
 if (!localStorage.getItem('tempo:auth')) {
   localStorage.setItem('tempo:auth', JSON.stringify({clientId:'x.apps.googleusercontent.com', connected:true, consented:true, token:'tok', expires: 9e15, email:'me@example.com'}));
-  localStorage.setItem('tempo:settings', JSON.stringify({tz: 'Europe/Berlin', askCategory: false, goalNotice: false, habits: [{id: 'h1', name: 'Exercise', color: '#388e3c', type: 'yesno', freq: {times: 1, per: 'day'}, log: {}, created: Date.now()}]}));
+  localStorage.setItem('tempo:settings', JSON.stringify({backwardDefault: false, autoExtendDefault: false, tz: 'Europe/Berlin', askCategory: false, goalNotice: false, habits: [{id: 'h1', name: 'Exercise', color: '#388e3c', type: 'yesno', freq: {times: 1, per: 'day'}, log: {}, created: Date.now()}]}));
   localStorage.setItem('tempo:lastReviewWeek', JSON.stringify('2099-01-01'));
 }"""
 ok = []
