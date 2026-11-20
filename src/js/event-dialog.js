@@ -82,6 +82,10 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
         ${nudgesHTML('dur-add')}
         ${ctx.nextEventStart ? '<button type="button" class="chip-btn till-next" title="End when the next event starts (looks ahead up to 12 hours)">⤓ Till next event</button>' : ''}
       </div>
+      ${isNew && ctx.envelopPlan ? `<div class="timed env-row">
+        <label class="chk sw-toggle"><input type="checkbox" name="envelop" ${(init.envelop ?? s.envelopEvents) ? 'checked' : ''}> Envelop what's already there <span class="muted small">— blocks in the free time around the events and task sessions in it</span></label>
+        <div class="muted small env-hint" aria-live="polite"></div>
+      </div>` : ''}
 
       ${sect('ev-notify', 'Notifications &amp; repeat', `
         <div class="sub-h">Notifications</div>
@@ -225,6 +229,9 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
       $('.add-rem', dlg).style.display = g && f.useDefault.checked ? 'none' : '';
       const rr = buildRec();
       $('.rec-desc', dlg).textContent = rr ? describe(rr) : '';
+      // Envelop: one-off timed events only; shows what it would make
+      const envRow = $('.env-row', dlg);
+      if (envRow) { envRow.style.display = ad || freq ? 'none' : ''; envHint(); }
       const cal = cals.find((c) => c.id === (f.calId.value || calId));
       $('.sw-cal', dlg).style.background = cal?.color || '#888';
     };
@@ -251,6 +258,17 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
     const zoneOf = () => (T.isValidTz(f.tz.value.trim()) ? f.tz.value.trim() : s.tz);
     const endMs = () => T.atTime(f.eDate.value, f.eTime.value || '00:00', zoneOf());
     const startMs = () => T.atTime(f.sDate.value, f.sTime.value || '00:00', zoneOf());
+    let envSeq = 0;
+    const envHint = async () => {
+      const h = $('.env-hint', dlg); if (!h) return;
+      if (!f.envelop.checked || f.allDay.checked || f.freq.value) { h.textContent = ''; return; }
+      const a = startMs(), b = endMs(), my = ++envSeq;
+      if (!(b > a)) { h.textContent = ''; return; }
+      const txt = await ctx.envelopPlan(a, b).catch(() => '');
+      if (my === envSeq) h.textContent = txt;
+    };
+    f.envelop?.addEventListener('change', () => { s.envelopEvents = f.envelop.checked; ctx.saveSettings?.(); envHint(); });
+    for (const n of ['sDate', 'sTime', 'eDate', 'eTime']) f[n].addEventListener('change', () => envHint());
     const showDur = () => { const m = Math.round((endMs() - startMs()) / T.MIN); const d = $('.dur-now', dlg); if (d) d.textContent = m > 0 ? T.fmtDur(m) : 'ends before it starts'; $('.t-len', dlg)?.classList.toggle('bad', !(m > 0)); };
     $('.st-now', dlg)?.addEventListener('click', () => {
       const d = endMs() - startMs(), n = Math.floor(Date.now() / T.MIN) * T.MIN;
@@ -454,7 +472,8 @@ export function eventDialog(ctx, { ev = null, master = null, init = {} }) {
           body.extendedProperties = { ...base, private: { ...(base.private || {}), ...(ch.extendedProperties?.private || {}) }, ...(ch.extendedProperties?.shared ? { shared: { ...(base.shared || {}), ...ch.extendedProperties.shared } } : {}) };
         }
       }
-      close({ action: 'save', body, calId: targetCal, conference: g && f.meet.checked && !ev?.conferenceData, recurrenceChanged: recChanged });
+      close({ action: 'save', body, calId: targetCal, conference: g && f.meet.checked && !ev?.conferenceData, recurrenceChanged: recChanged,
+        envelop: isNew && !ad && !recNow.length && !!f.envelop?.checked });
     });
   }, { cls: 'wide' });
 }

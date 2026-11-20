@@ -209,34 +209,47 @@ export async function openClearDay(key0 = null) {
 }
 
 // ———————————————————————————————— Envelop ————————————————————————————————
-// The free pieces of [a, b) around what's already there (each at least 5 minutes).
+// The free pieces of [a, b) around what's already there (each at least 10 minutes).
 export function envelopPieces(a, b, busy) {
   const out = [];
   let t = a;
   for (const x of S.merge(busy.map((x) => ({ start: Math.max(a, x.start), end: Math.min(b, x.end) })).filter((x) => x.end > x.start))) {
-    if (x.start - t >= 5 * T.MIN) out.push([t, x.start]);
+    if (x.start - t >= 10 * T.MIN) out.push([t, x.start]);
     t = Math.max(t, x.end);
   }
-  if (b - t >= 5 * T.MIN) out.push([t, b]);
+  if (b - t >= 10 * T.MIN) out.push([t, b]);
   return out;
 }
-// A new timed, one-off event over time that already has events: one event as it is, or envelop them (several
-// blocks in the free time around them). Resolves with the list of [start, end] to create, or null (cancelled).
-export async function askEnvelop(body) {
-  if (!body?.start?.dateTime || body.recurrence?.length) return null;
-  const a = Date.parse(body.start.dateTime), b = Date.parse(body.end.dateTime), z = tz();
-  const days = []; for (let k = T.dayKey(a, z); k <= T.dayKey(b - 1, z); k = T.addDays(k, 1)) days.push(k);
-  const there = (await collectItems(days)).filter((it) => it.kind === 'event' && !it.allDay && !it.declined && it.ev?.transparency !== 'transparent'
-    && !it.ev?.extendedProperties?.private?.tempoTask && it.start < b && it.end > a)
+// What's already in [a, b): timed events (busy ones you haven't declined) and task sessions — past days too.
+export async function envelopPlan(a, b) {
+  if (!(b > a)) return { there: [], pieces: [] };
+  const z = tz(), days = [];
+  for (let k = T.dayKey(a, z); k <= T.dayKey(b - 1, z) && days.length < 31; k = T.addDays(k, 1)) days.push(k);
+  const there = (await collectItems(days)).filter((it) => !it.allDay && it.start < b && it.end > a
+    && (it.kind === 'chunk' || (it.kind === 'event' && !it.declined && it.ev?.transparency !== 'transparent' && !it.ev?.extendedProperties?.private?.tempoTask)))
     .sort((x, y) => x.start - y.start);
-  if (!there.length) return null;
-  const pieces = envelopPieces(a, b, there);
-  const h12 = set().h12, tm = (ms) => T.fmtTime(ms, z, h12);
-  const list = there.slice(0, 4).map((it) => `${tm(it.start)}–${tm(it.end)} ${it.title}`).join(', ') + (there.length > 4 ? ` and ${there.length - 4} more` : '');
-  const opts = [];
-  if (pieces.length) opts.push({ value: 'wrap', primary: true, label: `Envelop ${there.length === 1 ? 'it' : 'them'}: ${plural(pieces.length, 'block')}`, desc: `${pieces.map(([x, y]) => `${tm(x)}–${tm(y)}`).join(', ')} — what's already there stays as it is.` });
-  opts.push({ value: 'one', label: 'One event over it all', desc: `${tm(a)}–${tm(b)}, overlapping what's there.` });
-  const v = await choose(`“${body.summary}” overlaps ${plural(there.length, 'event')}`, `Already there: ${list}.`, opts, { cancel: 'Cancel' });
-  if (!v) return 'cancel';
-  return v === 'wrap' ? pieces : null;
+  return { there, pieces: envelopPieces(a, b, there) };
+}
+export function envelopSummary(plan, a, b) {
+  const z = tz(), tm = (ms) => T.fmtTime(ms, z, set().h12);
+  if (!plan.there.length) return `Nothing there yet — it is created as one event (${tm(a)}–${tm(b)}).`;
+  if (!plan.pieces.length) return `No free time left in it: ${plural(plan.there.length, 'item')} already fill it.`;
+  return `Around ${plural(plan.there.length, 'item')} already there: ${plural(plan.pieces.length, 'block')} — ${plan.pieces.map(([x, y]) => `${tm(x)}–${tm(y)}`).join(', ')}.`;
+}
+// Create a new timed event "enveloping" what's already there: one block per free piece. Task sessions it wraps
+// around are pinned, so they stay where they are. Returns the number of blocks made.
+export async function saveEnveloped(calId, body, opts, { save, saveMany }) {
+  if (!body?.start?.dateTime) { await save(calId, body, opts); return 1; }
+  const a = Date.parse(body.start.dateTime), b = Date.parse(body.end.dateTime);
+  const plan = await envelopPlan(a, b);
+  if (!plan.there.length) { await save(calId, body, opts); return 1; }
+  if (!plan.pieces.length) { toast('No free time left in that span — nothing was created.', { noUndo: true }); return 0; }
+  const pins = plan.there.filter((it) => it.kind === 'chunk' && it.status === 'planned');
+  if (pins.length) {
+    for (const it of pins) { const t = st().tasks.find((x) => x.id === it.task.id); if (t) replaceTask(S.pinSession(t, it.sess.id, it.start, it.end)); }
+    await saveTasks('keep sessions an event envelops');
+  }
+  const bodies = plan.pieces.map(([x, y]) => ({ ...body, start: { ...body.start, dateTime: new Date(x).toISOString() }, end: { ...body.end, dateTime: new Date(y).toISOString() } }));
+  if (bodies.length === 1) await save(calId, bodies[0], opts); else await saveMany(calId, bodies, opts);
+  return bodies.length;
 }

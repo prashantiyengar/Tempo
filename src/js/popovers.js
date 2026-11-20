@@ -16,7 +16,7 @@ import { collectItems, ctx, cycle, editEvent, newEvent, refreshFromServer, rende
 import { gameXPLine } from './game-ui.js';
 import { handleError, logHistory, openSyncPanel, setStatus } from './status.js';
 import { askScope } from './interactions.js';
-import { abandonRest, openClearDay } from './clear.js';
+import { abandonRest, openClearDay, saveEnveloped } from './clear.js';
 import { deleteDoneSession, dropTimer, startTimer, timer, tmWork } from './timer.js';
 import { deleteTask, editTask, newTask, pushUndo, undoableEventChange, undoableEventDelete } from './undo.js';
 import { addToGraveyard } from './sidebar.js';
@@ -81,6 +81,7 @@ export function quickCreate(rect, sel, onClose) {
           <div class="qc-fill"><button type="button" class="chip-btn since-last" title="Start when the previous event ended (up to 12 h earlier)">⤒ Since last event</button><button type="button" class="chip-btn till-next" title="End when the next event starts (up to 12 h later)">⤓ Till next event</button></div>
         </div>`;
       })()}
+      ${sel.allDay ? '' : `<label class="chk small qc-env" title="Create it as blocks in the free time around the events and task sessions already there"><input type="checkbox" name="env" ${s.envelopEvents ? 'checked' : ''}> Envelop what's already there</label>`}
       <div class="qc-sels"><select name="cal" aria-label="Calendar">${cals.map((c) => `<option value="${esc(c.id)}" ${c.id === def ? 'selected' : ''}>${esc(c.summary)}</option>`).join('')}</select>
       <select name="np" class="qc-np" aria-label="Notifications" title="Notification profile">${N.profiles(s).map((pr) => `<option value="${esc(pr.id)}" ${pr.id === N.eventDefault(s)?.id ? 'selected' : ''} title="${esc(N.describeProfile(pr))}">🔔 ${esc(pr.name)}</option>`).join('')}</select></div>
       <div class="qc-actions">
@@ -180,9 +181,11 @@ export function quickCreate(rect, sel, onClose) {
         body.extendedProperties = { ...(body.extendedProperties || {}), private: { ...(body.extendedProperties?.private || {}), tempoNotify: prof.id } };
       }
       close(); onClose?.();
-      await saveNewEvent(f.cal.value, body);
+      if (f.env?.checked) await saveEnveloped(f.cal.value, body, undefined, { save: saveNewEvent, saveMany: saveNewEvents });
+      else await saveNewEvent(f.cal.value, body);
     });
-    $('.more', p).onclick = () => { const v = { title: f.title.value, calId: f.cal.value, categoryId: qcCat?.id, notifyProfile: f.np.value }; close(); onClose?.(); newEvent({ ...sel, ...v }); };
+    f.env?.addEventListener('change', () => { set().envelopEvents = f.env.checked; E.persist(st(), ['settings']); });
+    $('.more', p).onclick = () => { const v = { title: f.title.value, calId: f.cal.value, categoryId: qcCat?.id, notifyProfile: f.np.value, envelop: !!f.env?.checked }; close(); onClose?.(); newEvent({ ...sel, ...v }); };
     $('.as-task', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'generic', title, earliestStart: sel.allDay ? null : sel.start, totalMinutes: sel.allDay ? null : Math.round((sel.end - sel.start) / T.MIN) }); };
     $('.as-reading', p).onclick = () => { const title = f.title.value; close(); onClose?.(); newTask({ kind: 'reading', title, earliestStart: sel.allDay ? null : sel.start }); };
   });

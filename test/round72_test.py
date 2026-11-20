@@ -152,42 +152,71 @@ async def main(app):
     await p.screenshot(path=f'{app.out}/r72-clear-phone.png')
     await p.close()
 
-    # ——— 4. Envelop ———
-    p = await app.page(settings=BASE, now=NOW, wait=2500)
+    # ——— 4. Envelop: a toggle in the event dialog (and quick create) ———
+    p = await app.page(settings=BASE, now=NOW, wait=2500, auth={})
     p.set_default_timeout(8000)
     await run_cmd(p, [{'cmd': 'addEvent', 'title': 'Meeting', 'start': '2026-11-17 11:00', 'end': '2026-11-17 12:00', 'calendar': 'Local'},
                       {'cmd': 'addEvent', 'title': 'Call', 'start': '2026-11-18 10:00', 'end': '2026-11-18 10:30', 'calendar': 'Local'},
-                      {'cmd': 'addEvent', 'title': 'Review', 'start': '2026-11-18 14:00', 'end': '2026-11-18 15:00', 'calendar': 'Local'}])
-    await p.wait_for_timeout(1500)
+                      {'cmd': 'addEvent', 'title': 'Review', 'start': '2026-11-18 14:00', 'end': '2026-11-18 15:00', 'calendar': 'Local'},
+                      {'cmd': 'addEvent', 'title': 'Old', 'start': '2026-11-13 10:00', 'end': '2026-11-13 11:00', 'calendar': 'Local'},
+                      {'cmd': 'addEvent', 'title': 'Thu lunch', 'start': '2026-11-19 12:00', 'end': '2026-11-19 13:00', 'calendar': 'Local'},
+                      {'cmd': 'addTask', 'title': 'Write', 'hours': 2, 'deadline': '2026-11-17 17:00', 'sessionMinutes': 60}])
+    await p.wait_for_timeout(2000)
 
-    async def new_event(title, day, a, b):
+    async def open_new(title, day, a, b):
         await p.evaluate("document.getElementById('btn-new-event').click()"); await p.wait_for_selector('dialog [name=sDate]')
         await p.fill('dialog [name=summary]', title)
         await setv(p, 'sDate', day); await setv(p, 'eDate', day); await setv(p, 'sTime', a); await setv(p, 'eTime', b)
-        await p.wait_for_timeout(200)
-        await p.click('dialog form button[type=submit]'); await p.wait_for_timeout(1000)
+        await p.wait_for_timeout(700)
 
-    await new_event('Deep work', '2026-11-17', '09:00', '17:00')
-    txt = await p.text_content('dialog[open] .choice') if await p.query_selector('dialog[open] .choice') else ''
-    app.check('25. a new event over a meeting asks: envelop it in 2 blocks (09:00–11:00, 12:00–17:00)', 'overlaps 1 event' in txt and 'Envelop it: 2 blocks' in txt and '09:00–11:00' in txt and '12:00–17:00' in txt, txt[:260])
+    async def save():
+        await p.click('dialog form button[type=submit]'); await p.wait_for_timeout(2000)
+
+    await open_new('Deep work', '2026-11-17', '09:00', '17:00')
+    app.check('25. the event dialog has an "Envelop what\'s already there" toggle, off at first', await p.is_visible('dialog [name=envelop]') and not await p.is_checked('dialog [name=envelop]'))
+    await p.click('dialog [name=envelop]'); await p.wait_for_timeout(800)
+    hint = await p.text_content('dialog .env-hint')
+    app.check('26. switched on, it shows the blocks it will make: 09:00–11:00, 12:00–17:00', '2 blocks' in hint and '09:00–11:00' in hint and '12:00–17:00' in hint, hint)
     await p.screenshot(path=f'{app.out}/r72-envelop.png')
-    await p.click('dialog[open] .choice-btn.primary'); await p.wait_for_timeout(2000)
+    await save()
     ev = await events(p, '2026-11-17', '2026-11-17')
-    app.check('26. two "Deep work" blocks around the meeting, which stays', ev == [('Deep work', '09:00', '11:00'), ('Meeting', '11:00', '12:00'), ('Deep work', '12:00', '17:00')], ev)
+    app.check('27. saved without any question: two "Deep work" blocks around the meeting, which stays', not await p.query_selector('dialog[open] .choice') and ev == [('Deep work', '09:00', '11:00'), ('Meeting', '11:00', '12:00'), ('Deep work', '12:00', '17:00')], ev)
     await run_cmd(p, [{'cmd': 'undo'}]); await p.wait_for_timeout(2000)
-    app.check('27. one undo takes both blocks away', await events(p, '2026-11-17', '2026-11-17') == [('Meeting', '11:00', '12:00')])
-    await new_event('Focus', '2026-11-18', '09:00', '17:00')
-    txt = await p.text_content('dialog[open] .choice')
-    app.check('28. around two events: 3 blocks', 'overlaps 2 events' in txt and 'Envelop them: 3 blocks' in txt, txt[:200])
-    await p.click('dialog[open] .choice-btn.primary'); await p.wait_for_timeout(2000)
-    ev = await events(p, '2026-11-18', '2026-11-19')
-    app.check('29. … 09:00–10:00, 10:30–14:00, 15:00–17:00', [e for e in ev if e[0] == 'Focus'] == [('Focus', '09:00', '10:00'), ('Focus', '10:30', '14:00'), ('Focus', '15:00', '17:00')], ev)
-    await new_event('Workshop', '2026-11-17', '10:00', '13:00')
-    await p.click('dialog[open] .choice-btn:not(.primary)'); await p.wait_for_timeout(2000)
-    ev = await events(p, '2026-11-17', '2026-11-18')
-    app.check('30. "One event over it all" makes a single event', ('Workshop', '10:00', '13:00') in ev and len([e for e in ev if e[0] == 'Workshop']) == 1, ev)
-    await new_event('Free slot', '2026-11-19', '09:00', '10:00')
-    app.check('31. no overlap: no question, one event', not await p.query_selector('dialog[open] .choice') and ('Free slot', '09:00', '10:00') in await events(p, '2026-11-19', '2026-11-20'))
+    app.check('28. one undo takes both blocks away', await events(p, '2026-11-17', '2026-11-17') == [('Meeting', '11:00', '12:00')])
+    await open_new('Focus', '2026-11-18', '09:00', '17:00')
+    app.check('29. the toggle stays on for the next event', await p.is_checked('dialog [name=envelop]'))
+    await save()
+    ev = await events(p, '2026-11-18', '2026-11-18')
+    app.check('30. around two events: 09:00–10:00, 10:30–14:00, 15:00–17:00', [e for e in ev if e[0] == 'Focus'] == [('Focus', '09:00', '10:00'), ('Focus', '10:30', '14:00'), ('Focus', '15:00', '17:00')], ev)
+    await open_new('Archive', '2026-11-13', '09:00', '12:00'); await save()
+    ev = await events(p, '2026-11-13', '2026-11-13')
+    app.check('31. a past day too: 09:00–10:00 and 11:00–12:00 around "Old"', ev == [('Archive', '09:00', '10:00'), ('Old', '10:00', '11:00'), ('Archive', '11:00', '12:00')], ev)
+    before = [(c['id'], c['start'], c['end']) for c in await sess(p, 'Write') if c['start'].startswith('2026-11-16')]
+    await open_new('Admin', '2026-11-16', '08:30', '12:00'); await save()
+    after = await sess(p, 'Write')
+    ev = [e for e in await events(p, '2026-11-16', '2026-11-16') if e[0] == 'Admin']
+    def mins(h): return int(h[:2]) * 60 + int(h[3:])
+    exp, t = [], mins('08:30')
+    for _, a, b in sorted(before):
+        if mins(a[11:]) - t >= 10: exp.append((t, mins(a[11:])))
+        t = max(t, mins(b[11:]))
+    if mins('12:00') - t >= 10: exp.append((t, mins('12:00')))
+    got = [(mins(a), mins(b)) for _, a, b in ev]
+    kept = all(any(c['id'] == i and c['start'] == a and c['end'] == b and c['status'] == 'pinned' for c in after) for i, a, b in before)
+    app.check("32. task sessions are enveloped too, and stay where they are (pinned)", before and got == exp and kept, (before, ev, [(c['start'], c['status']) for c in after]))
+    await open_new('Workshop', '2026-11-17', '10:00', '13:00')
+    await p.click('dialog [name=envelop]'); await save()
+    ev = await events(p, '2026-11-17', '2026-11-17')
+    app.check('33. switched off: one event over what is there, no question', not await p.query_selector('dialog[open] .choice') and ('Workshop', '10:00', '13:00') in ev and len([e for e in ev if e[0] == 'Workshop']) == 1, ev)
+    # quick create (drag across empty time) has the toggle too
+    await p.evaluate("""import('./js/popovers.js').then(m => { const z = window.__tempo.app.state.settings.tz;
+        m.quickCreate({ left: 400, top: 300, right: 520, bottom: 340, width: 120, height: 40 }, { start: Date.parse('2026-11-19T10:00:00Z'), end: Date.parse('2026-11-19T13:00:00Z'), allDay: false }); })""")
+    await p.wait_for_selector('.qc [name=env]')
+    app.check('34. quick create has the toggle (off, as last set)', not await p.is_checked('.qc [name=env]'))
+    await p.fill('.qc [name=title]', 'Sprint'); await p.click('.qc [name=env]')
+    await p.click('.qc button[type=submit]'); await p.wait_for_timeout(2000)
+    ev = await events(p, '2026-11-19', '2026-11-19')
+    app.check('35. … and envelops: 11:00–12:00 and 13:00–14:00 around lunch', [e for e in ev if e[0] == 'Sprint'] == [('Sprint', '11:00', '12:00'), ('Sprint', '13:00', '14:00')], ev)
     await p.close()
 
 if __name__ == "__main__": App.run(main, port=8973)

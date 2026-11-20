@@ -27,7 +27,7 @@ import { askScope, msAt, onAllDayPointerDown, onGridPointerDown, onMonthPointerD
 import { afterLeave, hoursChanged, leaveMenu, leaveTag } from './leave.js';
 import { computeDayFill, dayMarks, wireDayMarks } from './notes.js';
 import { adoptPeriodsFromTasks, afterEventChange, attachTitleSuggest, refreshTitleList, saveNewEvent, saveNewEvents } from './popovers.js';
-import { askEnvelop } from './clear.js';
+import { envelopPlan, envelopSummary, saveEnveloped } from './clear.js';
 import { checkGoalNotice, maybeOfferReview, openReview, paperEnd, paperPeriod, paperWeek, periodShift, renderGoalsView, renderPaperView } from './review-ui.js';
 import { coverFor, openProject, projectEventDone, renderLater, renderSidebar } from './sidebar.js';
 import { loadTimer } from './timer.js';
@@ -44,6 +44,7 @@ export const ctx = {
   titleSuggest: (inp) => attachTitleSuggest(inp),
   coverFor: (t) => coverFor(t),
   nextEventStart: (o) => nextEventStart(o),
+  envelopPlan: async (a, b) => envelopSummary(await envelopPlan(a, b), a, b),
   get lastBusy() { return app.lastBusy; },
   eventDone: (stp) => projectEventDone(stp),
   // New events go to the calendar chosen for task sessions (Settings → Google Calendar), else the primary one.
@@ -485,10 +486,8 @@ export async function newEvent(init) {
   refreshTitleList();
   const r = await D.eventDialog(ctx, { init });
   if (r?.action !== 'save') return;
-  // over time that already has events: one event, or envelop them (blocks in the free time around them)
-  const pieces = await askEnvelop(r.body).catch(() => null);
-  if (pieces === 'cancel') return;
-  if (pieces?.length) return saveNewEvents(r.calId, pieces.map(([a, b]) => ({ ...r.body, start: { ...r.body.start, dateTime: new Date(a).toISOString() }, end: { ...r.body.end, dateTime: new Date(b).toISOString() } })), { conference: r.conference });
+  // "Envelop what's already there": blocks in the free time around the events and task sessions in it
+  if (r.envelop) return saveEnveloped(r.calId, r.body, { conference: r.conference }, { save: saveNewEvent, saveMany: saveNewEvents });
   await saveNewEvent(r.calId, r.body, { conference: r.conference });
 }
 
