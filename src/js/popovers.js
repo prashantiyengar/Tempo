@@ -16,6 +16,7 @@ import { collectItems, ctx, cycle, editEvent, newEvent, refreshFromServer, rende
 import { gameXPLine } from './game-ui.js';
 import { handleError, logHistory, openSyncPanel, setStatus } from './status.js';
 import { askScope } from './interactions.js';
+import { abandonRest } from './clear.js';
 import { deleteDoneSession, dropTimer, startTimer, timer, tmWork } from './timer.js';
 import { deleteTask, editTask, newTask, pushUndo, undoableEventChange, undoableEventDelete } from './undo.js';
 import { addToGraveyard } from './sidebar.js';
@@ -213,6 +214,19 @@ export async function saveNewEvent(calId, body, opts) {
   } catch (err) { handleError(err); render(); }
 }
 
+// Several blocks of one new event (an enveloped event): one undo takes them all back.
+export async function saveNewEvents(calId, bodies, opts) {
+  try {
+    setStatus('Saving…');
+    const made = [];
+    for (const body of bodies) made.push(await EV.createEvent(st(), calId, body, opts));
+    createdEvents++;
+    pushUndo(`create “${bodies[0].summary || 'event'}” (${made.length} blocks)`, async () => { for (const ev of made) await EV.deleteEvent(st(), ev, 'this'); await afterEventChange(); });
+    await afterEventChange();
+    toast(`Event created in ${made.length} blocks around what's already there`);
+  } catch (err) { handleError(err); render(); }
+}
+
 export async function afterEventChange() {
   await E.persist(st(), ['localEvents']);
   E.invalidate();
@@ -377,6 +391,7 @@ function openChunk(it, rect) {
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         ${task.kind !== 'reading' && !task.repeat ? '<button class="btn small ghost extend-time">＋ Extend time…</button>' : ''}
         ${task.repeat ? '<button class="btn small ghost extend-recur">＋ Extend recurrences…</button>' : ''}
+        ${!isDone ? `<button class="btn small ghost abandon" title="${task.kind === 'reading' && !task.repeat ? 'Stop reading here: this session and the later ones come off the calendar; the Bookcase keeps how far you got' : task.repeat ? 'End the series before this session' : 'This session and the later ones come off the calendar; the remaining work goes to the Graveyard'}">⛔ Abandon the rest</button>` : ''}
         <button class="btn small ghost to-grave-task">⚰ Graveyard</button>
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
@@ -443,6 +458,11 @@ function openChunk(it, rect) {
       const extended = S.extendRecurrences(t2, extra);
       replaceTask({ ...extended, deadline: S.repeatEnd(extended, set()) });
       await saveTasks('extend recurrences'); toast(`Added ${extra} ${unitL} periods to "${task.title}"`); cycle();
+    });
+    $('.abandon', pop)?.addEventListener('click', async () => {
+      close();
+      const r = await abandonRest(task.id, sess.id);
+      if (r && timer?.chunkId === sess.id) dropTimer();
     });
     $('.to-grave-task', pop)?.addEventListener('click', async () => {
       close();

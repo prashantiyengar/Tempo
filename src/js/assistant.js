@@ -11,6 +11,7 @@ import { createApi, AI_PROMPT } from './api.js';
 import * as P from './projects.js';
 import { app, set, st, tz } from './core.js';
 import { finishedEarly, itemsToday } from './actions.js';
+import { abandonRest, clearSchedule, resumeBook } from './clear.js';
 import { collectItems, ctx, cycle, render, replaceTask, saveTasks, setEventDone, toast } from './app.js';
 import { setLeave } from './leave.js';
 import { afterEventChange, askCategoryOnce } from './popovers.js';
@@ -39,7 +40,7 @@ async function finishedEarlyApi(a) {
 let api = null;
 export function setupApi() {
   api = createApi({
-    setLeave, st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi, setEventDone, render,
+    setLeave, st, set, tz, cycle, saveTasks, replaceTask, deleteTask, buildDraft, collectItems, freeSlots, undo, pushUndo, undoStack, finishedEarlyApi, setEventDone, render, abandonRest, resumeBook, clearSchedule,
     afterEventChange, defaultCalendar: () => ctx.defaultCalendar(), lastBusy: () => app.lastBusy, toast: (m) => toast(m),
   });
   window.tempo = api;

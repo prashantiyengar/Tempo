@@ -243,6 +243,9 @@ async def main(app):
     await page5.wait_for_selector('dialog[open] .ask-cat', timeout=5000)
     await page5.click('dialog[open] .ask-cat .cat-host button:has-text("Work")')
     await page5.wait_for_timeout(1200)
+    # (it lands on Lunch's time, so it asks whether to envelop Lunch — keep it as one event)
+    if await page5.query_selector('dialog[open] .choice-btn:not(.primary)'):
+        await page5.click('dialog[open] .choice-btn:not(.primary)'); await page5.wait_for_timeout(1200)
     ev = await run_cmd(page5, '[{"cmd":"listEvents","from":"2024-10-28","to":"2024-11-04"}]')
     su = [e for e in (res(ev) or []) if (e.get('title') or '').endswith('Standup')]  # titles get the category icon
     app.check('20b. picking a category in the prompt applies it', su and (su[0].get('category') == 'Work'), su)

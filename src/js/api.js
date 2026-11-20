@@ -96,6 +96,7 @@ export function createApi(h) {
       progress: `${Math.round(p.done)} of ${p.total} min (${p.pct}%)`, sessions: ss.length, next: fmt(ss.find((c) => c.kind !== 'done' && c.end > Date.now())?.start),
       warning: t.lastPlan?.shortfall > 0 ? `not enough time before the deadline (${Math.round(t.lastPlan.shortfall)} min short)` : t.lastPlan?.late > 0 ? 'runs into its safety margin' : null,
       project: t.projectName || null, after: (t.after || []).map((id) => h.st().tasks.find((x) => x.id === id)?.title).filter(Boolean),
+      ...(t.abandoned ? { abandoned: { at: fmt(t.abandoned.at), pct: t.abandoned.pct, ...(t.abandoned.pages ? { pagesRead: t.abandoned.read, pages: t.abandoned.pages } : {}) } } : {}),
     };
   };
   const sessOut = (t, c) => ({ id: c.id, task: t.title, taskId: t.id, index: c.index, of: c.count, label: c.label, start: fmt(c.start), end: fmt(c.end), minutes: c.minutes, status: c.partial ? 'partly done' : c.kind });
@@ -388,6 +389,24 @@ export function createApi(h) {
       const kind = a.kind === 'none' || a.kind === null ? null : a.kind === 'sick' ? 'sick' : 'vacation';
       await h.setLeave(keys, kind, { ask: false, mode: kind ? (a.reschedule || 'all') : null });
       return { days: keys, kind: kind || 'none' };
+    } },
+    abandonTask: { params: 'task (title or id), session? (session id; default: the next one not done)', about: 'Abandon the rest of a task from a session on: that session and every later one not done come off the calendar; what was done stays. A book is set aside (the Bookcase keeps how far you got; resumeBook plans the rest); a repeating task ends there; any other task\'s remaining work goes to the Graveyard (with nothing done yet, the whole task does).', write: true, run: async (a) => {
+      const t = findTask(a.task);
+      const r = await h.abandonRest(t.id, a.session || null, { ask: false });
+      if (!r) throw new Error(`"${t.title}" has no session left to abandon.`);
+      return r;
+    } },
+    resumeBook: { params: 'task (title or id), by (date or date and time)', about: 'Plan the rest of a set-aside (abandoned) book again, to be read by the given date.', write: true, run: async (a) => {
+      const t = findTask(a.task);
+      if (!t.abandoned) throw new Error(`"${t.title}" isn't set aside.`);
+      const k = parseDay(a.by); if (!k) throw new Error('Give "by" as a date, e.g. "2026-12-20".');
+      const by = when(a.by, { defaultTime: '17:00' });
+      return h.resumeBook(t.id, by);
+    } },
+    clearSchedule: { params: 'date? (default today), from? ("HH:MM"), to? ("HH:MM"), only? ("tasks" | "events"; default everything)', about: 'Clear a day\'s schedule (☢): events starting in that time are deleted (one occurrence of a repeating event), task sessions move to other times and the time is kept free. Without from/to: the whole day, or what is left of today.', write: true, run: async (a) => {
+      const day = a.date ? parseDay(a.date) : T.dayKey(Date.now(), tz());
+      if (!day) throw new Error('Bad date.');
+      return h.clearSchedule({ day, from: a.from || '', to: a.to || '', only: a.only === 'tasks' || a.only === 'events' ? a.only : 'all' });
     } },
     listLeave: { about: 'Days marked as on leave or sick leave.', run: () => Object.entries(h.set().leave || {}).filter(([, v]) => S.LEAVE_KINDS[v]).sort().map(([day, kind]) => ({ day, kind })) },
     finishTask: { params: 'session (id) | task + index', about: 'Declare the whole task finished in this session: it counts all remaining work (reading: up to the last page) and the sessions still to come are removed.', write: true, run: async (a) => {

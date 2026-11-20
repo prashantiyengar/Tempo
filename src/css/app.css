@@ -1564,3 +1564,10 @@ input.dp-open { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transpa
 /* "ends today — extend it?" */
 .recur-ext .re-custom { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 2px; }
 .recur-ext .re-custom .num { width: 4.5em; }
+/* ☢ Clear the schedule; set-aside books */
+.clear-day .cd-span, .clear-day .cd-only { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 0; }
+.clear-day .cd-span .chk { flex-wrap: wrap; gap: 6px; }
+.clear-day .cd-span input[type=time] { width: auto; }
+.clear-day .cd-preview { margin: 12px 0 0; font-weight: 600; }
+.clear-day .cd-holds .row { margin-top: 6px; }
+.lib-t .lib-resume { margin-left: 6px; white-space: nowrap; }

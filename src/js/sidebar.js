@@ -1,4 +1,5 @@
 // The sidebar: tasks, Later, projects, Bookcase, Google Keep shortcut, mini month.
+import { resumeBook } from './clear.js';
 import * as T from './tz.js';
 import * as S from './scheduler.js';
 import * as E from './engine.js';
@@ -62,7 +63,7 @@ export function renderSidebar() {
 
   const now = Date.now();
   // finished tasks stay in the list for a week, then move to "Finished" (still there, just folded away)
-  const filed = (t) => !t.repeat && taskFinishedAt(t, now) && taskFinishedAt(t, now) < now - 7 * T.DAY;
+  const filed = (t) => !t.repeat && ((taskFinishedAt(t, now) && taskFinishedAt(t, now) < now - 7 * T.DAY) || (t.abandoned && t.abandoned.at < now - 7 * T.DAY));
   const allTasks = S.sortTasks(st().tasks.filter((t) => !t.archived));
   const projDone = (pid) => { const kids = allTasks.filter((x) => x.projectId === pid); return kids.length && kids.every(filed); };
   const isFiled = (t) => (t.projectId && (set().projects || []).some((p) => p.id === t.projectId) ? projDone(t.projectId) : filed(t));
@@ -72,13 +73,13 @@ export function renderSidebar() {
     const ss = S.sessions(t);
     const doneN = ss.filter((c) => c.kind === 'done' || (c.kind === 'pinned' && c.end <= now)).length;
     const complete = !t.repeat && p.pct >= 100;
-    const warn = !complete && t.lastPlan?.shortfall > 0;
+    const warn = !complete && !t.abandoned && t.lastPlan?.shortfall > 0;
     const late = !complete && !warn && t.lastPlan?.late > 0;
     const next = ss.find((c) => c.kind !== 'done' && c.end > now);
     const waiting = t.lastPlan?.waitingFor?.length ? st().tasks.filter((x) => t.lastPlan.waitingFor.includes(x.id)).map((x) => x.title) : [];
     const meta = t.repeat
       ? `↻ ${T.fmtDur(p.done)} of ${T.fmtDur(p.total)} ${t.repeat.every === 'week' ? 'this week' : 'today'}`
-      : complete ? 'Done ✓' : `${doneN}/${ss.length} · due ${T.fmtDate(t.deadline, tz())}`;
+      : complete ? 'Done ✓' : t.abandoned ? `⛔ ${t.kind === 'reading' ? 'Set aside' : 'Rest abandoned'} at ${t.abandoned.pct}%` : `${doneN}/${ss.length} · due ${T.fmtDate(t.deadline, tz())}`;
     return `<button class="task-row ${complete ? 'complete' : ''} ${t.projectId ? 'in-proj' : ''}" data-task="${t.id}" style="--c:${t.color}">
       <span class="rank" title="Rank ${t.rank}">${t.rank}</span>
       <span class="tr-main">
@@ -184,7 +185,7 @@ function libraryRows() {
     const fin = taskFinishedAt(t, now);
     const from = done.length ? Math.min(...done.map((c) => c.start)) : null;
     const sessions = done.map((c) => [c.start, Math.min(c.end, now)]);
-    return { t, audio: r.format === 'audio', title: t.title, pages, total: +r.pages || 0, read: Math.round(pages * Math.min(100, p.pct) / 100), pct: Math.round(p.pct), mins, from, to: fin || (from ? now : null), finished: !!fin, sessions, color: t.color };
+    return { t, audio: r.format === 'audio', title: t.title, pages, total: +r.pages || 0, read: Math.round(pages * Math.min(100, p.pct) / 100), pct: Math.round(p.pct), mins, from, to: fin || (t.abandoned ? t.abandoned.at : from ? now : null), finished: !!fin, aside: !fin && !!t.abandoned, sessions, color: t.color };
   }).sort((a, b) => (b.from || b.t.created || 0) - (a.from || a.t.created || 0));
 }
 // Books on a timeline: one row each (overlapping books sit on their own rows), with a mark for each reading session
@@ -207,20 +208,22 @@ function libraryTimeline(rows) {
 }
 async function openLibrary() {
   const rows = libraryRows(), z = tz(), fmt = (t) => T.format(t, z, { day: 'numeric', month: 'short', year: 'numeric' });
-  const read = rows.filter((r) => r.finished), now = rows.filter((r) => !r.finished && r.from), next = rows.filter((r) => !r.from);
-  const tr = (r) => `<tr data-task="${esc(r.t.id)}"><td><span class="lib-dot" style="background:${esc(r.color || '#7c5cff')}"></span><b>${esc(r.title)}</b></td><td>${r.audio ? `🎧 ${r.finished ? T.fmtDur(r.pages) : `${T.fmtDur(r.read)} / ${T.fmtDur(r.pages)}`}` : `${r.finished ? r.pages : `${r.read} / ${r.pages}`} pp.`}</td><td>${r.from ? `${esc(fmt(r.from))} – ${r.finished ? esc(fmt(r.to)) : 'now'}` : '<span class="muted">not started</span>'}</td><td>${r.mins ? esc(T.fmtDur(Math.round(r.mins))) : '—'}</td><td>${r.finished ? '✓' : `${r.pct}%`}</td></tr>`;
+  const read = rows.filter((r) => r.finished), aside = rows.filter((r) => r.aside), now = rows.filter((r) => !r.finished && !r.aside && r.from), next = rows.filter((r) => !r.from && !r.aside);
+  const tr = (r) => `<tr data-task="${esc(r.t.id)}"><td><span class="lib-dot" style="background:${esc(r.color || '#7c5cff')}"></span><b>${esc(r.title)}</b></td><td>${r.audio ? `🎧 ${r.finished ? T.fmtDur(r.pages) : `${T.fmtDur(r.read)} / ${T.fmtDur(r.pages)}`}` : `${r.finished ? r.pages : `${r.read} / ${r.pages}`} pp.`}</td><td>${r.from ? `${esc(fmt(r.from))} – ${r.finished || r.aside ? esc(fmt(r.to)) : 'now'}` : r.aside ? `<span class="muted">set aside ${esc(fmt(r.to))}</span>` : '<span class="muted">not started</span>'}</td><td>${r.mins ? esc(T.fmtDur(Math.round(r.mins))) : '—'}</td><td>${r.finished ? '✓' : r.aside ? `${r.pct}% <button type="button" class="btn small lib-resume" data-task="${esc(r.t.id)}" title="Plan the rest of the book again">↻ Reschedule the rest</button>` : `${r.pct}%`}</td></tr>`;
   const table = (list, head) => list.length ? `<h3 class="gd-h">${head} <span class="muted small">${list.length}</span></h3><table class="lib-t"><thead><tr><th>Book</th><th>Pages</th><th>Read</th><th>Time</th><th></th></tr></thead><tbody>${list.map(tr).join('')}</tbody></table>` : '';
-  const totPages = read.filter((r) => !r.audio).reduce((a, r) => a + r.pages, 0) + now.filter((r) => !r.audio).reduce((a, r) => a + r.read, 0), totMin = rows.reduce((a, r) => a + r.mins, 0);
-  const shelf = (list) => list.map((r) => `<button type="button" class="bc-book" data-task="${esc(r.t.id)}" title="${esc(r.title)}${r.finished ? ' — read' : r.from ? ` — ${r.pct}%` : ' — up next'}">${coverHTML(r.t)}<span class="bc-t">${esc(r.title)}</span>${r.finished ? '' : r.from ? `<span class="bc-bar"><i style="width:${r.pct}%"></i></span>` : ''}</button>`).join('');
+  const totPages = read.filter((r) => !r.audio).reduce((a, r) => a + r.pages, 0) + [...now, ...aside].filter((r) => !r.audio).reduce((a, r) => a + r.read, 0), totMin = rows.reduce((a, r) => a + r.mins, 0);
+  const shelf = (list) => list.map((r) => `<button type="button" class="bc-book" data-task="${esc(r.t.id)}" title="${esc(r.title)}${r.finished ? ' — read' : r.aside ? ` — set aside at ${r.pct}%` : r.from ? ` — ${r.pct}%` : ' — up next'}">${coverHTML(r.t)}<span class="bc-t">${esc(r.title)}</span>${r.finished ? '' : r.from || r.aside ? `<span class="bc-bar"><i style="width:${r.pct}%"></i></span>` : ''}</button>`).join('');
   await modal(`<div class="library bookcase"><header class="dlg-head"><h2>📚 Bookcase</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></header><div class="dlg-body">
-    <p class="muted small" style="margin:0">${read.length} book${read.length === 1 ? '' : 's'} read · ${now.length} reading · ${totPages.toLocaleString()} pages · ${T.fmtDur(Math.round(totMin))} of reading</p>
-    ${rows.length ? `<div class="bc-shelf">${shelf([...now, ...read, ...next])}</div>` : ''}
+    <p class="muted small" style="margin:0">${read.length} book${read.length === 1 ? '' : 's'} read · ${now.length} reading${aside.length ? ` · ${aside.length} set aside` : ''} · ${totPages.toLocaleString()} pages · ${T.fmtDur(Math.round(totMin))} of reading</p>
+    ${rows.length ? `<div class="bc-shelf">${shelf([...now, ...read, ...aside, ...next])}</div>` : ''}
     ${libraryTimeline(rows)}
-    ${table(now, 'Reading now')}${table(read, 'Read')}${table(next, 'Up next')}
+    ${table(now, 'Reading now')}${table(read, 'Read')}${table(aside, 'Set aside')}${table(next, 'Up next')}
     ${rows.length ? '' : '<p class="muted small">Plan a book with 📖 and it shows up here as you read it.</p>'}
   </div></div>`, (dlg, close) => {
     wireCovers(dlg);
     $$('.lib-t tr[data-task]', dlg).forEach((r) => (r.onclick = () => { close(); editTask(st().tasks.find((t) => t.id === r.dataset.task)); }));
+    // a set-aside book: plan the rest of it again
+    $$('.lib-resume', dlg).forEach((b) => (b.onclick = async (e) => { e.stopPropagation(); close(); await resumeBook(b.dataset.task); }));
     // a book on the shelf: change its cover (ISBN or image) right here — the plan isn't touched
     $$('.bc-book', dlg).forEach((b) => (b.onclick = async () => {
       const t = st().tasks.find((x) => x.id === b.dataset.task); if (!t) return;

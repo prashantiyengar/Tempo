@@ -20,6 +20,7 @@ import { handleError, openSyncPanel } from './status.js';
 import { backupNow, ensureDrive, restoreFromDrive } from './backup.js';
 import { openProject, renderLater } from './sidebar.js';
 import { exportCustom, exportMulti, exportView } from './export-ui.js';
+import { openClearDay } from './clear.js';
 import { finishedEarly } from './actions.js';
 
 // { id, ic, label, keys (shortcut keys), menus ('fab' | 'more' | 'now'), run, hint }
@@ -33,6 +34,7 @@ export const COMMANDS = [
   { id: 'late', ic: '⏰', label: 'Started late', menus: ['fab', 'more', 'now'], run: () => startedLate() },
   { id: 'early', ic: '⏹', label: 'Finished early', keys: ['f'], menus: ['fab', 'more', 'now'], run: () => finishedEarly() },
   { id: 'since', ic: '⤒', label: 'Fill time since last event', keys: ['l'], menus: ['fab', 'more', 'now'], run: () => fillSinceLast() },
+  { id: 'clear-day', ic: '☢', label: 'Clear today’s schedule…', menus: ['fab', 'more', 'now'], run: () => openClearDay() },
   { id: 'share', ic: '📤', label: 'Share my free time…', menus: ['more', 'now'], run: () => shareFreeTime() },
   { id: 'today', ic: '◎', label: 'Go to today', keys: ['t'], run: () => $('#btn-today').click() },
   { id: 'v-day', ic: 'D', label: 'Day view', keys: ['d'], run: () => go('day') },

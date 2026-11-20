@@ -26,7 +26,8 @@ import { handleError, handleMoves, handleProblems, offlineStatus, openSyncPanel,
 import { askScope, msAt, onAllDayPointerDown, onGridPointerDown, onMonthPointerDown } from './interactions.js';
 import { afterLeave, hoursChanged, leaveMenu, leaveTag } from './leave.js';
 import { computeDayFill, dayMarks, wireDayMarks } from './notes.js';
-import { adoptPeriodsFromTasks, afterEventChange, attachTitleSuggest, refreshTitleList, saveNewEvent } from './popovers.js';
+import { adoptPeriodsFromTasks, afterEventChange, attachTitleSuggest, refreshTitleList, saveNewEvent, saveNewEvents } from './popovers.js';
+import { askEnvelop } from './clear.js';
 import { checkGoalNotice, maybeOfferReview, openReview, paperEnd, paperPeriod, paperWeek, periodShift, renderGoalsView, renderPaperView } from './review-ui.js';
 import { coverFor, openProject, projectEventDone, renderLater, renderSidebar } from './sidebar.js';
 import { loadTimer } from './timer.js';
@@ -331,7 +332,7 @@ function renderTimeGrid(days, items) {
     rows[r].push(p); p.row = r;
   }
 
-  const deadlines = st().tasks.filter((t) => !t.archived && Number.isFinite(+t.deadline) && +t.deadline > 0 && S.progress(t).pct < 100);
+  const deadlines = st().tasks.filter((t) => !t.archived && !t.abandoned && Number.isFinite(+t.deadline) && +t.deadline > 0 && S.progress(t).pct < 100);
   const drawErrors = [];
   const toNow = app.toNowIt = toNowItem(timed);
   app.dayFill = computeDayFill(days, items);
@@ -405,7 +406,7 @@ function renderTimeGrid(days, items) {
     // time kept free after finishing something early
     for (const hd of s.holds || []) {
       const seg = segMinutes(hd, k);
-      if (seg) col.appendChild(el(`<div class="hold" style="top:${(seg.s / 60) * hh}px;height:${Math.max(6, ((seg.e - seg.s) / 60) * hh)}px" title="Kept free"><span>Kept free</span></div>`));
+      if (seg) col.appendChild(el(`<div class="hold" style="top:${(seg.s / 60) * hh}px;height:${Math.max(6, ((seg.e - seg.s) / 60) * hh)}px" title="${esc(hd.label || 'Kept free')}"><span>${esc(hd.label || 'Kept free')}</span></div>`));
     }
     // deadline flags
     for (const t of deadlines) {
@@ -483,7 +484,12 @@ function renderMonth({ days, monthKey }, items) {
 export async function newEvent(init) {
   refreshTitleList();
   const r = await D.eventDialog(ctx, { init });
-  if (r?.action === 'save') await saveNewEvent(r.calId, r.body, { conference: r.conference });
+  if (r?.action !== 'save') return;
+  // over time that already has events: one event, or envelop them (blocks in the free time around them)
+  const pieces = await askEnvelop(r.body).catch(() => null);
+  if (pieces === 'cancel') return;
+  if (pieces?.length) return saveNewEvents(r.calId, pieces.map(([a, b]) => ({ ...r.body, start: { ...r.body.start, dateTime: new Date(a).toISOString() }, end: { ...r.body.end, dateTime: new Date(b).toISOString() } })), { conference: r.conference });
+  await saveNewEvent(r.calId, r.body, { conference: r.conference });
 }
 
 export async function editEvent(it) {

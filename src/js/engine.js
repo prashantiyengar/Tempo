@@ -322,7 +322,7 @@ export function chunkBody(task, sess, state) {
 const DEF_FIELDS = ['id', 'title', 'kind', 'rank', 'totalMinutes', 'reading', 'deadline', 'earliestStart', 'chunkMinutes', 'minChunkMinutes',
   'maxPerDayMinutes', 'breakMinutes', 'wiggleMinutes', 'bounds', 'ignoreBounds', 'color', 'reminderMinutes', 'emailReminderMinutes', 'notifyProfile', 'notes', 'created', 'rev', 'calendarId',
   'categoryId', 'categoryName', 'categoryColor', 'categoryIcon', 'periodId', 'periodName', 'periodRules',
-  'repeat', 'repeatStart', 'marginDays', 'after', 'projectId', 'projectName', 'projectStep', 'speedLog', 'prefer', 'onLeave', 'periodLeave', 'completedAt', 'fromLater', 'single', 'backward'];
+  'repeat', 'repeatStart', 'marginDays', 'after', 'projectId', 'projectName', 'projectStep', 'speedLog', 'prefer', 'onLeave', 'periodLeave', 'completedAt', 'fromLater', 'single', 'backward', 'abandoned'];
 const PART = 900; // Google allows 1024 chars per extended-property value
 
 export function encodeDef(task) {

@@ -541,7 +541,7 @@ export function prerequisites(task, tasks, s) {
 // against each other (which left stray "adjacent" sessions on both). It is planned afresh here only when a session
 // is in the past, overlaps something on this device's calendar, the task was edited (rev), or the plan is short.
 export function rescheduleAll(tasks, busy, settings, now = Date.now(), { me = null } = {}) {
-  let list = tasks.map((t) => (t.archived ? t : freezePast(t, now, settings, busy)));
+  let list = tasks.map((t) => (t.archived ? t : freezePast(t.abandoned ? { ...t, planned: [] } : t, now, settings, busy)));
   const fixed = [];
   const tz = settings.tz;
   // Task sessions keep the break before and after them for every other task too.
@@ -555,9 +555,9 @@ export function rescheduleAll(tasks, busy, settings, now = Date.now(), { me = nu
   let occupied = merge([...busy, ...fixed]);
   const problems = [];
   const byId = new Map(list.map((t) => [t.id, t]));
-  const active = list.filter((t) => !t.archived);
+  const active = list.filter((t) => !t.archived && !t.abandoned);
   // Order: by effective rank, never before a prerequisite.
-  const deps = new Map(active.map((t) => [t.id, prerequisites(t, active, settings).filter((d) => byId.has(d) && !byId.get(d).archived)]));
+  const deps = new Map(active.map((t) => [t.id, prerequisites(t, active, settings).filter((d) => byId.has(d) && !byId.get(d).archived && !byId.get(d).abandoned)]));
   const eff = new Map(active.map((t) => [t.id, t.rank ?? 5]));
   for (let pass = 0; pass < active.length; pass++) {
     let changed = false;
@@ -802,6 +802,36 @@ export function completeAt(task, chunkId, now = Date.now()) {
     return { ...c, credit: Math.ceil(need * 100) / 100, syncHash: null };
   });
   return { ...t, planned: [], frozen, orphanGids, completedAt: now };
+}
+
+// "Abandon the rest": this session and every later one not done yet are removed; what was done stays (and counts).
+// A repeating task ends before this session. Otherwise the task is marked abandoned — it isn't planned any more until
+// it's taken up again (resumeAbandoned) — with how far it got.
+export function abandonFrom(task, chunkId, now = Date.now(), settings = null) {
+  const me = sessions(task).find((x) => x.id === chunkId);
+  if (!me) return task;
+  const goes = (c) => c.start >= me.start && (c.status === undefined || c.status === 'pinned' || (c.status === 'done' && c.auto && c.start > now));
+  const gone = [...(task.planned || []).filter((c) => c.start >= me.start || c.end > now), ...(task.frozen || []).filter(goes)];
+  const orphanGids = [...(task.orphanGids || []), ...gone.map((c) => c.gid).filter(Boolean)];
+  const planned = (task.planned || []).filter((c) => !gone.includes(c)), frozen = (task.frozen || []).filter((c) => !goes(c));
+  if (task.repeat) {
+    // the series ends with the period before this session's (repeatEnd counts `until` to the end of its day)
+    const per = me.pk && settings?.tz ? T.dayStart(me.pk, settings.tz) : me.start;
+    const repeat = { ...task.repeat, until: Math.min(me.start, per) - 1 }; delete repeat.count;
+    return { ...task, planned: [], frozen, orphanGids, repeat, deadline: Math.max(me.start - 1, ...frozen.map((c) => c.end)) };
+  }
+  const p = progress({ ...task, planned, frozen }, now);
+  const left = Math.max(0, p.total - p.done);
+  const r = task.kind === 'reading' ? task.reading || {} : null;
+  const pages = r ? Math.max(0, (+r.pages || 0) - Math.max(0, (+r.startPage || 1) - 1)) : 0;
+  return { ...task, planned: [], frozen, orphanGids, lastPlan: null,
+    abandoned: { at: now, pct: p.pct, leftMin: Math.round(left), ...(r ? { read: Math.round(pages * Math.min(100, p.pct) / 100), pages } : {}) } };
+}
+// Take an abandoned task up again: it is planned anew (the remaining work) by the new deadline.
+export function resumeAbandoned(task, deadline, now = Date.now()) {
+  const t = { ...task, deadline, earliestStart: Math.max(+task.earliestStart || 0, now) };
+  delete t.abandoned;
+  return t;
 }
 
 // Extend a repeating task by adding more occurrences.

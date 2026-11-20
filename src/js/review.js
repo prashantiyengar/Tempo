@@ -160,6 +160,7 @@ export function weeklyReview(state, now = Date.now(), { weekKey = null, endKey =
   const risks = [];
   for (const t of active) {
     const lp = t.lastPlan || {};
+    if (t.abandoned) continue;
     if (lp.shortfall > 0 && !t.repeat) risks.push({ t, why: `not enough time before the deadline (${T.fmtDur(lp.shortfall)} short)` });
     else if (t.repeat && lp.periods?.length) risks.push({ t, why: `not enough free time in ${lp.periods.length} upcoming ${t.repeat.every === 'day' ? 'day' : 'week'}${lp.periods.length > 1 ? 's' : ''}` });
     else if (lp.late > 0) risks.push({ t, why: `eats into its safety margin — finishes ${T.fmtDate(lp.finish, z)}` });
