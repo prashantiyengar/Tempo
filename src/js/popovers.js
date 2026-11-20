@@ -16,7 +16,7 @@ import { collectItems, ctx, cycle, editEvent, newEvent, refreshFromServer, rende
 import { gameXPLine } from './game-ui.js';
 import { handleError, logHistory, openSyncPanel, setStatus } from './status.js';
 import { askScope } from './interactions.js';
-import { abandonRest } from './clear.js';
+import { abandonRest, openClearDay } from './clear.js';
 import { deleteDoneSession, dropTimer, startTimer, timer, tmWork } from './timer.js';
 import { deleteTask, editTask, newTask, pushUndo, undoableEventChange, undoableEventDelete } from './undo.js';
 import { addToGraveyard } from './sidebar.js';
@@ -344,11 +344,13 @@ const ITEM_ACTIONS = [
   { cls: 'late', label: '⏰ Started late…', tip: 'You began later than planned: it starts when you began',
     when: (it, now) => canChange(it) && it.start < now && it.end > now + T.MIN, run: (it) => startedLate(it) },
   { cls: 'ghost add-during', label: '＋ Add during this', tip: 'Record something else you did during it, e.g. an hour of chores during childcare', when: (it) => !it.allDay, run: (it) => addDuring(it) },
+  { cls: 'ghost clear-day', label: (it) => (T.dayKey(it.start, tz()) === T.dayKey(Date.now(), tz()) ? '☢ Clear today’s schedule…' : '☢ Clear this day’s schedule…'),
+    tip: 'Clear this day (or some hours of it): events deleted, task sessions moved elsewhere', when: (it) => !it.allDay && T.dayKey(it.start, tz()) >= T.dayKey(Date.now(), tz()), run: (it) => openClearDay(T.dayKey(it.start, tz())) },
   { cls: 'to-now', label: '⟶ Extend until now', tip: 'You kept going: make it end now', when: (it) => currentToNow()?.key === it.key, run: (it) => extendToNow(it) },
 ];
 function itemActionsHTML(it) {
   const now = Date.now();
-  return ITEM_ACTIONS.map((a, i) => (a.when(it, now) ? `<button type="button" class="btn small ${a.cls}" data-ia="${i}" title="${esc(typeof a.tip === 'function' ? a.tip(it) : a.tip)}">${a.label}</button>` : '')).join('');
+  return ITEM_ACTIONS.map((a, i) => (a.when(it, now) ? `<button type="button" class="btn small ${a.cls}" data-ia="${i}" title="${esc(typeof a.tip === 'function' ? a.tip(it) : a.tip)}">${typeof a.label === 'function' ? a.label(it) : a.label}</button>` : '')).join('');
 }
 function wireItemActions(root, it, close) {
   $$('[data-ia]', root).forEach((b) => (b.onclick = () => { close(); ITEM_ACTIONS[+b.dataset.ia].run(it); }));
@@ -372,6 +374,8 @@ function openChunk(it, rect) {
   const p = S.progress(task);
   const now = Date.now();
   const isDone = sess.kind === 'done' || (sess.kind === 'pinned' && sess.end <= now);
+  // under way or still to come, with something left from here on (for a session under way: the ones after it)
+  const canAbandon = sess.end > now && S.sessions(task).some((c) => c.start >= sess.start && c.kind !== 'done' && c.kind !== 'waived' && (c.id !== sess.id || c.start > now));
   const badge = sess.kind === 'done' ? '<span class="pill ok">Done</span>' : sess.kind === 'pinned' ? '<span class="pill">Pinned</span>' : it.overdue ? '<span class="pill bad">After deadline</span>' : '<span class="pill soft">Planned</span>';
   popover(rect, `
     <div class="pop">
@@ -391,7 +395,7 @@ function openChunk(it, rect) {
         ${sess.kind === 'pinned' ? '<button class="btn small ghost unpin">Unpin</button>' : ''}
         ${task.kind !== 'reading' && !task.repeat ? '<button class="btn small ghost extend-time">＋ Extend time…</button>' : ''}
         ${task.repeat ? '<button class="btn small ghost extend-recur">＋ Extend recurrences…</button>' : ''}
-        ${!isDone ? `<button class="btn small ghost abandon" title="${task.kind === 'reading' && !task.repeat ? 'Stop reading here: this session and the later ones come off the calendar; the Bookcase keeps how far you got' : task.repeat ? 'End the series before this session' : 'This session and the later ones come off the calendar; the remaining work goes to the Graveyard'}">⛔ Abandon the rest</button>` : ''}
+        ${canAbandon ? `<button class="btn small ghost abandon" title="${task.kind === 'reading' && !task.repeat ? 'Stop reading here: this session and the later ones come off the calendar; the Bookcase keeps how far you got' : task.repeat ? 'End the series before this session' : 'This session and the later ones come off the calendar; the remaining work goes to the Graveyard'}">⛔ Abandon the rest</button>` : ''}
         <button class="btn small ghost to-grave-task">⚰ Graveyard</button>
         <button class="btn small ghost del">Delete…</button>
         <button class="btn small ghost edit">Edit task</button>
@@ -462,7 +466,7 @@ function openChunk(it, rect) {
     $('.abandon', pop)?.addEventListener('click', async () => {
       close();
       const r = await abandonRest(task.id, sess.id);
-      if (r && timer?.chunkId === sess.id) dropTimer();
+      if (r && timer?.chunkId === sess.id && sess.start > Date.now()) dropTimer(); // a session under way keeps its timer
     });
     $('.to-grave-task', pop)?.addEventListener('click', async () => {
       close();

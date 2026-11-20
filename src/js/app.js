@@ -342,7 +342,7 @@ function renderTimeGrid(days, items) {
     <div class="tg-head">
       <div class="tg-gutter"><span class="tz-label" title="${esc(z)}">${esc(tzAbbr())}</span></div>
       ${days.map((k) => `<div class="tg-dayhead ${k === todayK ? 'today' : ''} ${k < todayK ? 'past' : ''} ${S.leaveOf(set(), k) ? 'on-leave lv-' + S.leaveOf(set(), k) : ''}" data-day="${k}">
-        <button class="wd leave-menu" data-leave="${k}" title="Mark this day as on leave or sick leave">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}${levelFlag(k)}${gameDayChip(k, items)}${dayMarks(k, todayK)}</div>`).join('')}
+        <button class="wd leave-menu" data-leave="${k}" title="On leave, sick leave, or clear this day’s schedule">${esc(T.format(T.dayStart(k, z), z, { weekday: 'short' }))}</button><button class="dn" data-goto="${k}">${T.parseKey(k).d}</button>${W.dayHTML(set(), k, todayK)}${leaveTag(k)}${levelFlag(k)}${gameDayChip(k, items)}${dayMarks(k, todayK)}</div>`).join('')}
     </div>
     <div class="tg-allday">
       <div class="tg-gutter small muted">all-day</div>

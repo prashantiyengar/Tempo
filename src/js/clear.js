@@ -25,20 +25,26 @@ export async function abandonRest(taskId, sessId = null, { ask = true } = {}) {
   const now = Date.now();
   const cur = st().tasks.find((t) => t.id === taskId); if (!cur) return null;
   const all = S.sessions(cur);
-  const me = (sessId && all.find((c) => c.id === sessId)) || all.find((c) => c.kind !== 'done' && c.kind !== 'waived' && c.end > now);
-  if (!me) return null;
+  const pick = (sessId && all.find((c) => c.id === sessId)) || all.find((c) => c.kind !== 'done' && c.kind !== 'waived' && c.end > now);
+  if (!pick) return null;
+  // A session under way (or already done) stays and runs to its end; what's abandoned are the ones after it.
+  const keep = (pick.start <= now && pick.end > now) || pick.kind === 'done' || pick.kind === 'waived' ? pick : null;
+  const me = keep ? all.find((c) => c.id !== keep.id && c.start >= keep.start && c.kind !== 'done' && c.kind !== 'waived' && c.end > now) : pick;
+  if (!me) { if (ask) toast('Nothing after this session to abandon.'); return null; }
+  const at = keep ? Math.max(now, keep.end) : now;   // progress as of the end of the session under way
+  const withKeep = (t) => (keep && keep.kind === 'planned' ? S.pinSession(t, keep.id, keep.start, keep.end) : t);
   const n = restOf(cur, me, now).length;
-  const p = S.progress(cur, now);
+  const p = S.progress(withKeep(cur), at);
   const reading = cur.kind === 'reading' && !cur.repeat;
   const graveAll = !reading && !cur.repeat && p.done <= 0;
   const left = Math.max(0, p.total - p.done);
   if (ask) {
     const r = cur.reading || {}, pages = Math.max(0, (+r.pages || 0) - Math.max(0, (+r.startPage || 1) - 1));
     const msg = reading
-      ? `This session and the ${n > 1 ? `${n - 1} after it` : 'ones after it'} come off the calendar. The Bookcase keeps what you've read (${cur.reading?.format === 'audio' ? `${p.pct}%` : `about ${Math.round(pages * p.pct / 100)} of ${pages} pages`}) and can plan the rest of the book later.`
-      : cur.repeat ? `The series ends before this session; ${plural(n, 'upcoming session')} come${n === 1 ? 's' : ''} off the calendar. What's done stays.`
+      ? `${keep ? `This session stays; the ${plural(n, 'session')} after it come${n === 1 ? 's' : ''}` : `This session and the ${n > 1 ? `${n - 1} after it` : 'ones after it'} come`} off the calendar. The Bookcase keeps what you've read (${cur.reading?.format === 'audio' ? `${p.pct}%` : `about ${Math.round(pages * p.pct / 100)} of ${pages} pages`}) and can plan the rest of the book later.`
+      : cur.repeat ? `The series ends ${keep ? 'with this session' : 'before this session'}; ${plural(n, 'upcoming session')} come${n === 1 ? 's' : ''} off the calendar. What's done stays.`
       : graveAll ? `Nothing of it is done yet, so the whole task moves to the Graveyard (${plural(n, 'session')} come off the calendar). You can reschedule it from there.`
-      : `${plural(n, 'session')} come${n === 1 ? 's' : ''} off the calendar; what's done stays. The remaining ${T.fmtDur(Math.round(left))} goes to the Graveyard, where you can reschedule it.`;
+      : `${keep ? `This session stays; the ${plural(n, 'session')} after it` : plural(n, 'session')} come${n === 1 ? 's' : ''} off the calendar; what's done stays. The remaining ${T.fmtDur(Math.round(left))} goes to the Graveyard, where you can reschedule it.`;
     const v = await choose(reading ? `Stop reading “${cur.title}” here?` : `Abandon the rest of “${cur.title}”?`, msg,
       [{ value: 'yes', primary: true, label: reading ? 'Yes, set the book aside' : cur.repeat ? 'Yes, end the series here' : 'Yes, abandon the rest' }]);
     if (v !== 'yes') return null;
@@ -54,7 +60,7 @@ export async function abandonRest(taskId, sessId = null, { ask = true } = {}) {
     await saveTasks(`graveyard "${t0.title}"`);
     toast(`⛔ “${t0.title}” moved to the Graveyard`);
   } else {
-    const t = S.abandonFrom(t0, me.id, now, set());
+    const t = S.abandonFrom(withKeep(t0), me.id, at, set());
     replaceTask(t);
     await saveTasks(`abandon the rest of "${t0.title}"`);
     if (!reading && !t0.repeat && left > 0) await addToGraveyard({ id: S.newId('g'), text: t0.title, kind: 'task', taskId: t0.id, addedAt: now, created: t0.created || now, minutes: Math.round(left), ...cat });

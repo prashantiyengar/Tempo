@@ -9,6 +9,7 @@ import { lastEventEnd } from './actions.js';
 import { collectItems, cycle, newEvent, openSettings, render, replaceTask, saveTasks, syncSharedSoon, toast } from './app.js';
 import { handleError, setStatus } from './status.js';
 import { pushUndo } from './undo.js';
+import { openClearDay } from './clear.js';
 
 // Work hours or a time period changed. Planned sessions are re-planned on every cycle anyway; this decides
 // (setting, or asking) whether they should move: "move" also re-plans a session that is under way right now (assumed
@@ -27,9 +28,11 @@ export function leaveMenu(k, rect) {
   popover(rect, `<div class="pop leave-pop"><h3 style="margin:0 0 8px">${esc(day)}</h3>
       ${Object.entries(S.LEAVE_KINDS).map(([id, L]) => `<button class="btn small ${cur === id ? 'primary' : ''} lv-set" data-kind="${id}">${L.icon} ${esc(L.label)}</button>`).join(' ')}
       ${cur ? '<button class="btn small ghost lv-clear">Not on leave</button>' : ''}
+      ${k >= T.dayKey(Date.now(), tz()) ? `<div class="row" style="margin-top:8px"><button class="btn small lv-nuke">☢ ${k === T.dayKey(Date.now(), tz()) ? 'Clear today’s schedule…' : 'Clear this day’s schedule…'}</button></div>` : ''}
       <div class="row" style="margin-top:8px"><button class="link lv-day">Open this day</button><span class="grow"></span><button class="link lv-more">Several days…</button></div></div>`, (pop, close) => {
     $$('.lv-set', pop).forEach((b) => (b.onclick = () => { close(); setLeave([k], b.dataset.kind); }));
     $('.lv-clear', pop)?.addEventListener('click', () => { close(); setLeave([k], null); });
+    $('.lv-nuke', pop)?.addEventListener('click', () => { close(); openClearDay(k); });
     $('.lv-day', pop).onclick = () => { close(); app.cursor = k; app.view = 'day'; render(); };
     $('.lv-more', pop).onclick = () => { close(); openSettings(); };
   });
